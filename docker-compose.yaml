@@ -11,7 +11,6 @@ services:
       - ~/.gitconfig:/root/.gitconfig:ro
 
       - ./../${CODEAGENT_ROOT_PATH:?please set CODEAGENT_ROOT_PATH in .env file}:/home/${USER:?please provide USER env when running the service}
-#      - ./../${CODEAGENT_ROOT_PATH}/config.json:/home/${USER:?please provide USER env when running the service}/config.json:ro
       - ./..:/app/project_root
       - ./config.json:/app/project_root/${CODEAGENT_ROOT_PATH:?please provide CODEAGENT_ROOT_PATH in `.env`}/config.json:ro
     working_dir: /app/project_root
@@ -22,7 +21,6 @@ services:
 #    entrypoint: ["/bin/sh"]
     environment:
       CODEAGENT_ROOT_PATH: ${CODEAGENT_ROOT_PATH:?please provide CODEAGENT_ROOT_PATH in `.env`}
-#      OPENCODE_CONFIG: /app/project_root/${CODEAGENT_ROOT_PATH:?please provide CODEAGENT_ROOT_PATH in `.env`}/config.json
       OPENCODE_CONFIG_DIR: /app/project_root/${CODEAGENT_ROOT_PATH:?please provide CODEAGENT_ROOT_PATH in `.env`}
       OPENCODE_AUTH_JSON: /tmp/auth
       ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL}
