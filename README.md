@@ -1,5 +1,5 @@
 # Install
-`git submodule add git@github.com:dzharikhin/codeagent-infra.git .codeagent`
+`git clone git@github.com:dzharikhin/codeagent-infra.git .codeagent`
 # Run
 `HOST_UID="${UID}" GID="$(id -g)" USER="${USER}" docker compose run --rm agent`
 # Extend
