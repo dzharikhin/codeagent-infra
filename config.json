@@ -10,6 +10,6 @@
     "bash": "allow",
     "webfetch": "allow"
   },
-  "model": "${MAIN_MODEL}",
-  "small_model": "${SMALL_MODEL}"
+  "model": "{env:MAIN_MODEL}",
+  "small_model": "{env:SMALL_MODEL}"
 }
