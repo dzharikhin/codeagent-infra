@@ -1,15 +1,21 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "disabled_providers": [
-    "openai",
     "amazon-bedrock",
     "zen"
   ],
+  "provider": {
+    "anthropic": {
+      "options": {
+        "baseURL": "{env:ANTHROPIC_GATEWAY_URL}"
+      }
+    }
+  },
+  "model": "{env:MAIN_MODEL}",
+  "small_model": "{env:SMALL_MODEL}",
   "permission": {
     "edit": "ask",
     "bash": "allow",
     "webfetch": "allow"
-  },
-  "model": "{env:MAIN_MODEL}",
-  "small_model": "{env:SMALL_MODEL}"
+  }
 }
