@@ -26,5 +26,5 @@ services:
       ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       EDITOR: vi
-      MAIN_MODEL: ${MAIN_MODEL}
-      SMALL_MODEL: ${SMALL_MODEL}
+      MAIN_MODEL: ${MAIN_MODEL:-anthropic/claude-opus-4-1-20250805}
+      SMALL_MODEL: ${SMALL_MODEL:-anthropic/claude-haiku-4-5-20251001}
