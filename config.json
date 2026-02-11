@@ -10,6 +10,6 @@
     "bash": "allow",
     "webfetch": "allow"
   },
-  "model": "anthropic/claude-sonnet-4-20250514",
-  "small_model": "anthropic/claude-haiku-4-5-20251001"
+  "model": "${MAIN_MODEL}",
+  "small_model": "${SMALL_MODEL}"
 }
