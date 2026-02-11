@@ -8,22 +8,21 @@ services:
       - /etc/passwd:/etc/passwd:ro
       - /etc/shadow:/etc/shadow:ro
 
-      - ~/.gitconfig:/root/.gitconfig:ro
-
       - ./../${CODEAGENT_ROOT_PATH:?please set CODEAGENT_ROOT_PATH in .env file}:/home/${USER:?please provide USER env when running the service}
       - ./..:/app/project_root
-      - ./config.json:/app/project_root/${CODEAGENT_ROOT_PATH:?please provide CODEAGENT_ROOT_PATH in `.env`}/config.json:ro
+      - ./.config/opencode/config.json:/app/project_root/${CODEAGENT_ROOT_PATH:?please provide CODEAGENT_ROOT_PATH in `.env`}/.config/opencode/config.json:ro
     working_dir: /app/project_root
-    tmpfs:
-      - /app/project_root/${CODEAGENT_ROOT_PATH:?please provide CODEAGENT_ROOT_PATH in `.env`}/.local/share/opencode/auth.json
     stdin_open: true
     tty: true
-#    entrypoint: ["/bin/sh"]
+    entrypoint: ["opencode"] #, "--log-level", "DEBUG"]
+#    entrypoint: ["opencode", "debug"]
+#    entrypoint: ["/bin/bash"]
     environment:
       CODEAGENT_ROOT_PATH: ${CODEAGENT_ROOT_PATH:?please provide CODEAGENT_ROOT_PATH in `.env`}
-      OPENCODE_CONFIG_DIR: /app/project_root/${CODEAGENT_ROOT_PATH:?please provide CODEAGENT_ROOT_PATH in `.env`}
-      ANTHROPIC_GATEWAY_URL: ${ANTHROPIC_BASE_URL}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       EDITOR: vi
-      MAIN_MODEL: ${MAIN_MODEL:-anthropic/claude-opus-4-1-20250805}
-      SMALL_MODEL: ${SMALL_MODEL:-anthropic/claude-haiku-4-5-20251001}
+      DEFAULT_MODEL_PROVIDER: ${DEFAULT_MODEL_PROVIDER:-anthropic}
+      DEFAULT_MAIN_MODEL: ${DEFAULT_MAIN_MODEL:-claude-opus-4-1-20250805}
+      DEFAULT_BUILD_MODEL: ${DEFAULT_BUILD_MODEL:-claude-sonnet-4-5-20250929}
+      DEFAULT_SMALL_MODEL: ${DEFAULT_SMALL_MODEL:-claude-haiku-4-5-20251001}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}

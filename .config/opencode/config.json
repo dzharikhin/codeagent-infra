@@ -1,0 +1,28 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "enabled_providers": [
+    "openai",
+    "anthropic",
+    "gemini"
+  ],
+  "provider": {
+    "anthropic": {
+      "options": {
+        "baseURL": "{env:ANTHROPIC_BASE_URL}"
+      }
+    }
+  },
+  "model": "{env:DEFAULT_MODEL_PROVIDER}/{env:DEFAULT_MAIN_MODEL}",
+  "small_model": "{env:DEFAULT_MODEL_PROVIDER}/{env:DEFAULT_SMALL_MODEL}",
+  "default_agent": "plan",
+  "agent": {
+    "build": {
+      "model": "{env:DEFAULT_MODEL_PROVIDER}/{env:DEFAULT_BUILD_MODEL}"
+    }
+  },
+  "permission": {
+    "edit": "allow",
+    "bash": "allow",
+    "webfetch": "allow"
+  }
+}
