@@ -10,6 +10,6 @@ git clone git@github.com:dzharikhin/codeagent-infra.git .codeagent
     HOST_UID="${UID}" GID="$(id -g)" USER="${USER}" ANTHROPIC_API_KEY=$(read -rsp "anthropic token: " p && echo $p) docker compose run --rm agent
    ```
 # Extend
-you can provide any project level config according to [documentation](https://opencode.ai/docs/)
+you can provide any project level config in `.opencode` directory and `opencode.json` according to [documentation](https://opencode.ai/docs/)
 # Warning
 `auth.json` file will be created by `/connect` command with the token in plain text - try to use env variables when possible
