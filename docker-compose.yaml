@@ -1,12 +1,23 @@
 services:
   agent:
-    image: "ghcr.io/anomalyco/opencode:${OPENCODE_VERSION}"
+    image: ${CUSTOM_DOCKER_IMAGE:-ghcr.io/anomalyco/opencode:1.1.65}
+    build:
+      context: ${CUSTOM_DOCKER_CONTEXT:-.}
+      dockerfile: ${CUSTOM_DOCKER_IMAGE}
+      args:
+        UNAME: ${USER:?please provide USER env when running the service}
+        UID: ${HOST_UID:?please provide HOST_UID env when running the service}
+        GID: ${GID:?please provide GID env with `id -g` when running the service}
+        HOST_DOCKER_GROUP_ID: ${HOST_DOCKER_GROUP_ID:?please provide GID env with `getent group docker | cut -d':' -f3` when running the service}
+    group_add:
+      - ${HOST_DOCKER_GROUP_ID:?please provide GID env with `getent group docker | cut -d':' -f3` when running the service}
     network_mode: "host"
     user: "${HOST_UID:?please provide HOST_UID env when running the service}:${GID:?please provide GID env with `id -g` when running the service}"
     volumes:
       - /etc/group:/etc/group:ro
       - /etc/passwd:/etc/passwd:ro
-      - /etc/shadow:/etc/shadow:ro
+
+      - /var/run/docker.sock:/var/run/docker.sock
 
       - ./../${CODEAGENT_ROOT_PATH:?please set CODEAGENT_ROOT_PATH in .env file}:/home/${USER:?please provide USER env when running the service}
       - ./..:/app/project_root
@@ -15,11 +26,12 @@ services:
     stdin_open: true
     tty: true
     entrypoint: ["opencode"] #, "--log-level", "DEBUG"]
-#    entrypoint: ["opencode", "debug"]
-#    entrypoint: ["/bin/bash"]
+    #    entrypoint: ["opencode", "debug"]
+    #    entrypoint: ["/bin/sh"]
     environment:
       CODEAGENT_ROOT_PATH: ${CODEAGENT_ROOT_PATH:?please provide CODEAGENT_ROOT_PATH in `.env`}
       EDITOR: vi
+      OPENCODE_CONFIG_DIR: ${CUSTOM_PROJECT_CONFIG_DIR:-/app/project_root/${CODEAGENT_ROOT_PATH}}
       DEFAULT_MODEL_PROVIDER: ${DEFAULT_MODEL_PROVIDER:-anthropic}
       DEFAULT_MAIN_MODEL: ${DEFAULT_MAIN_MODEL:-claude-opus-4-1-20250805}
       DEFAULT_BUILD_MODEL: ${DEFAULT_BUILD_MODEL:-claude-sonnet-4-5-20250929}
