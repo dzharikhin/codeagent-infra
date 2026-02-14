@@ -1,5 +1,8 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "opencode-sessions@0.0.7"
+  ],
   "enabled_providers": [
     "openai",
     "anthropic",
@@ -23,6 +26,7 @@
   "permission": {
     "edit": "allow",
     "bash": "allow",
-    "webfetch": "allow"
+    "webfetch": "allow",
+    "session": "deny"
   }
 }

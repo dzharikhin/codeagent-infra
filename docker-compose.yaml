@@ -20,8 +20,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
 
       - ./../${CODEAGENT_ROOT_PATH:?please set CODEAGENT_ROOT_PATH in .env file}:/home/${USER:?please provide USER env when running the service}
+      - ./.config/opencode/config.json:/home/${USER:?please provide USER env when running the service}/.config/opencode/config.json:ro
       - ./..:/app/project_root
-      - ./.config/opencode/config.json:/app/project_root/${CODEAGENT_ROOT_PATH:?please provide CODEAGENT_ROOT_PATH in `.env`}/.config/opencode/config.json:ro
     working_dir: /app/project_root
     stdin_open: true
     tty: true
