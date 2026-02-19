@@ -19,8 +19,17 @@
   "small_model": "{env:DEFAULT_MODEL_PROVIDER}/{env:DEFAULT_SMALL_MODEL}",
   "default_agent": "plan",
   "agent": {
+    "plan": {
+      "model": "{env:DEFAULT_MODEL_PROVIDER}/{env:DEFAULT_MAIN_MODEL}",
+      "permission": {
+        "session": "allow"
+      }
+    },
     "build": {
-      "model": "{env:DEFAULT_MODEL_PROVIDER}/{env:DEFAULT_BUILD_MODEL}"
+      "model": "{env:DEFAULT_MODEL_PROVIDER}/{env:DEFAULT_BUILD_MODEL}",
+      "permission": {
+        "session": "allow"
+      }
     }
   },
   "permission": {
