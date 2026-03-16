@@ -22,7 +22,8 @@
     "plan": {
       "model": "{env:DEFAULT_MODEL_PROVIDER}/{env:DEFAULT_MAIN_MODEL}",
       "permission": {
-        "session": "allow"
+        "session": "allow",
+        "read": "allow"
       }
     },
     "build": {
