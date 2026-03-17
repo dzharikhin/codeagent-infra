@@ -6,7 +6,8 @@
   "enabled_providers": [
     "openai",
     "anthropic",
-    "gemini"
+    "gemini",
+    "deepseek"
   ],
   "provider": {
     "anthropic": {
