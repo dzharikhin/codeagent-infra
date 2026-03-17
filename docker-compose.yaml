@@ -1,6 +1,6 @@
 services:
   agent:
-    image: ${CUSTOM_DOCKER_IMAGE:-ghcr.io/anomalyco/opencode:1.1.65}
+    image: ${CUSTOM_DOCKER_IMAGE:-ghcr.io/anomalyco/opencode:1.2.27}
     build:
       context: ${CUSTOM_DOCKER_CONTEXT:-.}
       dockerfile: ${CUSTOM_DOCKER_IMAGE}
