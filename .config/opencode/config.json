@@ -13,6 +13,11 @@
       "options": {
         "baseURL": "{env:ANTHROPIC_BASE_URL}"
       }
+    },
+    "deepseek": {
+      "options": {
+        "baseURL": "{env:DEEPSEEK_BASE_URL}"
+      }
     }
   },
   "model": "{env:DEFAULT_MODEL_PROVIDER}/{env:DEFAULT_MAIN_MODEL}",
