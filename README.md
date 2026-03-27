@@ -7,7 +7,7 @@ git clone git@github.com:dzharikhin/codeagent-infra.git .codeagent
 1. copy `[.env](./.env.sample)` into `.env` and edit if necessary
 2. run
    ```shell
-     HOST_UID="${UID}" GID="$(id -g)" USER="${USER}" HOST_DOCKER_GROUP_ID=$(getent group docker | cut -d':' -f3) ANTHROPIC_API_KEY=$(read -rsp "anthropic token: " p && echo $p) docker compose --verbose run --rm agent
+      HOST_UID="${UID}"  GID="$(id -g)" USER="${USER}" HOST_DOCKER_GROUP_ID=$(getent group docker | cut -d':' -f3) XAI_API_KEY=$(read -rsp "xai token: " p && echo $p) docker compose --verbose run -e HOST_UID -e GID -e USER -e HOST_DOCKER_GROUP_ID -e XAI_API_KEY --rm agent --continue && clear
    ```
 # Extend
 ## Config

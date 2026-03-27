@@ -40,9 +40,17 @@
     }
   },
   "permission": {
-    "read": "allow",
+    "read": {
+      "*": "allow"
+    },
+    "external_directory": "allow",
     "edit": "allow",
-    "bash": "allow",
+    "bash": {
+      "*": "allow",
+      "git add *": "ask",
+      "git commit *": "ask",
+      "git push *": "ask"
+    },
     "webfetch": "allow",
     "session": "deny"
   }
