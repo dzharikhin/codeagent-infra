@@ -19,24 +19,23 @@ services:
 
       - /var/run/docker.sock:/var/run/docker.sock
 
-      - ./../${CODEAGENT_ROOT_PATH:?please set CODEAGENT_ROOT_PATH in .env file}:/home/${USER:?please provide USER env when running the service}
+      - ./${CODEAGENT_ROOT_PATH:?please set CODEAGENT_ROOT_PATH in .env file}:/home/${USER:?please provide USER env when running the service}
       - ./.config/opencode/config.json:/home/${USER:?please provide USER env when running the service}/.config/opencode/config.json:ro
-      - ./..:/app/project_root
+      - ./:/app/project_root
     working_dir: /app/project_root
     stdin_open: true
     tty: true
     entrypoint: ["opencode"] #, "--log-level", "DEBUG"]
     #    entrypoint: ["opencode", "debug"]
     #    entrypoint: ["/bin/sh"]
+    env_file:
+      - .env
     environment:
       CODEAGENT_ROOT_PATH: ${CODEAGENT_ROOT_PATH:?please provide CODEAGENT_ROOT_PATH in `.env`}
-      EDITOR: nano
+      EDITOR: ${EDITOR:-vi}
       OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT: true
-      OPENCODE_CONFIG_DIR: ${CUSTOM_PROJECT_CONFIG_DIR:-/app/project_root/${CODEAGENT_ROOT_PATH}}
+#      OPENCODE_CONFIG_DIR: ${CUSTOM_PROJECT_CONFIG_DIR:-/app/project_root/${CODEAGENT_ROOT_PATH}}
       DEFAULT_MODEL_PROVIDER: ${DEFAULT_MODEL_PROVIDER:-anthropic}
-      DEFAULT_MAIN_MODEL: ${DEFAULT_MAIN_MODEL:-claude-opus-4-1-20250805}
-      DEFAULT_BUILD_MODEL: ${DEFAULT_BUILD_MODEL:-claude-sonnet-4-5-20250929}
-      DEFAULT_SMALL_MODEL: ${DEFAULT_SMALL_MODEL:-claude-haiku-4-5-20251001}
       HTTPS_PROXY: ${HTTPS_PROXY}
       HTTP_PROXY: ${HTTP_PROXY:-${HTTPS_PROXY}}
       NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
