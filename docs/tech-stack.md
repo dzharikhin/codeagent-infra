@@ -24,7 +24,7 @@
 ## Generated Artifact Formats
 
 - JSON for `devcontainer.json`
-- `.env` for runtime overrides
+- `.env` for project-level runtime and configuration inputs
 - Markdown for generated local usage documentation
 - native `opencode` project config layout in `.opencode/`
 

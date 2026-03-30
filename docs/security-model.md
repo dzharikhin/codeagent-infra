@@ -12,7 +12,7 @@ Read-only mounts:
 - global `opencode` config directory
 - framework-level config directory
 - project-level config in `.opencode/`
-- neutralized `~/.local/share/opencode/auth.json`
+- `~/.local/share/opencode/auth.json` when present on the host
 
 Read-write mounts:
 - `.opencode/runtime_data/`
@@ -27,15 +27,16 @@ The agent must not be able to modify:
 
 This preserves reviewability and prevents silent mutation of declared configuration layers.
 
-## Auth Isolation Rule
+## Auth Rule
 
-`~/.local/share/opencode/auth.json` must always be mounted as:
-- an empty file
-- read-only
+`~/.local/share/opencode/auth.json`:
+- if present on the host, mount it read-only so the agent can authenticate against providers
+- if absent, do not synthesize or expose one
 
 Intent:
-- keep nearby user state available where needed
-- deny useful persisted auth material to the agent through this file
+- allow the agent to use existing host auth when available
+- avoid privilege escalation via injected credentials
+- keep the auth file immutable inside the container
 
 ## Docker Access Rule
 

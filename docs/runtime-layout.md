@@ -37,17 +37,18 @@ File name:
 - `.opencode/.env`
 
 Semantics:
-- runtime overrides only
+- project-level runtime and configuration inputs
 - no setup metadata
 
 Examples of intended contents:
-- `EDITOR`
-- provider base URL overrides
+- `OPENCODE_VERSION` — opencode version to use (passed to devcontainer feature)
+- provider base URL overrides for standard providers
 - `DEFAULT_MODEL`
 - `SMALL_MODEL`
+- `EDITOR`
 - notification command
 
-Wizard selections that are already visible in `devcontainer.json` should not be duplicated here.
+Values that are directly represented in `devcontainer.json` features or settings should not be duplicated unless they are intended as environment inputs for generation or runtime behavior.
 
 ## Persisted Home Policy
 

@@ -125,7 +125,7 @@ Deliver:
 
 Tasks:
 1. generate root-level files in `.opencode/`
-2. generate runtime override `.env` with runtime-only values
+2. generate `.opencode/.env` with project-level config and runtime inputs
 3. create `runtime_data/` subtree
 4. write local `.gitignore` for runtime data
 5. write local usage README with launch instructions and framework-doc links
@@ -145,7 +145,7 @@ Deliver:
 Tasks:
 1. encode read-only mounts for global/framework/project config
 2. encode read-write mounts for project source and `runtime_data/`
-3. ensure `auth.json` is mounted as an empty read-only file
+3. ensure `auth.json` is mounted read-only when present on the host
 4. implement optional rootless Docker context wiring for Docker access
 5. add tests for generated mount semantics
 
