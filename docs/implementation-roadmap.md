@@ -26,18 +26,22 @@ Acceptance criteria:
 Deliver:
 - required tool checks
 - repo-root validation
-- global config lookup logic
+- clean index validation
+- global settings autodetection logic
 
 Tasks:
 1. implement external tool detection for hard prerequisites
 2. implement Git working tree, repo-root, and non-bare checks
-3. implement standard global config detection at `~/.config/opencode`
-4. implement remediation-oriented error formatting
-5. add tests for failure modes and success path
+3. implement Git index cleanliness check (no staged changes)
+4. implement standard global config detection at `~/.config/opencode`
+5. implement global auth detection at `~/.local/share/opencode/auth.json`
+6. implement remediation-oriented error formatting
+7. add tests for failure modes and success path
 
 Acceptance criteria:
 - `init` fails early and clearly when prerequisites are not met
 - `init` refuses unsupported repo entrypoints
+- `init` fails with clear guidance when index has staged changes
 
 ## Phase 3 - `.opencode` Git Storage Model
 
@@ -83,11 +87,9 @@ Deliver:
 
 Tasks:
 1. ask for branch name with suggested default
-2. ask whether to use or ignore global config when present
-3. ask whether to skip or provide path when global config is absent
-4. ask for devcontainer strategy when standard devcontainer exists
-5. ask for optional feature selection
-6. print `.gitignore` guidance when `.opencode` is not ignored
+2. ask for devcontainer strategy when standard devcontainer exists
+3. ask for optional feature selection
+4. print `.gitignore` guidance when `.opencode` is not ignored
 
 Acceptance criteria:
 - wizard asks only the agreed decision points
@@ -164,7 +166,7 @@ Tasks:
 2. print concise note that `opencode` starts automatically
 3. add end-to-end tests for fresh init
 4. add end-to-end tests for `--force` regeneration
-5. add end-to-end tests for global config present vs skipped
+5. add end-to-end tests for global settings autodetection (present vs absent)
 
 Acceptance criteria:
 - successful init ends with the exact documented launch instruction

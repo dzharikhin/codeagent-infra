@@ -14,6 +14,8 @@
 - detected framework repo path
 - whether global config was found
 - global config path, if found
+- whether global auth.json was found
+- global auth.json path, if found
 
 It does not print project-specific status in v1.
 
@@ -23,26 +25,28 @@ It does not print project-specific status in v1.
 - current directory is inside a Git working tree
 - current directory is the repository root
 - repository is not bare
+- Git index has no staged changes
 
 The following are not checked in v1:
 - repo has commits
 - repo has remote
-- working tree cleanliness
-- staged changes
+- unstaged changes in the working tree
+- untracked files
 - detached HEAD
 
 ## `init` Flow
 
 1. check required external tools
 2. validate current directory as a target repo
-3. resolve framework repo location from the installed tool
-4. inspect global config path
-5. inspect standard devcontainer files, if any
-6. inspect whether `.opencode/` already exists
-7. ask wizard questions
-8. create or reuse the config branch and nested worktree at `.opencode/`
-9. generate `.opencode/` contents
-10. print launch instructions
+3. validate Git index has no staged changes
+4. resolve framework repo location from the installed tool
+5. autodetect global settings at canonical paths
+6. inspect standard devcontainer files, if any
+7. inspect whether `.opencode/` already exists
+8. ask wizard questions
+9. create or reuse the config branch and nested worktree at `.opencode/`
+10. generate `.opencode/` contents
+11. print launch instructions
 
 ## Required Tool Checks
 
@@ -57,23 +61,24 @@ Missing required tools cause:
 - no partial setup
 - clear remediation instructions
 
-## Global Config Discovery
+## Global Settings Discovery
 
-Standard lookup path:
-- `~/.config/opencode`
+The framework uses fixed canonical paths for global settings:
+- `~/.config/opencode` - global config directory
+- `~/.local/share/opencode/auth.json` - global auth file
 
 Behavior:
-- if the path exists, validate it and ask whether to use or ignore it
-- if the path does not exist, ask whether to skip global config or provide a path manually
+- if `~/.config/opencode` exists, use it automatically
+- if `~/.local/share/opencode/auth.json` exists, expose it automatically
+- if either is absent, continue without it
+- no user prompts about global settings location or creation
 
 ## Wizard Questions
 
 The wizard asks only for meaningful structural choices:
 - config branch name, with suggested default `codeagent-{username}`
-- whether to use or ignore global config
 - existing devcontainer strategy
 - optional feature selection
-- framework/global paths if they cannot be resolved confidently
 
 The wizard also:
 - checks `.gitignore`

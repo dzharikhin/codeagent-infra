@@ -47,9 +47,12 @@ Success scenario:
 ## Config Layers
 
 The framework exposes three layers to `opencode`:
-- global user-home `opencode` config, if present
+- global user-home `opencode` config at `~/.config/opencode`, if present
+- global auth file at `~/.local/share/opencode/auth.json`, if present
 - framework-level custom config
 - project-level config from `.opencode/`
+
+Global settings are discovered at fixed canonical paths. The framework does not ask the user where to find or create them.
 
 The framework does not implement precedence rules between them.
 

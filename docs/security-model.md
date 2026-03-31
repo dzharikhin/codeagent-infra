@@ -9,10 +9,12 @@ The framework is responsible for mounting the right inputs with the right access
 ## Mount Permissions
 
 Read-only mounts:
-- global `opencode` config directory
+- global `opencode` config directory at `~/.config/opencode`
 - framework-level config directory
 - project-level config in `.opencode/`
-- `~/.local/share/opencode/auth.json` when present on the host
+- global auth file at `~/.local/share/opencode/auth.json` when present on the host
+
+Global settings are discovered at fixed canonical paths without user prompts.
 
 Read-write mounts:
 - `.opencode/runtime_data/`
@@ -29,7 +31,8 @@ This preserves reviewability and prevents silent mutation of declared configurat
 
 ## Auth Rule
 
-`~/.local/share/opencode/auth.json`:
+Global auth file at `~/.local/share/opencode/auth.json`:
+- discovered at a fixed canonical path
 - if present on the host, mount it read-only so the agent can authenticate against providers
 - if absent, do not synthesize or expose one
 
