@@ -53,7 +53,7 @@ The following are not checked in v1:
 Hard prerequisites include:
 - `git`
 - `docker`
-- `devcontainer-cli`
+- `devcontainer` (from `@devcontainers/cli`)
 - `pipx`
 
 Missing required tools cause:

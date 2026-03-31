@@ -1,0 +1,2 @@
+[console_scripts]
+ocframework = opencode_framework.cli:app
