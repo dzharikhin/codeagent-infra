@@ -13,6 +13,9 @@
 | 19 | Global config/auth/framework mounts must be read-only | High | Completed |
 | 20 | Update .gitignore to ignore node_modules and remove .gitkeep unignore lines | Medium | Completed |
 | 21 | Update framework docs URL to new location | Low | Completed |
+| 22 | EDITOR variable from wizard should flow through .env | Medium | Completed |
+| 23 | Remove DOCKER_CONTEXT from .env | Low | Completed |
+| 24 | Add ocframework launch and exec CLI commands | High | Completed |
 
 ### Completed Historical Issues
 
@@ -510,6 +513,220 @@ Issues 6, 8-11 were implemented but are now superseded by the template-driven ap
 
 ---
 
+## Issue 22: EDITOR Variable Flow Through .env
+
+**Status:** Completed
+
+**Current Behavior:**
+- Wizard captures `editor_choice` ("none", "vi", or "nano")
+- `remoteEnv["EDITOR"]` in devcontainer.json is set to literal value (e.g., "vi")
+- EDITOR is not written to `.opencode/.env`
+
+**Expected Behavior:**
+- When `editor_choice` is "vi" or "nano":
+  - Write `EDITOR=vi` or `EDITOR=nano` to `.opencode/.env`
+  - Set `remoteEnv["EDITOR"] = "${localEnv:EDITOR}"` in devcontainer.json
+- When `editor_choice` is "none":
+  - Do not write EDITOR to `.opencode/.env`
+  - Do not set EDITOR in remoteEnv
+
+**Rationale:**
+- `.env` should be the single source of truth for runtime configuration
+- Allows users to easily change EDITOR without regenerating devcontainer
+- Consistent with other env-driven configuration like REMOTE_USER
+
+**Changes Required:**
+
+### generator.py
+- Update `_generate_env_file()` to append `EDITOR=<choice>` when choice is not "none"
+- Update `_generate_scratch_devcontainer()` to use `${localEnv:EDITOR}` instead of literal
+- Update `_generate_extended_devcontainer()` to use `${localEnv:EDITOR}` instead of literal
+
+### Tests
+- Add tests for EDITOR in `.env` file when selected
+- Add tests for EDITOR omitted when choice is "none"
+- Add tests for `remoteEnv["EDITOR"]` using `${localEnv:EDITOR}`
+
+**Files:**
+- `src/opencode_framework/generator.py`
+- `tests/test_generator.py`
+- `tests/test_integration.py`
+
+---
+
+## Issue 23: Remove DOCKER_CONTEXT from .env
+
+**Status:** Completed
+
+**Current Behavior:**
+- `DOCKER_CONTEXT=rootless` is present in `env.template`
+- Generated `.opencode/.env` includes `DOCKER_CONTEXT=rootless`
+
+**Expected Behavior:**
+- Remove `DOCKER_CONTEXT` from `env.template`
+- Generated `.opencode/.env` should not include `DOCKER_CONTEXT`
+
+**Rationale:**
+- `DOCKER_CONTEXT` is not actually used by the devcontainer runtime
+- It was a leftover from earlier design decisions
+- Removing it simplifies the `.env` file
+
+**Changes Required:**
+
+### env.template
+- Remove `DOCKER_CONTEXT=rootless` line
+
+### Tests
+- Remove test that asserts `DOCKER_CONTEXT=rootless` in `.env`
+
+**Files:**
+- `src/opencode_framework/templates/env.template`
+- `tests/test_generator.py`
+
+---
+
+## Issue 24: Add ocframework launch and exec CLI Commands
+
+**Status:** Pending
+
+**Current Behavior:**
+- `_get_launch_commands()` in `generator.py` returns shell snippets that `source .opencode/.env`
+- `DOCKER_CONTEXT` was removed from `.env`, so old shell snippets are incomplete
+- Generated README still prints old shell-based commands
+- No first-class CLI commands for `launch` or `exec`
+- Docs still reference raw `devcontainer up` / `devcontainer exec` commands
+
+**Expected Behavior:**
+- New CLI command: `ocframework launch`
+  - Validates: inside Git tree, at repo root, `.opencode/` exists, `.opencode/devcontainer.json` exists, `.opencode/.env` exists
+  - Loads `.opencode/.env` and expands `${VAR}` and `${VAR:-default}` syntax
+  - Sets `DOCKER_CONTEXT=rootless` in subprocess env by default
+  - Supports `--docker-context <name>` to override
+  - Runs: `devcontainer up --config .opencode/devcontainer.json --workspace-folder .`
+  - Exits with subprocess return code
+- New CLI command: `ocframework exec`
+  - Same validation and env setup as `launch`
+  - Supports `--docker-context <name>` to override
+  - Requires `--` before inner command
+  - Runs: `devcontainer exec --config .opencode/devcontainer.json --workspace-folder . <command...>`
+  - Example: `ocframework exec --docker-context myctx -- opencode debug config`
+- Updated generated commands in `_get_launch_commands()`:
+  - `launch` -> `ocframework launch`
+  - `debug` -> `ocframework exec -- opencode debug config`
+  - `shell` -> `ocframework exec -- bash`
+- Updated generated README to show new CLI commands
+- Updated docs to promote CLI-first workflow:
+  - `docs/devcontainer-strategy.md`
+  - `docs/demo.md`
+  - `docs/security-model.md`
+  - Leave `docs/implementation-plan-v1.md` as historical reference
+
+**Rationale:**
+- `.opencode/.env` uses shell-style expansion (`${REMOTE_USER:-root}`), so simple key=value parsing won't work
+- CLI commands can properly expand env vars and inject `DOCKER_CONTEXT` for the subprocess only
+- CLI-first UX is more reliable than expecting users to `source` shell scripts
+- Separates framework concerns from user shell environment
+
+**Changes Required:**
+
+### src/opencode_framework/cli.py
+- Add `launch` command:
+  - Import shared helpers from new `runtime.py` module
+  - Validate repo root and required files
+  - Load and expand `.opencode/.env`
+  - Build subprocess env with `DOCKER_CONTEXT` (default `rootless`, override via `--docker-context`)
+  - Run `devcontainer up` with computed env
+  - Exit with subprocess return code
+- Add `exec` command:
+  - Reuse same validation and env setup as `launch`
+  - Parse `--` and following args as inner command
+  - Run `devcontainer exec` with computed env and inner command
+  - Exit with subprocess return code
+
+### src/opencode_framework/runtime.py (new)
+- `validate_runtime_context(cwd: Path) -> tuple[bool, str]`
+  - Check: inside Git tree
+  - Check: at repo root
+  - Check: `.opencode/` exists
+  - Check: `.opencode/devcontainer.json` exists
+  - Check: `.opencode/.env` exists
+  - Return `(True, "")` on success, `(False, "error message")` on failure
+- `load_and_expand_env(env_path: Path) -> dict[str, str]`
+  - Parse `.env` file
+  - Expand `${VAR}` references using already-parsed vars
+  - Expand `${VAR:-default}` syntax
+  - Return dict of expanded key-value pairs
+- `build_devcontainer_env(base_env: dict[str, str], docker_context: str) -> dict[str, str]`
+  - Merge base_env with current process env
+  - Set `DOCKER_CONTEXT=docker_context`
+  - Return env dict for subprocess
+
+### src/opencode_framework/generator.py
+- Update `_get_launch_commands()` to return CLI-based commands:
+  ```python
+  return {
+      "launch": "ocframework launch",
+      "debug": "ocframework exec -- opencode debug config",
+      "shell": "ocframework exec -- bash",
+  }
+  ```
+- Update `_generate_readme()` command descriptions if needed
+
+### src/opencode_framework/preflight.py
+- No changes required (existing Git/repo-root checks are sufficient for `init`)
+- `runtime.py` will have its own lighter-weight checks for `launch`/`exec`
+
+### Tests
+- `tests/test_runtime.py` (new):
+  - `test_validate_runtime_context_success`
+  - `test_validate_runtime_context_not_git_tree`
+  - `test_validate_runtime_context_not_repo_root`
+  - `test_validate_runtime_context_missing_opencode_dir`
+  - `test_validate_runtime_context_missing_devcontainer_json`
+  - `test_validate_runtime_context_missing_env_file`
+  - `test_load_and_expand_env_simple`
+  - `test_load_and_expand_env_var_expansion`
+  - `test_load_and_expand_env_default_expansion`
+  - `test_load_and_expand_env_nested_expansion`
+  - `test_build_devcontainer_env_docker_context_default`
+  - `test_build_devcontainer_env_docker_context_override`
+- `tests/test_cli.py`:
+  - `test_launch_requires_git_repo`
+  - `test_launch_requires_repo_root`
+  - `test_launch_requires_opencode_dir`
+  - `test_launch_requires_devcontainer_json`
+  - `test_launch_requires_env_file`
+  - `test_launch_docker_context_default`
+  - `test_launch_docker_context_override`
+  - `test_exec_requires_double_dash`
+  - `test_exec_passes_command_args`
+- `tests/test_generator.py`:
+  - Update `TestLaunchCommands` to expect CLI commands
+  - Update `TestReadmeLaunchCommand` to expect CLI commands
+
+### Documentation
+- `docs/devcontainer-strategy.md`:
+  - Update "Canonical Launch Command" section to show `ocframework launch`
+- `docs/demo.md`:
+  - Replace raw `devcontainer up` commands with `ocframework launch`
+  - Replace `DOCKER_CONTEXT=rootless` references with CLI override examples
+- `docs/security-model.md`:
+  - Remove statement about generated config wiring `DOCKER_CONTEXT=rootless`
+  - Clarify that `DOCKER_CONTEXT` is set by CLI for subprocess only
+
+**Files:**
+- `src/opencode_framework/cli.py`
+- `src/opencode_framework/runtime.py` (new)
+- `src/opencode_framework/generator.py`
+- `tests/test_runtime.py` (new)
+- `tests/test_cli.py`
+- `tests/test_generator.py`
+- `docs/devcontainer-strategy.md`
+- `docs/demo.md`
+- `docs/security-model.md`
+
+---
+
 ## Implementation Order
 
 ```
@@ -546,6 +763,19 @@ Phase 7: Validation
 ├── Test extend mode preserves project settings
 ├── Verify sourced-env commands work
 └── Full test suite passes
+
+Phase 8: Launch/Exec CLI Commands
+├── 24.1: Create src/opencode_framework/runtime.py with validation and env helpers
+├── 24.2: Implement load_and_expand_env() with ${VAR} and ${VAR:-default} expansion
+├── 24.3: Add ocframework launch command to cli.py
+├── 24.4: Add ocframework exec command to cli.py
+├── 24.5: Update _get_launch_commands() to return CLI-based commands
+├── 24.6: Update generated README to show CLI commands
+├── 24.7: Add tests for runtime.py helpers
+├── 24.8: Add tests for launch and exec CLI commands
+├── 24.9: Update generator tests for new CLI commands
+├── 24.10: Update docs for CLI-first workflow
+└── Full test suite passes
 ```
 
 ---
@@ -571,7 +801,6 @@ Phase 7: Validation
 - [x] Generated `.env` matches template structure
 - [x] Contains defaults (not override-only)
 - [x] Detected paths filled in
-- [x] `DOCKER_CONTEXT=rootless` in `.env`
 
 ### 15. Extend Mode Merge
 - [x] Preserves existing `image`/`build`
@@ -622,6 +851,45 @@ Phase 7: Validation
 ### 21. Framework Docs URL Update
 - [x] Generated README uses new URL `https://github.com/dzharikhin/codeagent-infra`
 - [x] Tests updated to assert new URL
+- [x] Full test suite passes
+
+### 22. EDITOR Variable Flow Through .env
+- [x] `EDITOR` written to `.opencode/.env` when editor_choice is "vi" or "nano"
+- [x] `EDITOR` omitted from `.opencode/.env` when editor_choice is "none"
+- [x] `remoteEnv["EDITOR"]` uses `${localEnv:EDITOR}` instead of literal value
+- [x] Tests for EDITOR in .env file
+- [x] Tests for remoteEnv using localEnv reference
+- [x] Full test suite passes
+
+### 23. Remove DOCKER_CONTEXT from .env
+- [x] `DOCKER_CONTEXT` removed from `env.template`
+- [x] Test for `DOCKER_CONTEXT` in `.env` removed
+- [x] Full test suite passes
+
+### 24. Launch and Exec CLI Commands
+- [x] `src/opencode_framework/runtime.py` exists with validation and env helpers
+- [x] `validate_runtime_context()` checks Git tree, repo root, `.opencode/`, devcontainer.json, .env
+- [x] `load_and_expand_env()` expands `${VAR}` and `${VAR:-default}` syntax
+- [x] `build_devcontainer_env()` sets `DOCKER_CONTEXT` with default and override
+- [x] `ocframework launch` command exists in CLI
+- [x] `launch` validates runtime context before running
+- [x] `launch` loads and expands `.opencode/.env`
+- [x] `launch` sets `DOCKER_CONTEXT=rootless` by default for subprocess
+- [x] `launch --docker-context <name>` overrides Docker context
+- [x] `launch` runs `devcontainer up` and exits with subprocess code
+- [x] `ocframework exec` command exists in CLI
+- [x] `exec` validates runtime context before running
+- [x] `exec --docker-context <name>` overrides Docker context
+- [x] `exec` requires `--` before inner command
+- [x] `exec` runs `devcontainer exec` with inner command and exits with subprocess code
+- [x] `_get_launch_commands()` returns CLI-based commands
+- [x] Generated README shows CLI commands
+- [x] `docs/devcontainer-strategy.md` updated for CLI-first workflow
+- [x] `docs/demo.md` updated with CLI examples
+- [x] `docs/security-model.md` updated to remove `DOCKER_CONTEXT` config statement
+- [x] Unit tests for env expansion pass
+- [x] CLI tests for launch/exec pass
+- [x] Generator tests updated for CLI commands
 - [x] Full test suite passes
 
 ---

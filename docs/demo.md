@@ -44,10 +44,7 @@ Accept defaults, decline all optional features.
 **Accept:**
 - `.opencode/` directory created
 - Worktree on `codeagent-{username}` branch
-- Launch command printed:
-  ```
-  devcontainer up --config .opencode/devcontainer.json --workspace-folder .
-  ```
+- Launch command printed: `ocframework launch`
 - `git worktree list` shows two entries
 
 ---
@@ -165,7 +162,6 @@ Enable: Docker, Python, vi
   - `docker-in-docker` feature with `enableNonRootDocker: true`
   - `python` feature with `installPoetry: true`
   - `common-utils` with `vim` in `installPackages`
-- `remoteEnv` includes `DOCKER_CONTEXT: rootless`
 
 ---
 
@@ -222,7 +218,8 @@ If rootless context absent:
 
 If rootless context present:
 - Run `ocframework init`, enable Docker
-- **Accept:** Docker feature added, `DOCKER_CONTEXT=rootless` in config
+- **Accept:** Docker feature added
+- Launch will use `DOCKER_CONTEXT=rootless` by default
 
 ---
 
@@ -232,7 +229,7 @@ If rootless context present:
 
 ```sh
 cd /tmp/demo-fresh
-devcontainer up --config .opencode/devcontainer.json --workspace-folder .
+ocframework launch
 ```
 
 **Accept:**

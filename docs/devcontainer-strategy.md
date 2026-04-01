@@ -50,7 +50,7 @@ DinD is opt-in only.
 
 If selected, setup must:
 - check that a rootless Docker context exists
-- wire the container launch to use `DOCKER_CONTEXT=rootless`
+- the launch command will use `DOCKER_CONTEXT=rootless` by default
 
 Reason:
 - avoid privileged DinD as the default path
@@ -58,20 +58,31 @@ Reason:
 
 ## Canonical Launch Command
 
-After `init`, the framework prints:
+After `init`, the framework prints CLI commands:
 
 ```sh
-devcontainer up --config .opencode/devcontainer.json --workspace-folder .
+ocframework launch
+```
+
+To execute commands inside the container:
+
+```sh
+ocframework exec -- opencode debug config
+ocframework exec -- bash
+```
+
+To override the Docker context:
+
+```sh
+ocframework launch --docker-context my-context
 ```
 
 The generated devcontainer configuration should auto-start `opencode`.
-
-Manual shell/debug alternatives are out of scope for framework UX in v1.
 
 ## Teardown
 
 There is no `devcontainer down` flow yet. To stop and remove the container:
 
 ```sh
-docker rm -f <project-base-path>
+docker rm -f $(basename "$(pwd)")
 ```

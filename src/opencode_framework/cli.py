@@ -137,5 +137,130 @@ def init(
     typer.echo("\nopencode is started on attach via postAttachCommand.")
 
 
+@app.command()
+def launch(
+    docker_context: str = typer.Option(
+        "rootless",
+        "--docker-context",
+        help="Docker context to use for devcontainer",
+    ),
+) -> None:
+    """Launch the devcontainer for this project.
+    
+    Validates that the current directory is a Git repository root with
+    a properly initialized .opencode/ directory, then runs devcontainer up.
+    
+    DOCKER_CONTEXT is set to 'rootless' by default for the devcontainer
+    subprocess. Use --docker-context to override.
+    """
+    import subprocess
+    
+    from opencode_framework.runtime import (
+        validate_runtime_context,
+        load_and_expand_env,
+        build_devcontainer_env,
+    )
+    
+    cwd = Path.cwd()
+    
+    valid, error = validate_runtime_context(cwd)
+    if not valid:
+        typer.secho(f"Error: {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    
+    from opencode_framework.preflight import get_repo_root
+    repo_root = get_repo_root(cwd)
+    if repo_root is None:
+        typer.secho("Error: Could not determine repository root", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    
+    env_path = repo_root / ".opencode" / ".env"
+    base_env = load_and_expand_env(env_path)
+    subprocess_env = build_devcontainer_env(base_env, docker_context)
+    
+    cmd = [
+        "devcontainer",
+        "up",
+        "--config",
+        ".opencode/devcontainer.json",
+        "--workspace-folder",
+        ".",
+    ]
+    
+    typer.echo(f"Launching devcontainer with DOCKER_CONTEXT={docker_context}...")
+    
+    result = subprocess.run(cmd, env=subprocess_env, cwd=repo_root)
+    raise typer.Exit(result.returncode)
+
+
+@app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def exec(
+    ctx: typer.Context,
+    docker_context: str = typer.Option(
+        "rootless",
+        "--docker-context",
+        help="Docker context to use for devcontainer",
+    ),
+) -> None:
+    """Execute a command inside the devcontainer.
+    
+    Validates that the current directory is a Git repository root with
+    a properly initialized .opencode/ directory, then runs devcontainer exec.
+    
+    DOCKER_CONTEXT is set to 'rootless' by default for the devcontainer
+    subprocess. Use --docker-context to override.
+    
+    The command to execute must follow '--'. For example:
+        ocframework exec -- opencode debug config
+        ocframework exec -- bash
+    """
+    import subprocess
+    
+    from opencode_framework.runtime import (
+        validate_runtime_context,
+        load_and_expand_env,
+        build_devcontainer_env,
+    )
+    
+    args = ctx.args
+    if not args:
+        typer.secho(
+            "Error: No command specified. Use '--' before the command.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        typer.echo("Example: ocframework exec -- opencode debug config")
+        raise typer.Exit(1)
+    
+    cwd = Path.cwd()
+    
+    valid, error = validate_runtime_context(cwd)
+    if not valid:
+        typer.secho(f"Error: {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    
+    from opencode_framework.preflight import get_repo_root
+    repo_root = get_repo_root(cwd)
+    if repo_root is None:
+        typer.secho("Error: Could not determine repository root", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    
+    env_path = repo_root / ".opencode" / ".env"
+    base_env = load_and_expand_env(env_path)
+    subprocess_env = build_devcontainer_env(base_env, docker_context)
+    
+    cmd = [
+        "devcontainer",
+        "exec",
+        "--config",
+        ".opencode/devcontainer.json",
+        "--workspace-folder",
+        ".",
+    ] + list(args)
+    
+    result = subprocess.run(cmd, env=subprocess_env, cwd=repo_root)
+    raise typer.Exit(result.returncode)
+
+
 if __name__ == "__main__":
     app()

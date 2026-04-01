@@ -221,7 +221,7 @@ class TestGeneratedConfig:
         assert "OPENCODE_CONFIG" in result["remoteEnv"]
 
     def test_editor_choice_sets_editor_env(self, tmp_path: Path):
-        """Test that editor choice sets EDITOR in remoteEnv."""
+        """Test that editor choice sets EDITOR in remoteEnv via localEnv."""
         from opencode_framework.generator import _generate_scratch_devcontainer, GenerationContext
         from opencode_framework.config import GlobalSettings
 
@@ -245,7 +245,7 @@ class TestGeneratedConfig:
         result = _generate_scratch_devcontainer(ctx)
 
         assert "remoteEnv" in result
-        assert result["remoteEnv"]["EDITOR"] == "vi"
+        assert result["remoteEnv"]["EDITOR"] == "${localEnv:EDITOR}"
 
     def test_opencode_feature_present(self, tmp_path: Path):
         """Test that OpenCode feature is included in generated devcontainer."""

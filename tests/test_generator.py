@@ -411,6 +411,73 @@ class TestRemoteUser:
         assert result["remoteUser"] == "custom-user"
 
 
+class TestEditorRemoteEnv:
+    """Tests for EDITOR remoteEnv configuration."""
+
+    def _make_global_settings(self, **kwargs):
+        """Create GlobalSettings with defaults."""
+        defaults = {
+            "framework_repo_path": None,
+            "framework_config_path": None,
+            "global_config_found": False,
+            "global_config_path": None,
+            "global_auth_found": False,
+            "global_auth_path": None,
+        }
+        defaults.update(kwargs)
+        return GlobalSettings(**defaults)
+
+    def test_editor_uses_local_env_in_scratch(self, tmp_path: Path):
+        """Scratch devcontainer should use ${localEnv:EDITOR} for editor choice."""
+        ctx = GenerationContext(
+            repo_root=tmp_path,
+            opencode_dir=tmp_path / ".opencode",
+            branch_name="codeagent-test",
+            devcontainer_strategy="from_scratch",
+            optional_features=[],
+            editor_choice="vi",
+            global_settings=self._make_global_settings(),
+        )
+
+        result = _generate_scratch_devcontainer(ctx)
+        assert "remoteEnv" in result
+        assert result["remoteEnv"]["EDITOR"] == "${localEnv:EDITOR}"
+
+    def test_editor_uses_local_env_in_extend(self, tmp_path: Path):
+        """Extended devcontainer should use ${localEnv:EDITOR} for editor choice."""
+        existing = {"image": "ubuntu:22.04"}
+        
+        ctx = GenerationContext(
+            repo_root=tmp_path,
+            opencode_dir=tmp_path / ".opencode",
+            branch_name="codeagent-test",
+            devcontainer_strategy="extend",
+            optional_features=[],
+            editor_choice="nano",
+            global_settings=self._make_global_settings(),
+            existing_devcontainer=existing,
+        )
+
+        result = _generate_extended_devcontainer(ctx)
+        assert "remoteEnv" in result
+        assert result["remoteEnv"]["EDITOR"] == "${localEnv:EDITOR}"
+
+    def test_no_editor_remote_env_when_none(self, tmp_path: Path):
+        """Scratch devcontainer should not have EDITOR in remoteEnv when choice is 'none'."""
+        ctx = GenerationContext(
+            repo_root=tmp_path,
+            opencode_dir=tmp_path / ".opencode",
+            branch_name="codeagent-test",
+            devcontainer_strategy="from_scratch",
+            optional_features=[],
+            editor_choice="none",
+            global_settings=self._make_global_settings(),
+        )
+
+        result = _generate_scratch_devcontainer(ctx)
+        assert "EDITOR" not in result.get("remoteEnv", {})
+
+
 class TestEnvFileGeneration:
     """Tests for .env file generation."""
 
@@ -426,24 +493,6 @@ class TestEnvFileGeneration:
         }
         defaults.update(kwargs)
         return GlobalSettings(**defaults)
-
-    def test_env_contains_docker_context(self, tmp_path: Path):
-        """Generated .env should contain DOCKER_CONTEXT."""
-        ctx = GenerationContext(
-            repo_root=tmp_path,
-            opencode_dir=tmp_path / ".opencode",
-            branch_name="codeagent-test",
-            devcontainer_strategy="from_scratch",
-            optional_features=[],
-            editor_choice="none",
-            global_settings=self._make_global_settings(),
-        )
-        
-        (tmp_path / ".opencode").mkdir(exist_ok=True)
-        _generate_env_file(ctx)
-        
-        env_content = (tmp_path / ".opencode" / ".env").read_text()
-        assert "DOCKER_CONTEXT=rootless" in env_content
 
     def test_env_contains_remote_user(self, tmp_path: Path):
         """Generated .env should contain REMOTE_USER."""
@@ -503,6 +552,42 @@ class TestEnvFileGeneration:
         assert "OCF_MAIN_MODEL" in env_content
         assert "OCF_BUILD_MODEL" in env_content
         assert "OCF_SMALL_MODEL" in env_content
+
+    def test_env_contains_editor_when_selected(self, tmp_path: Path):
+        """Generated .env should contain EDITOR when editor_choice is not 'none'."""
+        ctx = GenerationContext(
+            repo_root=tmp_path,
+            opencode_dir=tmp_path / ".opencode",
+            branch_name="codeagent-test",
+            devcontainer_strategy="from_scratch",
+            optional_features=[],
+            editor_choice="vi",
+            global_settings=self._make_global_settings(),
+        )
+        
+        (tmp_path / ".opencode").mkdir(exist_ok=True)
+        _generate_env_file(ctx)
+        
+        env_content = (tmp_path / ".opencode" / ".env").read_text()
+        assert "EDITOR=vi" in env_content
+
+    def test_env_omits_editor_when_none(self, tmp_path: Path):
+        """Generated .env should not contain EDITOR when editor_choice is 'none'."""
+        ctx = GenerationContext(
+            repo_root=tmp_path,
+            opencode_dir=tmp_path / ".opencode",
+            branch_name="codeagent-test",
+            devcontainer_strategy="from_scratch",
+            optional_features=[],
+            editor_choice="none",
+            global_settings=self._make_global_settings(),
+        )
+        
+        (tmp_path / ".opencode").mkdir(exist_ok=True)
+        _generate_env_file(ctx)
+        
+        env_content = (tmp_path / ".opencode" / ".env").read_text()
+        assert "EDITOR=" not in env_content
 
 
 class TestPostAttachCommand:
@@ -575,23 +660,20 @@ class TestPostAttachCommand:
 class TestLaunchCommands:
     """Tests for host-side launch command generation."""
 
-    def test_launch_command_sources_env(self):
-        """Launch command should source .env file."""
+    def test_launch_command_is_cli(self):
+        """Launch command should use ocframework CLI."""
         commands = _get_launch_commands()
-        assert "source .opencode/.env" in commands["launch"]
-        assert "devcontainer up" in commands["launch"]
+        assert commands["launch"] == "ocframework launch"
 
-    def test_debug_command_sources_env(self):
-        """Debug command should source .env file."""
+    def test_debug_command_is_cli(self):
+        """Debug command should use ocframework exec CLI."""
         commands = _get_launch_commands()
-        assert "source .opencode/.env" in commands["debug"]
-        assert "opencode debug config" in commands["debug"]
+        assert commands["debug"] == "ocframework exec -- opencode debug config"
 
-    def test_shell_command_sources_env(self):
-        """Shell command should source .env file."""
+    def test_shell_command_is_cli(self):
+        """Shell command should use ocframework exec CLI."""
         commands = _get_launch_commands()
-        assert "source .opencode/.env" in commands["shell"]
-        assert "devcontainer exec" in commands["shell"]
+        assert commands["shell"] == "ocframework exec -- bash"
 
     def test_no_docker_context_in_commands(self):
         """Commands should NOT contain DOCKER_CONTEXT inline."""
@@ -617,8 +699,8 @@ class TestReadmeLaunchCommand:
         defaults.update(kwargs)
         return GlobalSettings(**defaults)
 
-    def test_readme_sources_env_in_launch(self, tmp_path: Path):
-        """README should show sourced-env launch command."""
+    def test_readme_shows_cli_launch(self, tmp_path: Path):
+        """README should show CLI launch command."""
         ctx = GenerationContext(
             repo_root=tmp_path,
             opencode_dir=tmp_path / ".opencode",
@@ -633,8 +715,7 @@ class TestReadmeLaunchCommand:
         _generate_readme(ctx)
         
         readme_content = (tmp_path / ".opencode" / "README.md").read_text()
-        assert "source .opencode/.env" in readme_content
-        assert "devcontainer up" in readme_content
+        assert "ocframework launch" in readme_content
 
     def test_readme_has_debug_command(self, tmp_path: Path):
         """README should show debug command."""
@@ -708,7 +789,7 @@ class TestReadmeLaunchCommand:
         readme_content = (tmp_path / ".opencode" / "README.md").read_text()
         assert "## Teardown" in readme_content
         assert "docker rm -f" in readme_content
-        assert "<project-base-path>" in readme_content
+        assert '$(basename "$(pwd)")' in readme_content
 
 
 class TestRuntimeDataStructure:

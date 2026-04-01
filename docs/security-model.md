@@ -47,8 +47,8 @@ Docker access is not enabled by default.
 
 If Docker access is selected:
 - require rootless Docker context handling
-- wire `DOCKER_CONTEXT=rootless`
-- keep the security consequence explicit in generated config and setup validation
+- `DOCKER_CONTEXT=rootless` is set by the CLI for devcontainer subprocess only
+- keep the security consequence explicit in setup validation
 
 ## Scope of Framework Responsibility
 

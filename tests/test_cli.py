@@ -86,3 +86,236 @@ class TestInitCommand:
             or "not inside a Git working tree" in result.stderr
             or "Preflight failed" in result.stderr
         )
+
+
+class TestLaunchCommand:
+    """Tests for launch command."""
+
+    def test_launch_requires_git_repo(self, tmp_path: Path):
+        """launch should fail outside a git repo."""
+        result = subprocess.run(
+            [sys.executable, "-m", "opencode_framework", "launch"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode != 0
+        assert "not inside a Git working tree" in result.stdout or "not inside a Git working tree" in result.stderr
+
+    def test_launch_requires_repo_root(self, tmp_path: Path):
+        """launch should fail when not at repo root."""
+        subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "--allow-empty", "-m", "init"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        
+        subdir = tmp_path / "subdir"
+        subdir.mkdir()
+        
+        result = subprocess.run(
+            [sys.executable, "-m", "opencode_framework", "launch"],
+            cwd=subdir,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode != 0
+        assert "not the repository root" in result.stdout or "not the repository root" in result.stderr
+
+    def test_launch_requires_opencode_dir(self, tmp_path: Path):
+        """launch should fail when .opencode doesn't exist."""
+        subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "--allow-empty", "-m", "init"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        
+        result = subprocess.run(
+            [sys.executable, "-m", "opencode_framework", "launch"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode != 0
+        assert ".opencode/" in result.stdout or ".opencode/" in result.stderr
+
+    def test_launch_requires_devcontainer_json(self, tmp_path: Path):
+        """launch should fail when devcontainer.json doesn't exist."""
+        subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "--allow-empty", "-m", "init"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        
+        (tmp_path / ".opencode").mkdir()
+        
+        result = subprocess.run(
+            [sys.executable, "-m", "opencode_framework", "launch"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode != 0
+        assert "devcontainer.json" in result.stdout or "devcontainer.json" in result.stderr
+
+    def test_launch_requires_env_file(self, tmp_path: Path):
+        """launch should fail when .env doesn't exist."""
+        subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "--allow-empty", "-m", "init"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        
+        opencode_dir = tmp_path / ".opencode"
+        opencode_dir.mkdir()
+        (opencode_dir / "devcontainer.json").write_text("{}")
+        
+        result = subprocess.run(
+            [sys.executable, "-m", "opencode_framework", "launch"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode != 0
+        assert ".env" in result.stdout or ".env" in result.stderr
+
+
+class TestExecCommand:
+    """Tests for exec command."""
+
+    def test_exec_requires_git_repo(self, tmp_path: Path):
+        """exec should fail outside a git repo."""
+        result = subprocess.run(
+            [sys.executable, "-m", "opencode_framework", "exec", "--", "echo", "test"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode != 0
+        assert "not inside a Git working tree" in result.stdout or "not inside a Git working tree" in result.stderr
+
+    def test_exec_requires_double_dash(self, tmp_path: Path):
+        """exec should fail when no command is provided."""
+        subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "--allow-empty", "-m", "init"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        
+        result = subprocess.run(
+            [sys.executable, "-m", "opencode_framework", "exec"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode != 0
+        assert "No command specified" in result.stdout or "No command specified" in result.stderr
+
+    def test_exec_requires_opencode_dir(self, tmp_path: Path):
+        """exec should fail when .opencode doesn't exist."""
+        subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "--allow-empty", "-m", "init"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        
+        result = subprocess.run(
+            [sys.executable, "-m", "opencode_framework", "exec", "--", "echo", "test"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode != 0
+        assert ".opencode/" in result.stdout or ".opencode/" in result.stderr

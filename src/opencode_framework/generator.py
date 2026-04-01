@@ -100,16 +100,12 @@ def _generate_devcontainer_json(ctx: GenerationContext) -> None:
 def _get_launch_commands() -> Dict[str, str]:
     """Get the host-side devcontainer commands.
     
-    All commands source .opencode/.env before execution.
-    DOCKER_CONTEXT is set in .env, not in command rendering.
+    Returns CLI commands that handle environment loading and Docker context.
     """
-    base_prefix = "set -o allexport; source .opencode/.env;"
-    config_arg = "--config .opencode/devcontainer.json --workspace-folder ."
-    
     return {
-        "launch": f"{base_prefix} devcontainer up {config_arg}",
-        "debug": f"{base_prefix} devcontainer exec {config_arg} opencode debug config",
-        "shell": f"{base_prefix} devcontainer exec {config_arg} $(devcontainer exec {config_arg} grep $REMOTE_USER /etc/passwd | cut -d: -f7)",
+        "launch": "ocframework launch",
+        "debug": "ocframework exec -- opencode debug config",
+        "shell": "ocframework exec -- bash",
     }
 
 
@@ -126,7 +122,7 @@ def _generate_scratch_devcontainer(ctx: GenerationContext) -> dict:
     
     if ctx.editor_choice != "none":
         remote_env = dict(devcontainer.get("remoteEnv", {}))
-        remote_env["EDITOR"] = ctx.editor_choice
+        remote_env["EDITOR"] = "${localEnv:EDITOR}"
         devcontainer["remoteEnv"] = remote_env
     
     return devcontainer
@@ -161,7 +157,7 @@ def _generate_extended_devcontainer(ctx: GenerationContext) -> dict:
             remote_env[key] = value
     
     if ctx.editor_choice != "none":
-        remote_env["EDITOR"] = ctx.editor_choice
+        remote_env["EDITOR"] = "${localEnv:EDITOR}"
     
     run_args = list(existing.get("runArgs", []))
     template_run_args = template.get("runArgs", [])
@@ -292,6 +288,9 @@ def _generate_env_file(ctx: GenerationContext) -> None:
     for placeholder, value in replacements.items():
         env_content = env_content.replace(placeholder, value)
     
+    if ctx.editor_choice != "none":
+        env_content += f"\nEDITOR={ctx.editor_choice}"
+    
     env_path = ctx.opencode_dir / ".env"
     env_path.write_text(env_content)
 
@@ -337,7 +336,7 @@ OpenCode is started on attach via `postAttachCommand` in devcontainer.json.
 There is no `devcontainer down` flow yet. To stop and remove the container:
 
 ```sh
-docker rm -f <project-base-path>
+docker rm -f $(basename "$(pwd)")
 ```
 
 ## Version Control
