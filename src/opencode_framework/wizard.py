@@ -20,6 +20,7 @@ class WizardResult:
     branch_name: str
     devcontainer_strategy: str  # "extend", "from_scratch", or "skip"
     optional_features: List[str]
+    editor_choice: str  # "none", "vi", or "nano"
     existing_devcontainer: Optional[DevcontainerInfo]
     should_add_to_gitignore: bool
 
@@ -83,8 +84,6 @@ def run_wizard(repo_root: Path, preflight_result: PreflightResult) -> WizardResu
     typer.echo("\nOptional features:")
     available_features = [
         ("docker", "Docker access (DinD with rootless context)"),
-        ("vi", "vi editor"),
-        ("nano", "nano editor"),
         ("python", "Python + Poetry"),
         ("nodejs", "Node.js + npm"),
         ("java", "Java + Maven"),
@@ -108,6 +107,12 @@ def run_wizard(repo_root: Path, preflight_result: PreflightResult) -> WizardResu
             if typer.confirm(f"  Enable {feature_desc}?", default=False):
                 optional_features.append(feature_key)
     
+    editor_choice = typer.prompt(
+        "\nEditor preference",
+        type=click.Choice(["none", "vi", "nano"]),
+        default="none",
+    )
+    
     if check_gitignore_needs_opencode(repo_root):
         typer.secho(
             "\nNote: .opencode/ is not in .gitignore. Consider adding it to avoid committing framework files.",
@@ -118,6 +123,7 @@ def run_wizard(repo_root: Path, preflight_result: PreflightResult) -> WizardResu
         branch_name=branch_name,
         devcontainer_strategy=strategy,
         optional_features=optional_features,
+        editor_choice=editor_choice,
         existing_devcontainer=existing_devcontainer,
         should_add_to_gitignore=True,
     )

@@ -10,6 +10,7 @@ class GlobalSettings:
     """Detected global settings for the framework."""
     
     framework_repo_path: Optional[str]
+    framework_config_path: Optional[str]
     global_config_found: bool
     global_config_path: Optional[str]
     global_auth_found: bool
@@ -22,6 +23,7 @@ def discover_global_settings() -> GlobalSettings:
     Looks for:
     - ~/.config/opencode - global config directory
     - ~/.local/share/opencode/auth.json - global auth file
+    - framework config/ directory
     
     Does not prompt user for locations.
     """
@@ -36,9 +38,11 @@ def discover_global_settings() -> GlobalSettings:
     global_auth_path = str(global_auth_file) if global_auth_found else None
     
     framework_repo_path = _detect_framework_repo_path()
+    framework_config_path = _detect_framework_config_path(framework_repo_path)
     
     return GlobalSettings(
         framework_repo_path=framework_repo_path,
+        framework_config_path=framework_config_path,
         global_config_found=global_config_found,
         global_config_path=global_config_path,
         global_auth_found=global_auth_found,
@@ -55,3 +59,15 @@ def _detect_framework_repo_path() -> Optional[str]:
         return str(repo_root)
     
     return str(package_path)
+
+
+def _detect_framework_config_path(framework_repo_path: Optional[str]) -> Optional[str]:
+    """Detect the framework config directory path."""
+    if not framework_repo_path:
+        return None
+    
+    config_path = Path(framework_repo_path) / "framework-config"
+    if config_path.is_dir():
+        return str(config_path)
+    
+    return None

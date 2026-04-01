@@ -126,10 +126,13 @@ def init(
     typer.echo("Generating .opencode/ directory...")
     generate_opencode_directory(repo_path, wizard_result)
     
+    from opencode_framework.generator import _get_launch_command
+    launch_cmd = _get_launch_command(wizard_result.optional_features)
+    
     typer.secho("Initialization complete!", fg=typer.colors.GREEN)
     typer.echo("\nLaunch command:")
-    typer.echo("  devcontainer up --config .opencode/devcontainer.json --workspace-folder .")
-    typer.echo("\nopencode will start automatically from the generated devcontainer setup.")
+    typer.echo(f"  {launch_cmd}")
+    typer.echo("\nopencode is started on attach via postAttachCommand.")
 
 
 if __name__ == "__main__":

@@ -215,8 +215,10 @@ class TestGeneratedConfig:
             branch_name="test-branch",
             devcontainer_strategy="from_scratch",
             optional_features=["python"],
+            editor_choice="none",
             global_settings=GlobalSettings(
                 framework_repo_path=None,
+                framework_config_path=None,
                 global_config_found=False,
                 global_config_path=None,
                 global_auth_found=False,
@@ -233,22 +235,21 @@ class TestGeneratedConfig:
         assert "mounts" in result
         assert result["workspaceFolder"] == "/workspace"
 
-    def test_opencode_json_structure(self, tmp_path: Path):
-        """Test that generated opencode.json has correct structure."""
-        from opencode_framework.generator import _generate_opencode_config, GenerationContext
+    def test_devcontainer_has_remote_env(self, tmp_path: Path):
+        """Test that generated devcontainer has remoteEnv with OPENCODE_CONFIG."""
+        from opencode_framework.generator import _generate_scratch_devcontainer, GenerationContext
         from opencode_framework.config import GlobalSettings
-
-        opencode_dir = tmp_path / ".opencode"
-        opencode_dir.mkdir()
 
         ctx = GenerationContext(
             repo_root=tmp_path,
-            opencode_dir=opencode_dir,
+            opencode_dir=tmp_path / ".opencode",
             branch_name="test-branch",
             devcontainer_strategy="from_scratch",
             optional_features=[],
+            editor_choice="none",
             global_settings=GlobalSettings(
                 framework_repo_path=None,
+                framework_config_path="/path/to/config",
                 global_config_found=False,
                 global_config_path=None,
                 global_auth_found=False,
@@ -256,12 +257,60 @@ class TestGeneratedConfig:
             ),
         )
 
-        _generate_opencode_config(ctx)
+        result = _generate_scratch_devcontainer(ctx)
 
-        config_path = opencode_dir / "opencode.json"
-        assert config_path.exists()
+        assert "remoteEnv" in result
+        assert "OPENCODE_CONFIG" in result["remoteEnv"]
 
-        config = json.loads(config_path.read_text())
-        assert "version" in config
-        assert "project" in config
-        assert "permissions" in config
+    def test_editor_choice_sets_editor_env(self, tmp_path: Path):
+        """Test that editor choice sets EDITOR in remoteEnv."""
+        from opencode_framework.generator import _generate_scratch_devcontainer, GenerationContext
+        from opencode_framework.config import GlobalSettings
+
+        ctx = GenerationContext(
+            repo_root=tmp_path,
+            opencode_dir=tmp_path / ".opencode",
+            branch_name="test-branch",
+            devcontainer_strategy="from_scratch",
+            optional_features=[],
+            editor_choice="vi",
+            global_settings=GlobalSettings(
+                framework_repo_path=None,
+                framework_config_path=None,
+                global_config_found=False,
+                global_config_path=None,
+                global_auth_found=False,
+                global_auth_path=None,
+            ),
+        )
+
+        result = _generate_scratch_devcontainer(ctx)
+
+        assert "remoteEnv" in result
+        assert result["remoteEnv"]["EDITOR"] == "vi"
+
+    def test_opencode_feature_present(self, tmp_path: Path):
+        """Test that OpenCode feature is included in generated devcontainer."""
+        from opencode_framework.generator import _generate_scratch_devcontainer, GenerationContext
+        from opencode_framework.config import GlobalSettings
+
+        ctx = GenerationContext(
+            repo_root=tmp_path,
+            opencode_dir=tmp_path / ".opencode",
+            branch_name="test-branch",
+            devcontainer_strategy="from_scratch",
+            optional_features=[],
+            editor_choice="none",
+            global_settings=GlobalSettings(
+                framework_repo_path=None,
+                framework_config_path=None,
+                global_config_found=False,
+                global_config_path=None,
+                global_auth_found=False,
+                global_auth_path=None,
+            ),
+        )
+
+        result = _generate_scratch_devcontainer(ctx)
+
+        assert "ghcr.io/stu-bell/devcontainer-features/open-code:0" in result["features"]
