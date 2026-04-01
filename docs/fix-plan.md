@@ -16,6 +16,8 @@
 | 22 | EDITOR variable from wizard should flow through .env | Medium | Completed |
 | 23 | Remove DOCKER_CONTEXT from .env | Low | Completed |
 | 24 | Add ocframework launch and exec CLI commands | High | Completed |
+| 25 | Fallback to stub auth.json when global auth not found | Medium | Completed |
+| 26 | Framework repository is a required runtime asset | High | Completed |
 
 ### Completed Historical Issues
 
@@ -24,6 +26,75 @@ Issues 1-5, 7, 12 were completed in earlier phases and are no longer relevant to
 ### Superseded Issues
 
 Issues 6, 8-11 were implemented but are now superseded by the template-driven approach (Issues 13-17).
+
+---
+
+## Issue 26: Framework Repository is a Required Runtime Asset
+
+**Status:** Completed
+
+**Problem:**
+- Framework was treating installed package as a fallback path
+- Stub auth was described as "development/testing only"
+- Docs implied wheel/sdist installation was valid
+- Commands could partially work without framework git clone
+
+**Expected Behavior:**
+- The ONLY valid installation is `pipx install -e <git-clone-of-framework>`
+- Framework repository is required for ALL commands
+- Required paths in framework repo:
+  - `.git/` directory
+  - `framework-nuts-and-bolts/` directory
+  - `framework-nuts-and-bolts/stub-auth.json` file
+  - `framework-config/` directory
+- ALL commands fail immediately if framework repo is missing or invalid
+- Runtime validation checks `OCF_LOCAL_FRAMEWORK_PATH` from `.env`
+- Stub auth is a required framework asset, not a dev fallback
+
+**Changes Made:**
+
+### config.py
+- Added `validate_framework_repo()` function
+- Added `get_framework_validation_error()` function
+- Added `REQUIRED_FRAMEWORK_PATHS` constant
+- Updated `_detect_framework_repo_path()` to return None if not a valid framework clone
+- No longer returns package dir as fallback path
+
+### preflight.py
+- Added framework repo validation to `run_preflight_checks()`
+- Added `framework_repo_path` field to `PreflightResult`
+- Clear error message when framework repo is missing or invalid
+
+### runtime.py
+- Extended `validate_runtime_context()` to check `OCF_LOCAL_FRAMEWORK_PATH`
+- Validates that framework path from `.env` still exists
+- Validates that framework path is still a valid framework repo
+
+### cli.py
+- Added `_check_framework_repo()` helper
+- Updated main callback to fail immediately on invalid framework repo
+- Updated `_print_version_info()` to show INVALID marker for bad paths
+
+### Tests
+- Updated `test_runtime.py` with framework validation tests
+- Updated `test_preflight.py` with `TestValidateFrameworkRepo` class
+- Updated `test_generator.py` auth tests to create complete framework repos
+
+### Documentation
+- Updated `docs/security-model.md` with installation requirement
+- Updated `docs/cli-contract.md` with framework repo requirements
+- Updated `docs/devcontainer-strategy.md` with installation section
+- Updated `docs/demo.md` with installation prerequisites
+
+**Acceptance Criteria:**
+- [x] All commands fail when framework is not installed from git clone
+- [x] `ocframework` (bare) fails with clear error
+- [x] `ocframework init` fails during preflight
+- [x] `ocframework launch` fails during runtime validation
+- [x] `ocframework exec` fails during runtime validation
+- [x] Error message tells user to install via `pipx install -e <path>`
+- [x] Tests for framework validation pass
+- [x] Docs updated to reflect required installation method
 
 ---
 
@@ -890,6 +961,73 @@ Phase 8: Launch/Exec CLI Commands
 - [x] Unit tests for env expansion pass
 - [x] CLI tests for launch/exec pass
 - [x] Generator tests updated for CLI commands
+- [x] Full test suite passes
+
+---
+
+## Issue 25: Stub Auth from Required Framework Repository
+
+**Status:** Completed (superseded by Issue 26)
+
+**Note:** Issue 26 now requires that the framework be installed from a git clone, making the stub auth file always available. This issue's original "fallback" language is no longer accurate.
+
+**Current Behavior:**
+- When global `~/.local/share/opencode/auth.json` is not found, `OCF_LOCAL_GLOBAL_AUTH_PATH` is set to the framework's stub auth file
+- Stub auth path: `${OCF_LOCAL_FRAMEWORK_PATH}/framework-nuts-and-bolts/stub-auth.json`
+- Auth mount is always read-only
+
+**Expected Behavior:**
+- When global auth is found, use host auth path
+- When global auth is not found, use framework's stub auth file
+- Stub auth file is a required asset in the framework git repo (validated by Issue 26)
+- Framework MUST be installed via `pipx install -e <git-clone-of-framework>`
+- Auth mount is always read-only
+
+**Rationale:**
+- framework-nuts-and-bolts is a required directory in the framework repo (Issue 26)
+- Stub auth is a required framework asset, not a development fallback
+- The stub file contains empty `{}` so it's safe to expose
+
+**Changes Required:**
+
+### generator.py
+- Update `_generate_env_file()` to compute auth path:
+  - If `global_auth_found`: use `global_auth_path`
+  - Else if `framework_repo_path` exists AND is a git repo AND stub file exists: use `${OCF_LOCAL_FRAMEWORK_PATH}/framework-nuts-and-bolts/stub-auth.json`
+  - Else: empty string
+
+### Tests
+- Add tests for host auth path in generated `.env`
+- Add tests for fallback stub auth path (requires fake git repo with stub file)
+- Add tests for empty auth path when framework is not a git repo
+- Add tests for empty auth path when stub file is missing
+
+### Documentation
+- `docs/security-model.md`:
+  - Update Auth Rule to describe conditional fallback behavior
+  - Update Mount Permissions to mention auth fallback only for git repo
+
+**Files:**
+- `src/opencode_framework/generator.py`
+- `tests/test_generator.py`
+- `docs/security-model.md`
+
+---
+
+## Acceptance Criteria
+
+### 25. Fallback Auth
+- [x] `_generate_env_file()` uses host auth path when found
+- [x] `_generate_env_file()` uses stub auth path only when framework is a git repo with stub file
+- [x] `_generate_env_file()` returns empty auth path when framework is not a git repo
+- [x] `_generate_env_file()` returns empty auth path when stub file is missing
+- [x] `framework-nuts-and-bolts` NOT packaged in installed wheel
+- [x] Tests for host auth path pass
+- [x] Tests for fallback stub auth path pass
+- [x] Tests for empty auth path when not git repo pass
+- [x] Tests for empty auth path when stub missing pass
+- [x] `docs/security-model.md` updated with conditional fallback behavior
+- [x] Full test suite passes
 - [x] Full test suite passes
 
 ---

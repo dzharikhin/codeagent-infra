@@ -143,8 +143,8 @@ class TestValidateRuntimeContext:
         assert valid is False
         assert ".env" in error
 
-    def test_succeeds_with_all_requirements(self, tmp_path: Path):
-        """Should succeed when all requirements are met."""
+    def test_fails_missing_framework_path_in_env(self, tmp_path: Path):
+        """Should fail when OCF_LOCAL_FRAMEWORK_PATH is not set in .env."""
         import subprocess
         
         subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
@@ -171,6 +171,125 @@ class TestValidateRuntimeContext:
         opencode_dir.mkdir()
         (opencode_dir / "devcontainer.json").write_text("{}")
         (opencode_dir / ".env").write_text("REMOTE_USER=root\n")
+        
+        valid, error = validate_runtime_context(tmp_path)
+        assert valid is False
+        assert "OCF_LOCAL_FRAMEWORK_PATH" in error
+
+    def test_fails_framework_path_not_exists(self, tmp_path: Path):
+        """Should fail when framework path in .env does not exist."""
+        import subprocess
+        
+        subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "--allow-empty", "-m", "init"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        
+        opencode_dir = tmp_path / ".opencode"
+        opencode_dir.mkdir()
+        (opencode_dir / "devcontainer.json").write_text("{}")
+        (opencode_dir / ".env").write_text(
+            "REMOTE_USER=root\n"
+            "OCF_LOCAL_FRAMEWORK_PATH=/nonexistent/path/to/framework\n"
+        )
+        
+        valid, error = validate_runtime_context(tmp_path)
+        assert valid is False
+        assert "Framework repository no longer exists" in error
+
+    def test_fails_framework_path_invalid(self, tmp_path: Path):
+        """Should fail when framework path exists but is not a valid framework repo."""
+        import subprocess
+        
+        subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "--allow-empty", "-m", "init"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        
+        invalid_framework = tmp_path / "invalid-framework"
+        invalid_framework.mkdir()
+        (invalid_framework / ".git").mkdir()
+        
+        opencode_dir = tmp_path / ".opencode"
+        opencode_dir.mkdir()
+        (opencode_dir / "devcontainer.json").write_text("{}")
+        (opencode_dir / ".env").write_text(
+            f"REMOTE_USER=root\n"
+            f"OCF_LOCAL_FRAMEWORK_PATH={invalid_framework}\n"
+        )
+        
+        valid, error = validate_runtime_context(tmp_path)
+        assert valid is False
+        assert "Framework repository is invalid" in error
+
+    def test_succeeds_with_valid_framework_repo(self, tmp_path: Path):
+        """Should succeed when all requirements are met including valid framework repo."""
+        import subprocess
+        
+        subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "--allow-empty", "-m", "init"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        
+        framework_repo = tmp_path / "framework"
+        framework_repo.mkdir()
+        (framework_repo / ".git").mkdir()
+        (framework_repo / "framework-nuts-and-bolts").mkdir()
+        (framework_repo / "framework-nuts-and-bolts" / "stub-auth.json").write_text("{}")
+        (framework_repo / "framework-config").mkdir()
+        
+        opencode_dir = tmp_path / ".opencode"
+        opencode_dir.mkdir()
+        (opencode_dir / "devcontainer.json").write_text("{}")
+        (opencode_dir / ".env").write_text(
+            f"REMOTE_USER=root\n"
+            f"OCF_LOCAL_FRAMEWORK_PATH={framework_repo}\n"
+        )
         
         valid, error = validate_runtime_context(tmp_path)
         assert valid is True

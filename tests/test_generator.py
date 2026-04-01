@@ -260,6 +260,51 @@ class TestTemplateMounts:
         assert len(config_mounts) == 1
         assert "readonly" in str(config_mounts[0])
 
+    def test_scratch_no_global_config_mount_when_missing(self, tmp_path: Path):
+        """Scratch devcontainer should NOT mount global config when not found."""
+        ctx = GenerationContext(
+            repo_root=tmp_path,
+            opencode_dir=tmp_path / ".opencode",
+            branch_name="codeagent-test",
+            devcontainer_strategy="from_scratch",
+            optional_features=[],
+            editor_choice="none",
+            global_settings=self._make_global_settings(
+                global_config_found=False,
+                global_config_path=None,
+            ),
+        )
+
+        result = _generate_scratch_devcontainer(ctx)
+        mounts = result.get("mounts", [])
+        
+        config_mounts = [m for m in mounts if "OCF_LOCAL_GLOBAL_CONFIG_PATH" in str(m)]
+        assert len(config_mounts) == 0
+
+    def test_extended_no_global_config_mount_when_missing(self, tmp_path: Path):
+        """Extended devcontainer should NOT mount global config when not found."""
+        existing = {"image": "ubuntu:22.04"}
+        
+        ctx = GenerationContext(
+            repo_root=tmp_path,
+            opencode_dir=tmp_path / ".opencode",
+            branch_name="codeagent-test",
+            devcontainer_strategy="extend",
+            optional_features=[],
+            editor_choice="none",
+            global_settings=self._make_global_settings(
+                global_config_found=False,
+                global_config_path=None,
+            ),
+            existing_devcontainer=existing,
+        )
+
+        result = _generate_extended_devcontainer(ctx)
+        mounts = result.get("mounts", [])
+        
+        config_mounts = [m for m in mounts if "OCF_LOCAL_GLOBAL_PATH" in str(m) or "XDG_CONFIG_HOME}/opencode" in str(m)]
+        assert len(config_mounts) == 0
+
     def test_global_auth_mount_is_readonly(self, tmp_path: Path):
         """Global auth.json mount should be readonly."""
         ctx = GenerationContext(
@@ -588,6 +633,132 @@ class TestEnvFileGeneration:
         
         env_content = (tmp_path / ".opencode" / ".env").read_text()
         assert "EDITOR=" not in env_content
+
+    def test_env_uses_host_auth_when_found(self, tmp_path: Path):
+        """Generated .env should use host auth path when global_auth_found is True."""
+        ctx = GenerationContext(
+            repo_root=tmp_path,
+            opencode_dir=tmp_path / ".opencode",
+            branch_name="codeagent-test",
+            devcontainer_strategy="from_scratch",
+            optional_features=[],
+            editor_choice="none",
+            global_settings=self._make_global_settings(
+                global_auth_found=True,
+                global_auth_path="/home/user/.local/share/opencode/auth.json",
+            ),
+        )
+        
+        (tmp_path / ".opencode").mkdir(exist_ok=True)
+        _generate_env_file(ctx)
+        
+        env_content = (tmp_path / ".opencode" / ".env").read_text()
+        assert "OCF_LOCAL_GLOBAL_AUTH_PATH=/home/user/.local/share/opencode/auth.json" in env_content
+
+    def test_env_uses_stub_auth_when_host_not_found(self, tmp_path: Path):
+        """Generated .env should use stub auth path when host auth not found and framework is a valid repo."""
+        framework_repo = tmp_path / "framework"
+        framework_repo.mkdir()
+        (framework_repo / ".git").mkdir()
+        stub_dir = framework_repo / "framework-nuts-and-bolts"
+        stub_dir.mkdir()
+        (stub_dir / "stub-auth.json").write_text("{}")
+        (framework_repo / "framework-config").mkdir()
+        
+        ctx = GenerationContext(
+            repo_root=tmp_path,
+            opencode_dir=tmp_path / ".opencode",
+            branch_name="codeagent-test",
+            devcontainer_strategy="from_scratch",
+            optional_features=[],
+            editor_choice="none",
+            global_settings=self._make_global_settings(
+                global_auth_found=False,
+                global_auth_path=None,
+                framework_repo_path=str(framework_repo),
+            ),
+        )
+        
+        (tmp_path / ".opencode").mkdir(exist_ok=True)
+        _generate_env_file(ctx)
+        
+        env_content = (tmp_path / ".opencode" / ".env").read_text()
+        assert "OCF_LOCAL_GLOBAL_AUTH_PATH=${OCF_LOCAL_FRAMEWORK_PATH}/framework-nuts-and-bolts/stub-auth.json" in env_content
+
+    def test_env_auth_empty_when_no_framework_path(self, tmp_path: Path):
+        """Generated .env should have empty auth path when no framework path available."""
+        ctx = GenerationContext(
+            repo_root=tmp_path,
+            opencode_dir=tmp_path / ".opencode",
+            branch_name="codeagent-test",
+            devcontainer_strategy="from_scratch",
+            optional_features=[],
+            editor_choice="none",
+            global_settings=self._make_global_settings(
+                global_auth_found=False,
+                global_auth_path=None,
+                framework_repo_path=None,
+            ),
+        )
+        
+        (tmp_path / ".opencode").mkdir(exist_ok=True)
+        _generate_env_file(ctx)
+        
+        env_content = (tmp_path / ".opencode" / ".env").read_text()
+        assert "OCF_LOCAL_GLOBAL_AUTH_PATH=" in env_content
+
+    def test_env_auth_empty_when_framework_not_git_repo(self, tmp_path: Path):
+        """Generated .env should have empty auth path when framework is not a git repo."""
+        framework_repo = tmp_path / "framework"
+        framework_repo.mkdir()
+        
+        ctx = GenerationContext(
+            repo_root=tmp_path,
+            opencode_dir=tmp_path / ".opencode",
+            branch_name="codeagent-test",
+            devcontainer_strategy="from_scratch",
+            optional_features=[],
+            editor_choice="none",
+            global_settings=self._make_global_settings(
+                global_auth_found=False,
+                global_auth_path=None,
+                framework_repo_path=str(framework_repo),
+            ),
+        )
+        
+        (tmp_path / ".opencode").mkdir(exist_ok=True)
+        _generate_env_file(ctx)
+        
+        env_content = (tmp_path / ".opencode" / ".env").read_text()
+        assert "OCF_LOCAL_GLOBAL_AUTH_PATH=" in env_content
+
+    def test_env_auth_empty_when_stub_file_missing(self, tmp_path: Path):
+        """Generated .env should have empty auth path when stub file doesn't exist in git repo."""
+        framework_repo = tmp_path / "framework"
+        framework_repo.mkdir()
+        (framework_repo / ".git").mkdir()
+        (framework_repo / "framework-nuts-and-bolts").mkdir()
+        (framework_repo / "framework-config").mkdir()
+        
+        ctx = GenerationContext(
+            repo_root=tmp_path,
+            opencode_dir=tmp_path / ".opencode",
+            branch_name="codeagent-test",
+            devcontainer_strategy="from_scratch",
+            optional_features=[],
+            editor_choice="none",
+            global_settings=self._make_global_settings(
+                global_auth_found=False,
+                global_auth_path=None,
+                framework_repo_path=str(framework_repo),
+            ),
+        )
+        
+        (tmp_path / ".opencode").mkdir(exist_ok=True)
+        _generate_env_file(ctx)
+        
+        env_content = (tmp_path / ".opencode" / ".env").read_text()
+        assert "OCF_LOCAL_GLOBAL_AUTH_PATH=" in env_content
 
 
 class TestPostAttachCommand:

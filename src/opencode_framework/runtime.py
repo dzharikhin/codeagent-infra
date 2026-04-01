@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Tuple, Dict
 
 from opencode_framework.preflight import is_inside_git_tree, get_repo_root
+from opencode_framework.config import validate_framework_repo, get_framework_validation_error
 
 
 def validate_runtime_context(cwd: Path) -> Tuple[bool, str]:
@@ -17,6 +18,7 @@ def validate_runtime_context(cwd: Path) -> Tuple[bool, str]:
     - .opencode/ directory exists
     - .opencode/devcontainer.json exists
     - .opencode/.env exists
+    - Framework repo from .env still exists and is valid
     
     Returns:
         (True, "") on success
@@ -43,6 +45,24 @@ def validate_runtime_context(cwd: Path) -> Tuple[bool, str]:
     env_file = opencode_dir / ".env"
     if not env_file.is_file():
         return False, ".opencode/.env does not exist. Run 'ocframework init' first."
+    
+    env = load_and_expand_env(env_file)
+    framework_path_str = env.get("OCF_LOCAL_FRAMEWORK_PATH")
+    if not framework_path_str:
+        return False, "OCF_LOCAL_FRAMEWORK_PATH not set in .opencode/.env. Run 'ocframework init' again."
+    
+    framework_path = Path(framework_path_str)
+    if not framework_path.exists():
+        return False, (
+            f"Framework repository no longer exists at: {framework_path_str}\n"
+            "The framework must be reinstalled from a valid git clone:\n"
+            "  pipx install -e <path-to-framework-git-clone>"
+        )
+    
+    valid, missing = validate_framework_repo(framework_path)
+    if not valid:
+        error_msg = get_framework_validation_error(missing, framework_path_str)
+        return False, f"Framework repository is invalid:\n{error_msg}"
     
     return True, ""
 
@@ -104,9 +124,9 @@ def _expand_value(value: str, env: Dict[str, str]) -> str:
         
         if ":-" in var_expr:
             var_name, default = var_expr.split(":-", 1)
-            return env.get(var_name, default)
+            return env.get(var_name, default) or ""
         else:
-            return env.get(var_expr, "")
+            return env.get(var_expr, "") or ""
     
     pattern = r'\$\{([^}]+)\}'
     return re.sub(pattern, replace_var, value)

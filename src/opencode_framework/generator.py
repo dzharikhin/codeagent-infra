@@ -120,6 +120,17 @@ def _generate_scratch_devcontainer(ctx: GenerationContext) -> dict:
     devcontainer = dict(template)
     devcontainer["features"] = features
     
+    mounts = list(template.get("mounts", []))
+    
+    if ctx.global_settings.global_config_found and ctx.global_settings.global_config_path:
+        config_mount = (
+            f"type=bind,source=${{localEnv:OCF_LOCAL_GLOBAL_CONFIG_PATH}},"
+            f"target=${{localEnv:XDG_CONFIG_HOME}}/opencode,readonly"
+        )
+        mounts.append(config_mount)
+    
+    devcontainer["mounts"] = mounts
+    
     if ctx.editor_choice != "none":
         remote_env = dict(devcontainer.get("remoteEnv", {}))
         remote_env["EDITOR"] = "${localEnv:EDITOR}"
@@ -149,6 +160,16 @@ def _generate_extended_devcontainer(ctx: GenerationContext) -> dict:
     mounts = list(existing.get("mounts", []))
     template_mounts = template.get("mounts", [])
     mounts = _merge_mounts(mounts, template_mounts)
+    
+    if ctx.global_settings.global_config_found and ctx.global_settings.global_config_path:
+        config_mount = (
+            f"type=bind,source=${{localEnv:OCF_LOCAL_GLOBAL_CONFIG_PATH}},"
+            f"target=${{localEnv:XDG_CONFIG_HOME}}/opencode,readonly"
+        )
+        config_target = "${localEnv:XDG_CONFIG_HOME}/opencode"
+        existing_targets = {_extract_mount_target(m) for m in mounts if _extract_mount_target(m)}
+        if config_target not in existing_targets:
+            mounts.append(config_mount)
     
     remote_env = dict(existing.get("remoteEnv", {}))
     template_remote_env = template.get("remoteEnv", {})
@@ -278,9 +299,21 @@ def _generate_env_file(ctx: GenerationContext) -> None:
     
     settings = ctx.global_settings
     
+    if settings.global_auth_found and settings.global_auth_path:
+        auth_path = settings.global_auth_path
+    elif settings.framework_repo_path:
+        framework_path = Path(settings.framework_repo_path)
+        stub_auth = framework_path / "framework-nuts-and-bolts" / "stub-auth.json"
+        if (framework_path / ".git").is_dir() and stub_auth.is_file():
+            auth_path = f"${{OCF_LOCAL_FRAMEWORK_PATH}}/framework-nuts-and-bolts/stub-auth.json"
+        else:
+            auth_path = ""
+    else:
+        auth_path = ""
+    
     replacements = {
         "{{OCF_LOCAL_GLOBAL_CONFIG_PATH}}": settings.global_config_path or "",
-        "{{OCF_LOCAL_GLOBAL_AUTH_PATH}}": settings.global_auth_path or "",
+        "{{OCF_LOCAL_GLOBAL_AUTH_PATH}}": auth_path,
         "{{OCF_LOCAL_FRAMEWORK_PATH}}": settings.framework_repo_path or "",
     }
     

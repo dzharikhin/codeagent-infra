@@ -22,7 +22,6 @@
     "type=bind,source=${localWorkspaceFolder}/.opencode/runtime_data/.cache,target=${localEnv:XDG_CACHE_HOME}",
     "type=bind,source=${localWorkspaceFolder}/.opencode/runtime_data/.local/share,target=${localEnv:XDG_DATA_HOME}",
     "type=bind,source=${localWorkspaceFolder}/.opencode/runtime_data/.local/state,target=${localEnv:XDG_STATE_HOME}",
-    "type=bind,source=${localEnv:OCF_LOCAL_GLOBAL_CONFIG_PATH},target=${localEnv:XDG_CONFIG_HOME}/opencode,readonly",
     "type=bind,source=${localEnv:OCF_LOCAL_GLOBAL_AUTH_PATH},target=${localEnv:XDG_DATA_HOME}/opencode/auth.json,readonly",
     "type=bind,source=${localEnv:OCF_LOCAL_FRAMEWORK_PATH}/framework-config/config.json,target=${localEnv:OCF_REMOTE_FRAMEWORK_CONFIG_PATH},readonly"
   ],

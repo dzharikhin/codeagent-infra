@@ -57,6 +57,24 @@ class TestVersionOutput:
         assert result.returncode == 0
         assert "global auth.json found:" in result.stdout
 
+    def test_version_shows_global_config_path_or_expected(self):
+        """Version output should show actual or expected global config path."""
+        result = run_cli(["--version"])
+        assert result.returncode == 0
+        assert (
+            "global config path:" in result.stdout
+            or "expected global config path:" in result.stdout
+        )
+
+    def test_version_shows_global_auth_path_or_expected(self):
+        """Version output should show actual or expected global auth.json path."""
+        result = run_cli(["--version"])
+        assert result.returncode == 0
+        assert (
+            "global auth.json path:" in result.stdout
+            or "expected global auth.json path:" in result.stdout
+        )
+
 
 class TestHelpOutput:
     """Tests for help output."""

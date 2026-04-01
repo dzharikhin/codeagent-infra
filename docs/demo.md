@@ -3,8 +3,15 @@
 ## Prerequisites
 
 - Git, Docker, devcontainer CLI, pipx installed
+- Framework installed as editable from git clone:
+  ```sh
+  git clone <framework-repo-url> /path/to/framework
+  pipx install -e /path/to/framework
+  ```
 - `ocframework` command available in PATH
 - A test directory for disposable repositories
+
+The framework repository is a required runtime asset. All commands will fail if the framework is not installed from a valid git clone.
 
 ---
 

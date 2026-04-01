@@ -1,5 +1,15 @@
 # Devcontainer Strategy
 
+## Installation Requirement
+
+The framework MUST be installed as an editable package from a git clone:
+
+```sh
+pipx install -e <path-to-framework-git-clone>
+```
+
+The framework repository is a required runtime asset containing templates, stub auth, and shared configuration.
+
 ## Existing Devcontainer Detection
 
 Only these standard locations are treated as existing devcontainers in v1:

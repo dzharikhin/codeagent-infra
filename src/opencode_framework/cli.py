@@ -7,7 +7,13 @@ from typing import Optional
 import typer
 
 from opencode_framework import __version__
-from opencode_framework.config import discover_global_settings, GlobalSettings
+from opencode_framework.config import (
+    discover_global_settings,
+    validate_framework_repo,
+    get_framework_validation_error,
+    get_config_root,
+    get_local_data_home,
+)
 
 
 app = typer.Typer(
@@ -23,22 +29,52 @@ def _print_version_info() -> None:
     settings = discover_global_settings()
     
     typer.echo(f"ocframework version: {__version__}")
-    typer.echo(f"framework repo path: {_get_framework_repo_path()}")
+    
+    framework_path = settings.framework_repo_path
+    if framework_path:
+        valid, missing = validate_framework_repo(Path(framework_path))
+        if valid:
+            typer.echo(f"framework repo path: {framework_path}")
+        else:
+            typer.secho(f"framework repo path: {framework_path} (INVALID)", fg=typer.colors.RED)
+            typer.secho(f"  Missing: {', '.join(missing)}", fg=typer.colors.RED)
+    else:
+        typer.secho("framework repo path: not found", fg=typer.colors.RED)
+    
+    expected_global_config_path = get_config_root() / "opencode"
+    expected_global_auth_path = get_local_data_home() / "opencode" / "auth.json"
+    
     typer.echo(f"global config found: {settings.global_config_found}")
     if settings.global_config_found:
         typer.echo(f"global config path: {settings.global_config_path}")
+    else:
+        typer.echo(f"expected global config path: {expected_global_config_path}")
     typer.echo(f"global auth.json found: {settings.global_auth_found}")
     if settings.global_auth_found:
         typer.echo(f"global auth.json path: {settings.global_auth_path}")
+    else:
+        typer.echo(f"expected global auth.json path: {expected_global_auth_path}")
 
 
-def _get_framework_repo_path() -> Optional[str]:
-    """Get the framework repository path from the installed package location."""
-    package_path = Path(__file__).resolve().parent
-    repo_root = package_path.parent.parent
-    if (repo_root / ".git").is_dir():
-        return str(repo_root)
-    return str(package_path)
+def _check_framework_repo() -> Optional[str]:
+    """Check if framework repo is valid.
+    
+    Returns None if valid, error message if invalid.
+    """
+    settings = discover_global_settings()
+    
+    if not settings.framework_repo_path:
+        return (
+            "Framework repository not found.\n"
+            "The framework must be installed as an editable package from a git clone:\n"
+            "  pipx install -e <path-to-framework-git-clone>"
+        )
+    
+    valid, missing = validate_framework_repo(Path(settings.framework_repo_path))
+    if not valid:
+        return get_framework_validation_error(missing, settings.framework_repo_path)
+    
+    return None
 
 
 @app.callback(invoke_without_command=True)
@@ -52,6 +88,12 @@ def main(
     ),
 ) -> None:
     """OpenCode Framework - AI coding agent attachment framework."""
+    error = _check_framework_repo()
+    if error:
+        typer.secho("Error: Framework repository is invalid.", fg=typer.colors.RED, err=True)
+        typer.echo(error, err=True)
+        raise typer.Exit(1)
+    
     if version or ctx.invoked_subcommand is None:
         _print_version_info()
         raise typer.Exit()
@@ -94,6 +136,15 @@ def init(
     if force and opencode_directory_exists(repo_path):
         typer.echo("Backing up existing .opencode/...")
         if is_worktree(opencode_dir):
+            from datetime import datetime
+            import shutil
+            
+            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+            backup_path = repo_path / f".opencode.backup-{timestamp}"
+            
+            shutil.copytree(opencode_dir, backup_path)
+            typer.echo(f"Backup created at: {backup_path}")
+            
             if not remove_worktree(opencode_dir, cwd=repo_path):
                 typer.secho(
                     "Failed to remove existing worktree",
@@ -101,12 +152,28 @@ def init(
                     err=True,
                 )
                 raise typer.Exit(1)
-        backup_path = backup_existing_opencode(repo_path)
-        if backup_path:
-            typer.echo(f"Backup created at: {backup_path}")
+        else:
+            backup_path = backup_existing_opencode(repo_path)
+            if backup_path:
+                typer.echo(f"Backup created at: {backup_path}")
     
     typer.echo("Running setup wizard...")
     wizard_result = run_wizard(repo_path, result)
+    
+    if wizard_result.create_global_config:
+        config_root = get_config_root()
+        global_config_dir = config_root / "opencode"
+        typer.echo(f"Creating global config directory: {global_config_dir}")
+        try:
+            global_config_dir.mkdir(parents=True, exist_ok=True)
+            typer.secho("Global config directory created.", fg=typer.colors.GREEN)
+        except OSError as e:
+            typer.secho(
+                f"Failed to create global config directory: {e}",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(1)
     
     typer.echo(f"Setting up worktree on branch '{wizard_result.branch_name}'...")
     worktree_result = setup_opencode_worktree(
