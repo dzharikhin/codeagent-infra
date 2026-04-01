@@ -21,15 +21,12 @@ Extra files and directories are allowed there.
 All mutable runtime state lives under:
 - `.opencode/runtime_data/`
 
-V1 supports all of the following categories there:
-- logs
-- caches
-- downloaded tools and dependencies
-- temporary files
-- agent session/history data
-- scratch/output data
-- persisted home fragments
-- custom runtime directories
+The following XDG-backed directories are created:
+- `.cache/` - XDG cache directory
+- `.local/share/` - XDG data directory  
+- `.local/state/` - XDG state directory
+
+These directories are mounted into the devcontainer and persist across container rebuilds.
 
 ## Runtime Env File
 

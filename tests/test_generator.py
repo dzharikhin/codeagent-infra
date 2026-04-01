@@ -13,6 +13,8 @@ from opencode_framework.generator import (
     _generate_env_file,
     _generate_readme,
     _get_launch_commands,
+    _merge_mounts,
+    _extract_mount_target,
     GenerationContext,
 )
 from opencode_framework.wizard import WizardResult
@@ -230,10 +232,10 @@ class TestTemplateMounts:
         result = _generate_scratch_devcontainer(ctx)
         mounts = result.get("mounts", [])
         
-        cache_mounts = [m for m in mounts if "runtime_data/.cache" in m.get("source", "")]
+        cache_mounts = [m for m in mounts if "runtime_data/.cache" in str(m)]
         assert len(cache_mounts) == 1
         
-        data_mounts = [m for m in mounts if "runtime_data/.local/share" in m.get("source", "")]
+        data_mounts = [m for m in mounts if "runtime_data/.local/share" in str(m)]
         assert len(data_mounts) == 1
 
     def test_scratch_has_global_config_mount(self, tmp_path: Path):
@@ -254,9 +256,52 @@ class TestTemplateMounts:
         result = _generate_scratch_devcontainer(ctx)
         mounts = result.get("mounts", [])
         
-        config_mounts = [m for m in mounts if "OCF_LOCAL_GLOBAL_CONFIG_PATH" in m.get("source", "")]
+        config_mounts = [m for m in mounts if "OCF_LOCAL_GLOBAL_CONFIG_PATH" in str(m)]
         assert len(config_mounts) == 1
-        assert config_mounts[0]["readOnly"] is True
+        assert "readonly" in str(config_mounts[0])
+
+    def test_global_auth_mount_is_readonly(self, tmp_path: Path):
+        """Global auth.json mount should be readonly."""
+        ctx = GenerationContext(
+            repo_root=tmp_path,
+            opencode_dir=tmp_path / ".opencode",
+            branch_name="codeagent-test",
+            devcontainer_strategy="from_scratch",
+            optional_features=[],
+            editor_choice="none",
+            global_settings=self._make_global_settings(
+                global_auth_found=True,
+                global_auth_path="/home/user/.local/share/opencode/auth.json",
+            ),
+        )
+
+        result = _generate_scratch_devcontainer(ctx)
+        mounts = result.get("mounts", [])
+        
+        auth_mounts = [m for m in mounts if "OCF_LOCAL_GLOBAL_AUTH_PATH" in str(m)]
+        assert len(auth_mounts) == 1
+        assert "readonly" in str(auth_mounts[0])
+
+    def test_framework_config_mount_is_readonly(self, tmp_path: Path):
+        """Framework config mount should be readonly."""
+        ctx = GenerationContext(
+            repo_root=tmp_path,
+            opencode_dir=tmp_path / ".opencode",
+            branch_name="codeagent-test",
+            devcontainer_strategy="from_scratch",
+            optional_features=[],
+            editor_choice="none",
+            global_settings=self._make_global_settings(
+                framework_repo_path="/path/to/framework",
+            ),
+        )
+
+        result = _generate_scratch_devcontainer(ctx)
+        mounts = result.get("mounts", [])
+        
+        framework_mounts = [m for m in mounts if "OCF_LOCAL_FRAMEWORK_PATH" in str(m)]
+        assert len(framework_mounts) == 1
+        assert "readonly" in str(framework_mounts[0])
 
 
 class TestOpenCodeFeature:
@@ -644,3 +689,281 @@ class TestReadmeLaunchCommand:
         
         readme_content = (tmp_path / ".opencode" / "README.md").read_text()
         assert "postAttachCommand" in readme_content
+
+    def test_readme_has_teardown_section(self, tmp_path: Path):
+        """README should have teardown section."""
+        ctx = GenerationContext(
+            repo_root=tmp_path,
+            opencode_dir=tmp_path / ".opencode",
+            branch_name="codeagent-test",
+            devcontainer_strategy="from_scratch",
+            optional_features=[],
+            editor_choice="none",
+            global_settings=self._make_global_settings(),
+        )
+        
+        (tmp_path / ".opencode").mkdir(exist_ok=True)
+        _generate_readme(ctx)
+        
+        readme_content = (tmp_path / ".opencode" / "README.md").read_text()
+        assert "## Teardown" in readme_content
+        assert "docker rm -f" in readme_content
+        assert "<project-base-path>" in readme_content
+
+
+class TestRuntimeDataStructure:
+    """Tests for runtime_data directory structure."""
+
+    def test_creates_only_xdg_directories(self, tmp_path: Path):
+        """Should only create XDG-backed directories."""
+        repo_root = tmp_path / "test-repo"
+        repo_root.mkdir()
+        opencode_dir = repo_root / ".opencode"
+        opencode_dir.mkdir()
+
+        wizard_result = WizardResult(
+            branch_name="codeagent-test",
+            devcontainer_strategy="from_scratch",
+            optional_features=[],
+            editor_choice="none",
+            existing_devcontainer=None,
+            should_add_to_gitignore=True,
+        )
+
+        generate_opencode_directory(repo_root, wizard_result)
+
+        runtime_data = opencode_dir / "runtime_data"
+        assert runtime_data.is_dir()
+        
+        assert (runtime_data / ".cache").is_dir()
+        assert (runtime_data / ".local" / "share").is_dir()
+        assert (runtime_data / ".local" / "state").is_dir()
+
+    def test_no_unused_directories(self, tmp_path: Path):
+        """Should not create unused directories."""
+        repo_root = tmp_path / "test-repo"
+        repo_root.mkdir()
+        opencode_dir = repo_root / ".opencode"
+        opencode_dir.mkdir()
+
+        wizard_result = WizardResult(
+            branch_name="codeagent-test",
+            devcontainer_strategy="from_scratch",
+            optional_features=[],
+            editor_choice="none",
+            existing_devcontainer=None,
+            should_add_to_gitignore=True,
+        )
+
+        generate_opencode_directory(repo_root, wizard_result)
+
+        runtime_data = opencode_dir / "runtime_data"
+        
+        assert not (runtime_data / "logs").exists()
+        assert not (runtime_data / "tools").exists()
+        assert not (runtime_data / "temp").exists()
+        assert not (runtime_data / "sessions").exists()
+        assert not (runtime_data / "output").exists()
+        assert not (runtime_data / "home").exists()
+
+    def test_no_root_gitkeep(self, tmp_path: Path):
+        """Should not create root-level runtime_data/.gitkeep."""
+        repo_root = tmp_path / "test-repo"
+        repo_root.mkdir()
+        opencode_dir = repo_root / ".opencode"
+        opencode_dir.mkdir()
+
+        wizard_result = WizardResult(
+            branch_name="codeagent-test",
+            devcontainer_strategy="from_scratch",
+            optional_features=[],
+            editor_choice="none",
+            existing_devcontainer=None,
+            should_add_to_gitignore=True,
+        )
+
+        generate_opencode_directory(repo_root, wizard_result)
+
+        runtime_data = opencode_dir / "runtime_data"
+        assert not (runtime_data / ".gitkeep").exists()
+
+    def test_no_gitkeep_in_subdirs(self, tmp_path: Path):
+        """Should not create .gitkeep files in subdirectories."""
+        repo_root = tmp_path / "test-repo"
+        repo_root.mkdir()
+        opencode_dir = repo_root / ".opencode"
+        opencode_dir.mkdir()
+
+        wizard_result = WizardResult(
+            branch_name="codeagent-test",
+            devcontainer_strategy="from_scratch",
+            optional_features=[],
+            editor_choice="none",
+            existing_devcontainer=None,
+            should_add_to_gitignore=True,
+        )
+
+        generate_opencode_directory(repo_root, wizard_result)
+
+        runtime_data = opencode_dir / "runtime_data"
+        
+        assert not (runtime_data / ".cache" / ".gitkeep").exists()
+        assert not (runtime_data / ".local" / "share" / ".gitkeep").exists()
+        assert not (runtime_data / ".local" / "state" / ".gitkeep").exists()
+
+    def test_gitignore_ignores_runtime_data(self, tmp_path: Path):
+        """gitignore should ignore runtime_data directory."""
+        repo_root = tmp_path / "test-repo"
+        repo_root.mkdir()
+        opencode_dir = repo_root / ".opencode"
+        opencode_dir.mkdir()
+
+        wizard_result = WizardResult(
+            branch_name="codeagent-test",
+            devcontainer_strategy="from_scratch",
+            optional_features=[],
+            editor_choice="none",
+            existing_devcontainer=None,
+            should_add_to_gitignore=True,
+        )
+
+        generate_opencode_directory(repo_root, wizard_result)
+
+        gitignore_content = (opencode_dir / ".gitignore").read_text()
+        
+        assert "runtime_data/" in gitignore_content
+
+    def test_gitignore_ignores_node_modules(self, tmp_path: Path):
+        """gitignore should ignore node_modules directory."""
+        repo_root = tmp_path / "test-repo"
+        repo_root.mkdir()
+        opencode_dir = repo_root / ".opencode"
+        opencode_dir.mkdir()
+
+        wizard_result = WizardResult(
+            branch_name="codeagent-test",
+            devcontainer_strategy="from_scratch",
+            optional_features=[],
+            editor_choice="none",
+            existing_devcontainer=None,
+            should_add_to_gitignore=True,
+        )
+
+        generate_opencode_directory(repo_root, wizard_result)
+
+        gitignore_content = (opencode_dir / ".gitignore").read_text()
+        
+        assert "node_modules/" in gitignore_content
+
+    def test_gitignore_no_gitkeep_unignore_lines(self, tmp_path: Path):
+        """gitignore should not have .gitkeep unignore lines."""
+        repo_root = tmp_path / "test-repo"
+        repo_root.mkdir()
+        opencode_dir = repo_root / ".opencode"
+        opencode_dir.mkdir()
+
+        wizard_result = WizardResult(
+            branch_name="codeagent-test",
+            devcontainer_strategy="from_scratch",
+            optional_features=[],
+            editor_choice="none",
+            existing_devcontainer=None,
+            should_add_to_gitignore=True,
+        )
+
+        generate_opencode_directory(repo_root, wizard_result)
+
+        gitignore_content = (opencode_dir / ".gitignore").read_text()
+        
+        assert "!runtime_data/.cache/.gitkeep" not in gitignore_content
+        assert "!runtime_data/.local/share/.gitkeep" not in gitignore_content
+        assert "!runtime_data/.local/state/.gitkeep" not in gitignore_content
+
+
+class TestReadmeFrameworkUrl:
+    """Tests for README framework URL."""
+
+    def _make_global_settings(self, **kwargs):
+        """Create GlobalSettings with defaults."""
+        defaults = {
+            "framework_repo_path": None,
+            "framework_config_path": None,
+            "global_config_found": False,
+            "global_config_path": None,
+            "global_auth_found": False,
+            "global_auth_path": None,
+        }
+        defaults.update(kwargs)
+        return GlobalSettings(**defaults)
+
+    def test_readme_has_new_framework_url(self, tmp_path: Path):
+        """README should have new framework docs URL."""
+        ctx = GenerationContext(
+            repo_root=tmp_path,
+            opencode_dir=tmp_path / ".opencode",
+            branch_name="codeagent-test",
+            devcontainer_strategy="from_scratch",
+            optional_features=[],
+            editor_choice="none",
+            global_settings=self._make_global_settings(),
+        )
+        
+        (tmp_path / ".opencode").mkdir(exist_ok=True)
+        _generate_readme(ctx)
+        
+        readme_content = (tmp_path / ".opencode" / "README.md").read_text()
+        assert "https://github.com/dzharikhin/codeagent-infra" in readme_content
+        assert "https://github.com/anomalyco/opencode-framework" not in readme_content
+
+
+class TestMountMerging:
+    """Tests for mount merging with string and dict mounts."""
+
+    def test_extract_target_from_dict_mount(self):
+        """Should extract target from dict mount."""
+        mount = {"source": "/host/path", "target": "/container/path", "type": "bind"}
+        assert _extract_mount_target(mount) == "/container/path"
+
+    def test_extract_target_from_string_mount(self):
+        """Should extract target from string mount."""
+        mount = "type=bind,source=/host/path,target=/container/path,readonly"
+        assert _extract_mount_target(mount) == "/container/path"
+
+    def test_extract_target_from_dict_without_target(self):
+        """Should return None for dict without target."""
+        mount = {"source": "/host/path", "type": "bind"}
+        assert _extract_mount_target(mount) is None
+
+    def test_merge_string_mounts(self):
+        """Should merge string mounts and dedupe by target."""
+        existing = ["type=bind,source=/a,target=/x"]
+        additions = ["type=bind,source=/b,target=/y", "type=bind,source=/c,target=/x"]
+        
+        result = _merge_mounts(existing, additions)
+        
+        assert len(result) == 2
+        assert "target=/x" in result[0]
+        assert "target=/y" in result[1]
+
+    def test_merge_dict_mounts(self):
+        """Should merge dict mounts and dedupe by target."""
+        existing = [{"source": "/a", "target": "/x", "type": "bind"}]
+        additions = [
+            {"source": "/b", "target": "/y", "type": "bind"},
+            {"source": "/c", "target": "/x", "type": "bind"},
+        ]
+        
+        result = _merge_mounts(existing, additions)
+        
+        assert len(result) == 2
+        assert result[0]["target"] == "/x"
+        assert result[1]["target"] == "/y"
+
+    def test_merge_mixed_mounts(self):
+        """Should merge mixed string and dict mounts."""
+        existing = [{"source": "/a", "target": "/x", "type": "bind"}]
+        additions = ["type=bind,source=/b,target=/y", "type=bind,source=/c,target=/x"]
+        
+        result = _merge_mounts(existing, additions)
+        
+        assert len(result) == 2

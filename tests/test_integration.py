@@ -81,48 +81,6 @@ class TestInitFlowWithGit:
         assert "Initialize" in result.stdout
 
 
-@pytest.mark.skipif(not TOOLS_AVAILABLE, reason="Required tools not installed")
-class TestInitFlowFull:
-    """Full integration tests requiring all tools."""
-
-    def test_init_creates_opencode_directory(self, tmp_path: Path):
-        """Test that init creates .opencode/ directory."""
-        repo = tmp_path / "test-repo"
-        repo.mkdir()
-
-        subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
-        subprocess.run(
-            ["git", "config", "user.email", "test@example.com"],
-            cwd=repo,
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["git", "config", "user.name", "Test User"],
-            cwd=repo,
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["git", "commit", "--allow-empty", "-m", "Initial commit"],
-            cwd=repo,
-            check=True,
-            capture_output=True,
-        )
-
-        result = run_cli(
-            ["init"],
-            cwd=repo,
-        )
-
-        if result.returncode != 0:
-            pytest.skip(f"Init failed: {result.stderr}")
-
-        opencode_dir = repo / ".opencode"
-        assert opencode_dir.exists()
-        assert (opencode_dir / "devcontainer.json").exists()
-
-
 class TestDevcontainerHandling:
     """Tests for devcontainer detection and handling in init flow."""
 

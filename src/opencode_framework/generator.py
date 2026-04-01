@@ -194,13 +194,27 @@ def _generate_extended_devcontainer(ctx: GenerationContext) -> dict:
     return devcontainer
 
 
-def _merge_mounts(existing: List[dict], additions: List[dict]) -> List[dict]:
-    """Merge mount lists, deduplicating by target path."""
+def _extract_mount_target(mount) -> Optional[str]:
+    """Extract target path from a mount (string or dict form)."""
+    if isinstance(mount, dict):
+        return mount.get("target")
+    elif isinstance(mount, str):
+        for part in mount.split(","):
+            if part.startswith("target="):
+                return part[7:]
+    return None
+
+
+def _merge_mounts(existing: List, additions: List) -> List:
+    """Merge mount lists, deduplicating by target path.
+    
+    Supports both string mounts and dict mounts.
+    """
     result = list(existing)
-    existing_targets = {m.get("target") for m in existing if "target" in m}
+    existing_targets = {_extract_mount_target(m) for m in existing if _extract_mount_target(m)}
     
     for mount in additions:
-        target = mount.get("target")
+        target = _extract_mount_target(mount)
         if target and target not in existing_targets:
             result.append(mount)
     
@@ -318,6 +332,14 @@ This directory contains the project-level configuration for the OpenCode Framewo
 
 OpenCode is started on attach via `postAttachCommand` in devcontainer.json.
 
+## Teardown
+
+There is no `devcontainer down` flow yet. To stop and remove the container:
+
+```sh
+docker rm -f <project-base-path>
+```
+
 ## Version Control
 
 This directory is a linked Git worktree on branch `{ctx.branch_name}`.
@@ -332,7 +354,7 @@ from inside `.opencode/` to affect the configuration branch.
 
 ## Documentation
 
-- Framework docs: https://github.com/anomalyco/opencode-framework
+- Framework docs: https://github.com/dzharikhin/codeagent-infra
 - OpenCode docs: https://opencode.ai
 """
     
@@ -345,6 +367,9 @@ def _generate_gitignore(ctx: GenerationContext) -> None:
     gitignore_content = """# Runtime data - not intended for versioning
 runtime_data/
 
+# Node modules (created by bun install for OpenCode plugins)
+node_modules/
+
 # Local overrides
 .env.local
 *.local.json
@@ -355,7 +380,13 @@ runtime_data/
 
 
 def _generate_runtime_data(ctx: GenerationContext) -> None:
-    """Create .opencode/runtime_data/ directory structure."""
+    """Create .opencode/runtime_data/ directory structure.
+    
+    Only creates XDG-backed directories that are actually mounted:
+    - .cache/
+    - .local/share/
+    - .local/state/
+    """
     runtime_data = ctx.opencode_dir / "runtime_data"
     runtime_data.mkdir(exist_ok=True)
     
@@ -363,15 +394,8 @@ def _generate_runtime_data(ctx: GenerationContext) -> None:
         ".cache",
         ".local/share",
         ".local/state",
-        "logs",
-        "tools",
-        "temp",
-        "sessions",
-        "output",
-        "home",
     ]
     
     for subdir in subdirs:
-        (runtime_data / subdir).mkdir(parents=True, exist_ok=True)
-    
-    (runtime_data / ".gitkeep").write_text("")
+        dir_path = runtime_data / subdir
+        dir_path.mkdir(parents=True, exist_ok=True)

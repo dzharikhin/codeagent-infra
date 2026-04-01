@@ -9,6 +9,10 @@
 | 15 | Extend mode should merge only OpenCode-managed template fragments | High | Completed |
 | 16 | Standardize sourced-env launch, debug, and shell commands | High | Completed |
 | 17 | Update docs and tests to new template contract | High | Completed |
+| 18 | Remove unused runtime_data subdirectories | Medium | Completed |
+| 19 | Global config/auth/framework mounts must be read-only | High | Completed |
+| 20 | Update .gitignore to ignore node_modules and remove .gitkeep unignore lines | Medium | Completed |
+| 21 | Update framework docs URL to new location | Low | Completed |
 
 ### Completed Historical Issues
 
@@ -303,6 +307,209 @@ Issues 6, 8-11 were implemented but are now superseded by the template-driven ap
 
 ---
 
+## Issue 18: Remove Unused Runtime Data Subdirectories
+
+**Status:** Completed
+
+**Current Behavior:**
+- `_generate_runtime_data()` creates many subdirectories under `.opencode/runtime_data/`:
+  - `.cache`
+  - `.local/share`
+  - `.local/state`
+  - `logs`
+  - `tools`
+  - `temp`
+  - `sessions`
+  - `output`
+  - `home`
+- Only `.cache`, `.local/share`, and `.local/state` are actually mounted in the devcontainer template
+- Other directories are never used
+- A root-level `runtime_data/.gitkeep` is created
+
+**Expected Behavior:**
+- Only create XDG-backed directories that are actually used:
+  - `.opencode/runtime_data/.cache/`
+  - `.opencode/runtime_data/.local/share/`
+  - `.opencode/runtime_data/.local/state/`
+- Remove creation of unused directories:
+  - `logs`
+  - `tools`
+  - `temp`
+  - `sessions`
+  - `output`
+  - `home`
+- Add `.gitkeep` files only in directories confirmed to be in use (the 3 XDG dirs)
+- Update generated `.opencode/.gitignore` to allow `.gitkeep` files in kept directories to be committed
+- Remove root-level `runtime_data/.gitkeep`
+
+**Rationale:**
+- Devcontainer template only mounts the XDG cache/data/state directories
+- Unused directories add clutter and confusion
+- `.gitkeep` should only exist where we have confirmed usage
+- Keeps runtime data structure aligned with actual mount configuration
+
+**Changes Required:**
+
+### generator.py
+- Update `_generate_runtime_data()` to create only:
+  - `.cache/`
+  - `.local/share/`
+  - `.local/state/`
+- Remove creation of:
+  - `logs/`
+  - `tools/`
+  - `temp/`
+  - `sessions/`
+  - `output/`
+  - `home/`
+- Remove root-level `runtime_data/.gitkeep`
+- Create `.gitkeep` in each of the 3 kept directories:
+  - `.opencode/runtime_data/.cache/.gitkeep`
+  - `.opencode/runtime_data/.local/share/.gitkeep`
+  - `.opencode/runtime_data/.local/state/.gitkeep`
+- Possibly update `.gitignore` generation to permit these `.gitkeep` files
+
+### Tests
+- Update `tests/test_generator.py`:
+  - Assert only 3 kept directories are created
+  - Assert removed directories are absent
+  - Assert `.gitkeep` exists in kept directories
+  - Assert root-level `runtime_data/.gitkeep` is not created
+
+### Documentation
+- `docs/runtime-layout.md`:
+  - Remove references to unused directories
+  - Document only the 3 XDG-backed directories
+- `docs/demo.md`:
+  - Update expected runtime_data structure
+- Other docs as needed
+
+**Files:**
+- `src/opencode_framework/generator.py`
+- `tests/test_generator.py`
+- `docs/runtime-layout.md`
+- `docs/demo.md`
+
+---
+
+## Issue 19: Global Config/Auth/Framework Mounts Must Be Read-Only
+
+**Status:** Completed
+
+**Current Behavior:**
+- Template mounts use object/dict format with `"readOnly": true`
+- devcontainer CLI/toolchain may not enforce readOnly on dict mounts
+- User testing showed global `auth.json` was editable from inside container
+
+**Expected Behavior:**
+- Global config directory mounted read-only
+- Global `auth.json` file mounted read-only
+- Framework config file mounted read-only
+- Use Docker mount string syntax with `readonly` flag for reliable enforcement
+- Runtime data mounts (cache, data, state) remain read-write
+
+**Changes Required:**
+
+### devcontainer.template.json
+- Convert all mounts from dict format to string format
+- Runtime data mounts: `type=bind,source=...,target=...`
+- Global config/auth/framework mounts: `type=bind,source=...,target=...,readonly`
+
+### generator.py
+- Add `_extract_mount_target()` helper to parse target from string or dict mounts
+- Update `_merge_mounts()` to handle both string and dict mounts
+- Deduplicate by target path regardless of mount format
+
+### Tests
+- Add tests for `_extract_mount_target()` with both formats
+- Add tests for `_merge_mounts()` with string, dict, and mixed mounts
+- Add tests asserting `readonly` in global config mount string
+- Add tests asserting `readonly` in global auth mount string
+- Add tests asserting `readonly` in framework config mount string
+
+**Files:**
+- `src/opencode_framework/templates/devcontainer.template.json`
+- `src/opencode_framework/generator.py`
+- `tests/test_generator.py`
+
+---
+
+## Issue 20: Update .gitignore to Ignore node_modules and Remove .gitkeep Unignore Lines
+
+**Status:** Completed
+
+**Current Behavior:**
+- Generated `.opencode/.gitignore` ignores `runtime_data/*`
+- Contains explicit unignore lines for `.gitkeep` files in runtime subdirs:
+  ```
+  !runtime_data/.cache/.gitkeep
+  !runtime_data/.local/share/.gitkeep
+  !runtime_data/.local/state/.gitkeep
+  ```
+- Does not ignore `node_modules/` directory (created by `bun install` for OpenCode plugins)
+- Both `.gitkeep` files and their unignore rules are generated
+
+**Expected Behavior:**
+- Add `node_modules/` to generated `.gitignore`
+- Remove `.gitkeep` unignore lines from `.gitignore`
+- Optionally stop generating `.gitkeep` files entirely (decision pending)
+
+**Rationale:**
+- `node_modules/` is created by `bun install` when OpenCode installs plugins/tools locally
+- These artifacts should not be committed to the repository
+- `.gitkeep` files are unnecessary if the directories are gitignored anyway
+- Simplifies gitignore rules
+
+**Changes Required:**
+
+### generator.py
+- Update `.gitignore` generation in `_generate_opencode_dir()`:
+  - Add `node_modules/` to ignored patterns
+  - Remove lines that unignore `.gitkeep` files
+- Optionally update `_generate_runtime_data()` to stop creating `.gitkeep` files
+
+### Tests
+- Update `tests/test_generator.py`:
+  - Assert `node_modules/` is present in `.gitignore`
+  - Assert `.gitkeep` unignore lines are absent
+  - If `.gitkeep` generation is removed, update runtime data tests accordingly
+
+**Files:**
+- `src/opencode_framework/generator.py`
+- `tests/test_generator.py`
+
+---
+
+## Issue 21: Update Framework Docs URL to New Location
+
+**Status:** Completed
+
+**Current Behavior:**
+- Generated `.opencode/README.md` references old framework URL:
+  - `https://github.com/anomalyco/opencode-framework`
+
+**Expected Behavior:**
+- Update to new framework URL:
+  - `https://github.com/dzharikhin/codeagent-infra`
+
+**Rationale:**
+- Framework documentation has moved to new repository
+- Users should be directed to correct location
+
+**Changes Required:**
+
+### generator.py
+- Update `_generate_readme()` to use new URL
+
+### Tests
+- Update `tests/test_generator.py` README assertion to check for new URL
+
+**Files:**
+- `src/opencode_framework/generator.py`
+- `tests/test_generator.py`
+
+---
+
 ## Implementation Order
 
 ```
@@ -382,6 +589,40 @@ Phase 7: Validation
 - [x] All tests use new variable names
 - [x] Tests pass
 - [x] Docs updated to template approach
+
+### 18. Runtime Data Cleanup
+- [x] `_generate_runtime_data()` creates only `.cache/`, `.local/share/`, `.local/state/`
+- [x] Unused directories (`logs`, `tools`, `temp`, `sessions`, `output`, `home`) not created
+- [x] Root-level `runtime_data/.gitkeep` removed
+- [x] `.gitkeep` files created in each kept directory
+- [x] `.gitignore` permits `.gitkeep` files in kept directories
+- [x] Tests updated to assert correct directory structure
+- [x] `docs/runtime-layout.md` updated
+- [x] `docs/demo.md` updated
+- [x] Full test suite passes
+
+### 19. Read-Only Mounts
+- [x] Template mounts converted to string format
+- [x] Global config mount includes `readonly`
+- [x] Global auth mount includes `readonly`
+- [x] Framework config mount includes `readonly`
+- [x] `_merge_mounts()` handles string mounts
+- [x] Tests for mount target extraction
+- [x] Tests for mount merging with mixed formats
+- [x] Tests asserting `readonly` in RO mount strings
+- [x] Full test suite passes
+
+### 20. Gitignore Cleanup
+- [x] `node_modules/` added to generated `.gitignore`
+- [x] `.gitkeep` unignore lines removed from `.gitignore`
+- [x] `.gitkeep` files no longer generated in runtime_data
+- [x] Tests updated to assert new gitignore content
+- [x] Full test suite passes
+
+### 21. Framework Docs URL Update
+- [x] Generated README uses new URL `https://github.com/dzharikhin/codeagent-infra`
+- [x] Tests updated to assert new URL
+- [x] Full test suite passes
 
 ---
 

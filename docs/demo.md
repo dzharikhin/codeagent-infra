@@ -64,7 +64,7 @@ cat .opencode/.gitignore
 
 **Accept:**
 - Files present: `devcontainer.json`, `.env`, `README.md`, `.gitignore`, `opencode.json`
-- Directory present: `runtime_data/` with subdirectories (`logs`, `caches`, `tools`, `temp`, `sessions`, `output`, `home`)
+- Directory present: `runtime_data/` with XDG subdirectories (`.cache`, `.local/share`, `.local/state`)
 - `devcontainer.json` has: `image`, `features`, `workspaceFolder`, `mounts`, `postCreateCommand`, `postStartCommand`
 - Global config mounted read-only (if present)
 
@@ -240,6 +240,14 @@ devcontainer up --config .opencode/devcontainer.json --workspace-folder .
 - Workspace mounted at `/workspace`
 - Global config mounted read-only (if present)
 - `opencode` auto-start attempted (may fail if not installed, expected)
+
+**Cleanup:**
+
+There is no `devcontainer down` flow yet. To stop and remove the container:
+
+```sh
+docker rm -f demo-fresh
+```
 
 ---
 

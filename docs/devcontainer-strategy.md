@@ -67,3 +67,11 @@ devcontainer up --config .opencode/devcontainer.json --workspace-folder .
 The generated devcontainer configuration should auto-start `opencode`.
 
 Manual shell/debug alternatives are out of scope for framework UX in v1.
+
+## Teardown
+
+There is no `devcontainer down` flow yet. To stop and remove the container:
+
+```sh
+docker rm -f <project-base-path>
+```
