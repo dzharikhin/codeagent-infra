@@ -10,10 +10,9 @@ from opencode_framework.generator import (
     _generate_extended_devcontainer,
     _generate_scratch_devcontainer,
     _add_optional_features,
-    _build_mounts,
     _generate_env_file,
     _generate_readme,
-    _get_launch_command,
+    _get_launch_commands,
     GenerationContext,
 )
 from opencode_framework.wizard import WizardResult
@@ -200,8 +199,8 @@ class TestExtendedDevcontainer:
         assert "DOCKER_CONTEXT" not in result.get("remoteEnv", {})
 
 
-class TestBuildMounts:
-    """Tests for mount building."""
+class TestTemplateMounts:
+    """Tests for template-based mounts."""
 
     def _make_global_settings(self, **kwargs):
         """Create GlobalSettings with defaults."""
@@ -216,8 +215,8 @@ class TestBuildMounts:
         defaults.update(kwargs)
         return GlobalSettings(**defaults)
 
-    def test_no_local_opencode_mounts(self, tmp_path: Path):
-        """Should not mount local .opencode files - they're accessible via workspaceMount."""
+    def test_scratch_has_runtime_data_mounts(self, tmp_path: Path):
+        """Scratch devcontainer should have runtime_data mounts."""
         ctx = GenerationContext(
             repo_root=tmp_path,
             opencode_dir=tmp_path / ".opencode",
@@ -228,12 +227,17 @@ class TestBuildMounts:
             global_settings=self._make_global_settings(),
         )
 
-        mounts = _build_mounts(ctx)
-        local_opencode_mounts = [m for m in mounts if "${localWorkspaceFolder}/.opencode" in m.get("source", "")]
-        assert len(local_opencode_mounts) == 0
+        result = _generate_scratch_devcontainer(ctx)
+        mounts = result.get("mounts", [])
+        
+        cache_mounts = [m for m in mounts if "runtime_data/.cache" in m.get("source", "")]
+        assert len(cache_mounts) == 1
+        
+        data_mounts = [m for m in mounts if "runtime_data/.local/share" in m.get("source", "")]
+        assert len(data_mounts) == 1
 
-    def test_global_config_mount(self, tmp_path: Path):
-        """Should mount global config read-only."""
+    def test_scratch_has_global_config_mount(self, tmp_path: Path):
+        """Scratch devcontainer should mount global config via template."""
         ctx = GenerationContext(
             repo_root=tmp_path,
             opencode_dir=tmp_path / ".opencode",
@@ -247,50 +251,12 @@ class TestBuildMounts:
             ),
         )
 
-        mounts = _build_mounts(ctx)
-        config_mounts = [m for m in mounts if "opencode" in m["target"] and ".config" in m["target"]]
+        result = _generate_scratch_devcontainer(ctx)
+        mounts = result.get("mounts", [])
+        
+        config_mounts = [m for m in mounts if "OCF_LOCAL_GLOBAL_CONFIG_PATH" in m.get("source", "")]
         assert len(config_mounts) == 1
         assert config_mounts[0]["readOnly"] is True
-
-    def test_global_auth_mount(self, tmp_path: Path):
-        """Should mount global auth.json read-only."""
-        ctx = GenerationContext(
-            repo_root=tmp_path,
-            opencode_dir=tmp_path / ".opencode",
-            branch_name="codeagent-test",
-            devcontainer_strategy="from_scratch",
-            optional_features=[],
-            editor_choice="none",
-            global_settings=self._make_global_settings(
-                global_auth_found=True,
-                global_auth_path="/home/user/.local/share/opencode/auth.json",
-            ),
-        )
-
-        mounts = _build_mounts(ctx)
-        auth_mounts = [m for m in mounts if "auth.json" in m["target"]]
-        assert len(auth_mounts) == 1
-        assert auth_mounts[0]["readOnly"] is True
-
-    def test_framework_config_mount(self, tmp_path: Path):
-        """Should mount framework config read-only."""
-        ctx = GenerationContext(
-            repo_root=tmp_path,
-            opencode_dir=tmp_path / ".opencode",
-            branch_name="codeagent-test",
-            devcontainer_strategy="from_scratch",
-            optional_features=[],
-            editor_choice="none",
-            global_settings=self._make_global_settings(
-                framework_config_path="/path/to/framework-config",
-            ),
-        )
-
-        mounts = _build_mounts(ctx)
-        framework_mounts = [m for m in mounts if "ocframework" in m["target"]]
-        assert len(framework_mounts) == 1
-        assert framework_mounts[0]["readOnly"] is True
-        assert framework_mounts[0]["target"] == "/opt/ocframework/config"
 
 
 class TestOpenCodeFeature:
@@ -364,7 +330,7 @@ class TestRemoteUser:
         return GlobalSettings(**defaults)
 
     def test_remote_user_uses_env_var_in_scratch(self, tmp_path: Path):
-        """Scratch devcontainer should use env var for remoteUser."""
+        """Scratch devcontainer should use REMOTE_USER env var."""
         ctx = GenerationContext(
             repo_root=tmp_path,
             opencode_dir=tmp_path / ".opencode",
@@ -376,8 +342,7 @@ class TestRemoteUser:
         )
 
         result = _generate_scratch_devcontainer(ctx)
-        assert "OCF_REMOTE_USER" in result["remoteUser"]
-        assert "vscode" in result["remoteUser"]
+        assert "REMOTE_USER" in result["remoteUser"]
 
     def test_remote_user_preserves_existing_in_extend(self, tmp_path: Path):
         """Extended devcontainer should preserve existing remoteUser."""
@@ -400,25 +365,6 @@ class TestRemoteUser:
         result = _generate_extended_devcontainer(ctx)
         assert result["remoteUser"] == "custom-user"
 
-    def test_remote_user_uses_env_var_in_extend_without_existing(self, tmp_path: Path):
-        """Extended devcontainer without remoteUser should use env var."""
-        existing = {"image": "ubuntu:22.04"}
-        
-        ctx = GenerationContext(
-            repo_root=tmp_path,
-            opencode_dir=tmp_path / ".opencode",
-            branch_name="codeagent-test",
-            devcontainer_strategy="extend",
-            optional_features=[],
-            editor_choice="none",
-            global_settings=self._make_global_settings(),
-            existing_devcontainer=existing,
-        )
-
-        result = _generate_extended_devcontainer(ctx)
-        assert "OCF_REMOTE_USER" in result["remoteUser"]
-        assert "vscode" in result["remoteUser"]
-
 
 class TestEnvFileGeneration:
     """Tests for .env file generation."""
@@ -436,8 +382,8 @@ class TestEnvFileGeneration:
         defaults.update(kwargs)
         return GlobalSettings(**defaults)
 
-    def test_editor_omitted_when_none(self, tmp_path: Path):
-        """EDITOR should not be in .env when editor_choice is none."""
+    def test_env_contains_docker_context(self, tmp_path: Path):
+        """Generated .env should contain DOCKER_CONTEXT."""
         ctx = GenerationContext(
             repo_root=tmp_path,
             opencode_dir=tmp_path / ".opencode",
@@ -452,46 +398,10 @@ class TestEnvFileGeneration:
         _generate_env_file(ctx)
         
         env_content = (tmp_path / ".opencode" / ".env").read_text()
-        assert "EDITOR=" not in env_content
+        assert "DOCKER_CONTEXT=rootless" in env_content
 
-    def test_editor_present_when_vi(self, tmp_path: Path):
-        """EDITOR should be in .env when editor_choice is vi."""
-        ctx = GenerationContext(
-            repo_root=tmp_path,
-            opencode_dir=tmp_path / ".opencode",
-            branch_name="codeagent-test",
-            devcontainer_strategy="from_scratch",
-            optional_features=[],
-            editor_choice="vi",
-            global_settings=self._make_global_settings(),
-        )
-        
-        (tmp_path / ".opencode").mkdir(exist_ok=True)
-        _generate_env_file(ctx)
-        
-        env_content = (tmp_path / ".opencode" / ".env").read_text()
-        assert "EDITOR=vi" in env_content
-
-    def test_editor_present_when_nano(self, tmp_path: Path):
-        """EDITOR should be in .env when editor_choice is nano."""
-        ctx = GenerationContext(
-            repo_root=tmp_path,
-            opencode_dir=tmp_path / ".opencode",
-            branch_name="codeagent-test",
-            devcontainer_strategy="from_scratch",
-            optional_features=[],
-            editor_choice="nano",
-            global_settings=self._make_global_settings(),
-        )
-        
-        (tmp_path / ".opencode").mkdir(exist_ok=True)
-        _generate_env_file(ctx)
-        
-        env_content = (tmp_path / ".opencode" / ".env").read_text()
-        assert "EDITOR=nano" in env_content
-
-    def test_env_is_override_only(self, tmp_path: Path):
-        """Values should be commented examples, not active defaults."""
+    def test_env_contains_remote_user(self, tmp_path: Path):
+        """Generated .env should contain REMOTE_USER."""
         ctx = GenerationContext(
             repo_root=tmp_path,
             opencode_dir=tmp_path / ".opencode",
@@ -506,32 +416,10 @@ class TestEnvFileGeneration:
         _generate_env_file(ctx)
         
         env_content = (tmp_path / ".opencode" / ".env").read_text()
-        assert "# OCF_REMOTE_USER=vscode" in env_content
-        assert "# OCF_BASE_IMAGE=" in env_content
+        assert "REMOTE_USER=root" in env_content
 
-    def test_feature_vars_only_for_selected(self, tmp_path: Path):
-        """Feature version vars should only appear for selected features."""
-        ctx = GenerationContext(
-            repo_root=tmp_path,
-            opencode_dir=tmp_path / ".opencode",
-            branch_name="codeagent-test",
-            devcontainer_strategy="from_scratch",
-            optional_features=["python", "docker"],
-            editor_choice="none",
-            global_settings=self._make_global_settings(),
-        )
-        
-        (tmp_path / ".opencode").mkdir(exist_ok=True)
-        _generate_env_file(ctx)
-        
-        env_content = (tmp_path / ".opencode" / ".env").read_text()
-        assert "OCF_PYTHON_VERSION" in env_content
-        assert "OCF_DOCKER_FEATURE_VERSION" in env_content
-        assert "OCF_NODE_VERSION" not in env_content
-        assert "OCF_JAVA_VERSION" not in env_content
-
-    def test_no_feature_vars_when_none_selected(self, tmp_path: Path):
-        """No feature version vars when no features selected."""
+    def test_env_contains_xdg_vars(self, tmp_path: Path):
+        """Generated .env should contain XDG variables."""
         ctx = GenerationContext(
             repo_root=tmp_path,
             opencode_dir=tmp_path / ".opencode",
@@ -546,10 +434,30 @@ class TestEnvFileGeneration:
         _generate_env_file(ctx)
         
         env_content = (tmp_path / ".opencode" / ".env").read_text()
-        assert "OCF_PYTHON_VERSION" not in env_content
-        assert "OCF_NODE_VERSION" not in env_content
-        assert "OCF_JAVA_VERSION" not in env_content
-        assert "OCF_DOCKER_FEATURE_VERSION" not in env_content
+        assert "XDG_CONFIG_HOME" in env_content
+        assert "XDG_DATA_HOME" in env_content
+        assert "XDG_STATE_HOME" in env_content
+        assert "XDG_CACHE_HOME" in env_content
+
+    def test_env_contains_model_vars(self, tmp_path: Path):
+        """Generated .env should contain model configuration vars."""
+        ctx = GenerationContext(
+            repo_root=tmp_path,
+            opencode_dir=tmp_path / ".opencode",
+            branch_name="codeagent-test",
+            devcontainer_strategy="from_scratch",
+            optional_features=[],
+            editor_choice="none",
+            global_settings=self._make_global_settings(),
+        )
+        
+        (tmp_path / ".opencode").mkdir(exist_ok=True)
+        _generate_env_file(ctx)
+        
+        env_content = (tmp_path / ".opencode" / ".env").read_text()
+        assert "OCF_MAIN_MODEL" in env_content
+        assert "OCF_BUILD_MODEL" in env_content
+        assert "OCF_SMALL_MODEL" in env_content
 
 
 class TestPostAttachCommand:
@@ -582,7 +490,7 @@ class TestPostAttachCommand:
 
         result = _generate_scratch_devcontainer(ctx)
         assert "postAttachCommand" in result
-        assert "opencode" in result["postAttachCommand"]
+        assert result["postAttachCommand"] == "opencode --continue"
 
     def test_no_post_start_command(self, tmp_path: Path):
         """Scratch devcontainer should NOT have postStartCommand."""
@@ -598,21 +506,6 @@ class TestPostAttachCommand:
 
         result = _generate_scratch_devcontainer(ctx)
         assert "postStartCommand" not in result
-
-    def test_no_docker_context_in_attach_command(self, tmp_path: Path):
-        """postAttachCommand should NOT contain DOCKER_CONTEXT."""
-        ctx = GenerationContext(
-            repo_root=tmp_path,
-            opencode_dir=tmp_path / ".opencode",
-            branch_name="codeagent-test",
-            devcontainer_strategy="from_scratch",
-            optional_features=["docker"],
-            editor_choice="none",
-            global_settings=self._make_global_settings(),
-        )
-
-        result = _generate_scratch_devcontainer(ctx)
-        assert "DOCKER_CONTEXT" not in result["postAttachCommand"]
 
     def test_post_attach_command_in_extend(self, tmp_path: Path):
         """Extended devcontainer should have postAttachCommand."""
@@ -631,27 +524,36 @@ class TestPostAttachCommand:
 
         result = _generate_extended_devcontainer(ctx)
         assert "postAttachCommand" in result
-        assert "opencode" in result["postAttachCommand"]
+        assert result["postAttachCommand"] == "opencode --continue"
 
 
-class TestLaunchCommand:
+class TestLaunchCommands:
     """Tests for host-side launch command generation."""
 
-    def test_launch_command_without_docker(self):
-        """Launch command should be plain when Docker not selected."""
-        cmd = _get_launch_command([])
-        assert cmd == "devcontainer up --config .opencode/devcontainer.json --workspace-folder ."
+    def test_launch_command_sources_env(self):
+        """Launch command should source .env file."""
+        commands = _get_launch_commands()
+        assert "source .opencode/.env" in commands["launch"]
+        assert "devcontainer up" in commands["launch"]
 
-    def test_launch_command_with_docker(self):
-        """Launch command should include DOCKER_CONTEXT when Docker selected."""
-        cmd = _get_launch_command(["docker"])
-        assert cmd.startswith("DOCKER_CONTEXT=rootless")
-        assert "devcontainer up" in cmd
+    def test_debug_command_sources_env(self):
+        """Debug command should source .env file."""
+        commands = _get_launch_commands()
+        assert "source .opencode/.env" in commands["debug"]
+        assert "opencode debug config" in commands["debug"]
 
-    def test_launch_command_with_docker_and_other_features(self):
-        """Launch command should include DOCKER_CONTEXT when Docker among features."""
-        cmd = _get_launch_command(["python", "docker", "nodejs"])
-        assert cmd.startswith("DOCKER_CONTEXT=rootless")
+    def test_shell_command_sources_env(self):
+        """Shell command should source .env file."""
+        commands = _get_launch_commands()
+        assert "source .opencode/.env" in commands["shell"]
+        assert "devcontainer exec" in commands["shell"]
+
+    def test_no_docker_context_in_commands(self):
+        """Commands should NOT contain DOCKER_CONTEXT inline."""
+        commands = _get_launch_commands()
+        assert "DOCKER_CONTEXT=rootless" not in commands["launch"]
+        assert "DOCKER_CONTEXT=rootless" not in commands["debug"]
+        assert "DOCKER_CONTEXT=rootless" not in commands["shell"]
 
 
 class TestReadmeLaunchCommand:
@@ -670,8 +572,8 @@ class TestReadmeLaunchCommand:
         defaults.update(kwargs)
         return GlobalSettings(**defaults)
 
-    def test_readme_plain_launch_without_docker(self, tmp_path: Path):
-        """README should show plain launch command when Docker not selected."""
+    def test_readme_sources_env_in_launch(self, tmp_path: Path):
+        """README should show sourced-env launch command."""
         ctx = GenerationContext(
             repo_root=tmp_path,
             opencode_dir=tmp_path / ".opencode",
@@ -686,17 +588,17 @@ class TestReadmeLaunchCommand:
         _generate_readme(ctx)
         
         readme_content = (tmp_path / ".opencode" / "README.md").read_text()
-        assert "devcontainer up --config .opencode/devcontainer.json --workspace-folder ." in readme_content
-        assert "DOCKER_CONTEXT" not in readme_content
+        assert "source .opencode/.env" in readme_content
+        assert "devcontainer up" in readme_content
 
-    def test_readme_docker_context_launch_with_docker(self, tmp_path: Path):
-        """README should show DOCKER_CONTEXT launch when Docker selected."""
+    def test_readme_has_debug_command(self, tmp_path: Path):
+        """README should show debug command."""
         ctx = GenerationContext(
             repo_root=tmp_path,
             opencode_dir=tmp_path / ".opencode",
             branch_name="codeagent-test",
             devcontainer_strategy="from_scratch",
-            optional_features=["docker"],
+            optional_features=[],
             editor_choice="none",
             global_settings=self._make_global_settings(),
         )
@@ -705,10 +607,28 @@ class TestReadmeLaunchCommand:
         _generate_readme(ctx)
         
         readme_content = (tmp_path / ".opencode" / "README.md").read_text()
-        assert "DOCKER_CONTEXT=rootless devcontainer up" in readme_content
+        assert "opencode debug config" in readme_content
+
+    def test_readme_has_shell_command(self, tmp_path: Path):
+        """README should show shell command."""
+        ctx = GenerationContext(
+            repo_root=tmp_path,
+            opencode_dir=tmp_path / ".opencode",
+            branch_name="codeagent-test",
+            devcontainer_strategy="from_scratch",
+            optional_features=[],
+            editor_choice="none",
+            global_settings=self._make_global_settings(),
+        )
+        
+        (tmp_path / ".opencode").mkdir(exist_ok=True)
+        _generate_readme(ctx)
+        
+        readme_content = (tmp_path / ".opencode" / "README.md").read_text()
+        assert "### Shell" in readme_content
 
     def test_readme_describes_attach_startup(self, tmp_path: Path):
-        """README should describe postAttachCommand startup, not container launch."""
+        """README should describe postAttachCommand startup."""
         ctx = GenerationContext(
             repo_root=tmp_path,
             opencode_dir=tmp_path / ".opencode",
@@ -724,4 +644,3 @@ class TestReadmeLaunchCommand:
         
         readme_content = (tmp_path / ".opencode" / "README.md").read_text()
         assert "postAttachCommand" in readme_content
-        assert "container launches" not in readme_content

@@ -1,13 +1,13 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
 
 [project]
 name = "opencode-framework"
 version = "0.1.0"
 description = "Framework for attaching AI coding agents to existing projects safely"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.12"
 authors = [
     {name = "OpenCode Framework Team"}
@@ -15,7 +15,6 @@ authors = [
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
 ]
@@ -25,20 +24,21 @@ dependencies = [
     "jinja2>=3.1.0",
 ]
 
-[project.optional-dependencies]
-dev = [
-    "pytest>=7.0.0",
-    "pytest-cov>=4.0.0",
-]
-
 [project.scripts]
 ocframework = "opencode_framework.cli:app"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.poetry]
+packages = [
+    { include = "opencode_framework", from = "src" }
+]
 
-[tool.setuptools.package-dir]
-"" = "src"
+include = [
+    { path = "src/opencode_framework/templates/*", format = ["sdist", "wheel"] }
+]
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.0.0"
+pytest-cov = ">=4.0.0"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

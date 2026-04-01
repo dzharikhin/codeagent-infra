@@ -2,15 +2,14 @@
 
 from dataclasses import dataclass
 from datetime import datetime
+from importlib.resources import files
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 import json
 import shutil
 
 from opencode_framework.wizard import WizardResult
-from opencode_framework.preflight import PreflightResult
 from opencode_framework.config import discover_global_settings, GlobalSettings
-from opencode_framework import __version__
 
 
 @dataclass
@@ -75,6 +74,17 @@ def generate_opencode_directory(repo_root: Path, wizard_result: WizardResult) ->
     _generate_runtime_data(ctx)
 
 
+def _load_devcontainer_template() -> dict:
+    """Load devcontainer template from package resources."""
+    content = files("opencode_framework.templates").joinpath("devcontainer.template.json").read_text()
+    return json.loads(content)
+
+
+def _load_env_template() -> str:
+    """Load env template from package resources."""
+    return files("opencode_framework.templates").joinpath("env.template").read_text()
+
+
 def _generate_devcontainer_json(ctx: GenerationContext) -> None:
     """Generate .opencode/devcontainer.json."""
     
@@ -87,99 +97,88 @@ def _generate_devcontainer_json(ctx: GenerationContext) -> None:
     dc_path.write_text(json.dumps(devcontainer, indent=2) + "\n")
 
 
-def _get_launch_command(optional_features: List[str]) -> str:
-    """Get the host-side devcontainer launch command.
+def _get_launch_commands() -> Dict[str, str]:
+    """Get the host-side devcontainer commands.
     
-    When Docker support is selected, the host-side devcontainer CLI must be
-    invoked with DOCKER_CONTEXT=rootless to use the rootless Docker context.
+    All commands source .opencode/.env before execution.
+    DOCKER_CONTEXT is set in .env, not in command rendering.
     """
-    base_cmd = "devcontainer up --config .opencode/devcontainer.json --workspace-folder ."
-    if "docker" in optional_features:
-        return f"DOCKER_CONTEXT=rootless {base_cmd}"
-    return base_cmd
+    base_prefix = "set -o allexport; source .opencode/.env;"
+    config_arg = "--config .opencode/devcontainer.json --workspace-folder ."
+    
+    return {
+        "launch": f"{base_prefix} devcontainer up {config_arg}",
+        "debug": f"{base_prefix} devcontainer exec {config_arg} opencode debug config",
+        "shell": f"{base_prefix} devcontainer exec {config_arg} $(devcontainer exec {config_arg} grep $REMOTE_USER /etc/passwd | cut -d: -f7)",
+    }
 
 
 def _generate_scratch_devcontainer(ctx: GenerationContext) -> dict:
-    """Generate devcontainer config from scratch."""
-    features = {
-        "ghcr.io/devcontainers/features/common-utils:2": {
-            "installZsh": False,
-            "configureZshAsDefaultShell": False,
-        },
-        "ghcr.io/devcontainers/features/git:1": {},
-        "ghcr.io/stu-bell/devcontainer-features/open-code:0": {
-            "open_code_version": "${localEnv:OPENCODE_VERSION:latest}",
-        },
-    }
+    """Generate devcontainer config from template."""
+    template = _load_devcontainer_template()
+    
+    features = dict(template.get("features", {}))
     
     _add_optional_features(features, ctx.optional_features, ctx.editor_choice)
     
-    mounts = _build_mounts(ctx)
-    
-    remote_env = {
-        "OPENCODE_CONFIG": "/opt/ocframework/config" if ctx.global_settings.framework_config_path else "",
-    }
+    devcontainer = dict(template)
+    devcontainer["features"] = features
     
     if ctx.editor_choice != "none":
+        remote_env = dict(devcontainer.get("remoteEnv", {}))
         remote_env["EDITOR"] = ctx.editor_choice
-    
-    devcontainer = {
-        "name": f"OpenCode - {ctx.repo_root.name}",
-        "image": "${localEnv:OCF_BASE_IMAGE:mcr.microsoft.com/devcontainers/base:ubuntu-22.04}",
-        "features": features,
-        "workspaceFolder": "/workspace",
-        "workspaceMount": f"source={ctx.repo_root},target=/workspace,type=bind",
-        "mounts": mounts,
-        "remoteEnv": remote_env,
-        "customizations": {
-            "vscode": {
-                "extensions": [],
-            },
-        },
-        "remoteUser": "${localEnv:OCF_REMOTE_USER:vscode}",
-        "postAttachCommand": "bash -lic 'exec opencode'",
-    }
+        devcontainer["remoteEnv"] = remote_env
     
     return devcontainer
 
 
 def _generate_extended_devcontainer(ctx: GenerationContext) -> dict:
-    """Generate extended devcontainer config from existing devcontainer."""
-    existing = ctx.existing_devcontainer or {}
+    """Generate extended devcontainer config using additive merge.
     
-    features = existing.get("features", {})
-    features.setdefault("ghcr.io/devcontainers/features/common-utils:2", {
-        "installZsh": False,
-        "configureZshAsDefaultShell": False,
-    })
-    features.setdefault("ghcr.io/devcontainers/features/git:1", {})
-    features.setdefault("ghcr.io/stu-bell/devcontainer-features/open-code:0", {
-        "open_code_version": "${localEnv:OPENCODE_VERSION:latest}",
-    })
+    Preserves all existing project-specific config.
+    Adds only OpenCode-managed additions from template.
+    """
+    existing = ctx.existing_devcontainer or {}
+    template = _load_devcontainer_template()
+    
+    features = dict(existing.get("features", {}))
+    template_features = template.get("features", {})
+    
+    for feature_name, feature_config in template_features.items():
+        if feature_name not in features:
+            features[feature_name] = feature_config
     
     _add_optional_features(features, ctx.optional_features, ctx.editor_choice)
     
-    mounts = existing.get("mounts", [])
-    mounts.extend(_build_mounts(ctx))
+    mounts = list(existing.get("mounts", []))
+    template_mounts = template.get("mounts", [])
+    mounts = _merge_mounts(mounts, template_mounts)
     
-    remote_env = existing.get("remoteEnv", {})
-    remote_env["OPENCODE_CONFIG"] = "/opt/ocframework/config" if ctx.global_settings.framework_config_path else ""
+    remote_env = dict(existing.get("remoteEnv", {}))
+    template_remote_env = template.get("remoteEnv", {})
+    for key, value in template_remote_env.items():
+        if key not in remote_env:
+            remote_env[key] = value
     
     if ctx.editor_choice != "none":
         remote_env["EDITOR"] = ctx.editor_choice
     
-    remote_user = existing.get("remoteUser", "${localEnv:OCF_REMOTE_USER:vscode}")
+    run_args = list(existing.get("runArgs", []))
+    template_run_args = template.get("runArgs", [])
+    run_args = _merge_run_args(run_args, template_run_args)
     
     devcontainer = {
         "name": f"OpenCode - {ctx.repo_root.name}",
         "features": features,
-        "workspaceFolder": "/workspace",
-        "workspaceMount": f"source={ctx.repo_root},target=/workspace,type=bind",
+        "workspaceFolder": existing.get("workspaceFolder", template.get("workspaceFolder")),
+        "workspaceMount": existing.get("workspaceMount", template.get("workspaceMount")),
         "mounts": mounts,
         "remoteEnv": remote_env,
-        "customizations": existing.get("customizations", {"vscode": {"extensions": []}}),
-        "remoteUser": remote_user,
-        "postAttachCommand": "bash -lic 'exec opencode'",
+        "runArgs": run_args,
+        "customizations": existing.get("customizations", template.get("customizations")),
+        "containerUser": existing.get("containerUser", template.get("containerUser")),
+        "remoteUser": existing.get("remoteUser", template.get("remoteUser")),
+        "postAttachCommand": template.get("postAttachCommand", "opencode --continue"),
     }
     
     if "image" in existing:
@@ -187,9 +186,36 @@ def _generate_extended_devcontainer(ctx: GenerationContext) -> dict:
     elif "build" in existing:
         devcontainer["build"] = existing["build"]
     else:
-        devcontainer["image"] = "${localEnv:OCF_BASE_IMAGE:mcr.microsoft.com/devcontainers/base:ubuntu-22.04}"
+        devcontainer["image"] = template.get("image")
+    
+    if "$schema" in template:
+        devcontainer["$schema"] = template["$schema"]
     
     return devcontainer
+
+
+def _merge_mounts(existing: List[dict], additions: List[dict]) -> List[dict]:
+    """Merge mount lists, deduplicating by target path."""
+    result = list(existing)
+    existing_targets = {m.get("target") for m in existing if "target" in m}
+    
+    for mount in additions:
+        target = mount.get("target")
+        if target and target not in existing_targets:
+            result.append(mount)
+    
+    return result
+
+
+def _merge_run_args(existing: List, additions: List) -> List:
+    """Merge runArgs lists, avoiding duplicates."""
+    result = list(existing)
+    
+    for i, item in enumerate(additions):
+        if item not in result:
+            result.append(item)
+    
+    return result
 
 
 def _add_optional_features(features: dict, optional_features: List[str], editor_choice: str = "none") -> None:
@@ -199,24 +225,24 @@ def _add_optional_features(features: dict, optional_features: List[str], editor_
     """
     if "docker" in optional_features:
         features["ghcr.io/devcontainers/features/docker-in-docker:2"] = {
-            "version": "${localEnv:OCF_DOCKER_FEATURE_VERSION:latest}",
-            "enableNonRootDocker": True,
+            "version": "${localEnv:DOCKER_FEATURE_VERSION:latest}",
+            "moby": False,
         }
     
     if "python" in optional_features:
         features["ghcr.io/devcontainers/features/python:1"] = {
-            "version": "${localEnv:OCF_PYTHON_VERSION:3.12}",
+            "version": "${localEnv:PYTHON_VERSION:3.12}",
             "installPoetry": True,
         }
     
     if "nodejs" in optional_features:
         features["ghcr.io/devcontainers/features/node:1"] = {
-            "version": "${localEnv:OCF_NODE_VERSION:lts}",
+            "version": "${localEnv:NODE_VERSION:lts}",
         }
     
     if "java" in optional_features:
         features["ghcr.io/devcontainers/features/java:1"] = {
-            "version": "${localEnv:OCF_JAVA_VERSION:17}",
+            "version": "${localEnv:JAVA_VERSION:17}",
             "installMaven": True,
         }
     
@@ -233,108 +259,32 @@ def _add_optional_features(features: dict, optional_features: List[str], editor_
         features["ghcr.io/devcontainers/features/common-utils:2"] = common_utils
 
 
-def _build_mounts(ctx: GenerationContext) -> List[dict]:
-    """Build mount list for devcontainer.
-    
-    Mount policy per security-model.md:
-    - Project source: RW (via workspaceMount) - includes all .opencode files
-    - Global config: RO
-    - Framework config: RO
-    - auth.json: RO
-    
-    Local .opencode files are accessible via the project root workspaceMount,
-    no need for explicit mounts.
-    """
-    mounts = []
-    
-    global_settings = ctx.global_settings
-    if global_settings.global_config_found:
-        mounts.append({
-            "source": global_settings.global_config_path,
-            "target": "/home/vscode/.config/opencode",
-            "type": "bind",
-            "readOnly": True,
-        })
-    
-    if global_settings.global_auth_found:
-        mounts.append({
-            "source": global_settings.global_auth_path,
-            "target": "/home/vscode/.local/share/opencode/auth.json",
-            "type": "bind",
-            "readOnly": True,
-        })
-    
-    if global_settings.framework_config_path:
-        mounts.append({
-            "source": global_settings.framework_config_path,
-            "target": "/opt/ocframework/config",
-            "type": "bind",
-            "readOnly": True,
-        })
-    
-    return mounts
-
-
 def _generate_env_file(ctx: GenerationContext) -> None:
-    """Generate .opencode/.env.
+    """Generate .opencode/.env from template.
     
-    .env is override-only - contains only commented examples, no defaults.
-    Defaults live in devcontainer.json ${localEnv:VAR:default} syntax.
+    Template contains defaults with placeholders for detected paths.
     """
-    lines = [
-        "# OpenCode Framework Runtime Configuration",
-        "# Override defaults by uncommenting and setting values below.",
-        "# All defaults are defined in devcontainer.json.",
-        "",
-        f"# OPENCODE_VERSION={__version__}",
-        "",
-        "# Remote user in container (default: vscode)",
-        "# OCF_REMOTE_USER=vscode",
-        "",
-        "# Base container image",
-        "# OCF_BASE_IMAGE=mcr.microsoft.com/devcontainers/base:ubuntu-22.04",
-    ]
+    template = _load_env_template()
     
-    if ctx.editor_choice != "none":
-        lines.append("")
-        lines.append(f"# Editor preference")
-        lines.append(f"EDITOR={ctx.editor_choice}")
+    settings = ctx.global_settings
     
-    feature_vars = []
-    if "python" in ctx.optional_features:
-        feature_vars.append("# OCF_PYTHON_VERSION=3.12")
-    if "nodejs" in ctx.optional_features:
-        feature_vars.append("# OCF_NODE_VERSION=lts")
-    if "java" in ctx.optional_features:
-        feature_vars.append("# OCF_JAVA_VERSION=17")
-    if "docker" in ctx.optional_features:
-        feature_vars.append("# OCF_DOCKER_FEATURE_VERSION=latest")
+    replacements = {
+        "{{OCF_LOCAL_GLOBAL_CONFIG_PATH}}": settings.global_config_path or "",
+        "{{OCF_LOCAL_GLOBAL_AUTH_PATH}}": settings.global_auth_path or "",
+        "{{OCF_LOCAL_FRAMEWORK_PATH}}": settings.framework_repo_path or "",
+    }
     
-    if feature_vars:
-        lines.append("")
-        lines.append("# Feature versions (uncomment to override defaults)")
-        lines.extend(feature_vars)
+    env_content = template
+    for placeholder, value in replacements.items():
+        env_content = env_content.replace(placeholder, value)
     
-    lines.extend([
-        "",
-        "# Default models for the agent",
-        "# DEFAULT_MODEL=",
-        "# SMALL_MODEL=",
-        "",
-        "# Provider base URL overrides",
-        "# OPENAI_BASE_URL=",
-        "# ANTHROPIC_BASE_URL=",
-        "",
-    ])
-    
-    env_content = "\n".join(lines)
     env_path = ctx.opencode_dir / ".env"
     env_path.write_text(env_content)
 
 
 def _generate_readme(ctx: GenerationContext) -> None:
     """Generate .opencode/README.md."""
-    launch_cmd = _get_launch_command(ctx.optional_features)
+    commands = _get_launch_commands()
     
     readme_content = f"""# OpenCode Framework Configuration
 
@@ -346,12 +296,24 @@ This directory contains the project-level configuration for the OpenCode Framewo
 - `.env` - Runtime environment variables
 - `runtime_data/` - Mutable runtime state (not versioned)
 
-## Launch
+## Commands
 
-To start the development environment:
+### Launch
 
 ```sh
-{launch_cmd}
+{commands['launch']}
+```
+
+### Debug
+
+```sh
+{commands['debug']}
+```
+
+### Shell
+
+```sh
+{commands['shell']}
 ```
 
 OpenCode is started on attach via `postAttachCommand` in devcontainer.json.
@@ -398,8 +360,10 @@ def _generate_runtime_data(ctx: GenerationContext) -> None:
     runtime_data.mkdir(exist_ok=True)
     
     subdirs = [
+        ".cache",
+        ".local/share",
+        ".local/state",
         "logs",
-        "caches",
         "tools",
         "temp",
         "sessions",
@@ -408,6 +372,6 @@ def _generate_runtime_data(ctx: GenerationContext) -> None:
     ]
     
     for subdir in subdirs:
-        (runtime_data / subdir).mkdir(exist_ok=True)
+        (runtime_data / subdir).mkdir(parents=True, exist_ok=True)
     
     (runtime_data / ".gitkeep").write_text("")

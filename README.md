@@ -84,3 +84,41 @@
 3. docker - как инструмент изоляции окружения и как инструмент, который должен быть доступен в окружении агента(DinD)
 4. devcontainer-cli - для настройки изоляции
 5. opencode - как движок агента разработки
+
+## Development Setup
+
+### Requirements
+- Python 3.12+
+- Poetry 2.0+
+
+### Install
+
+```bash
+# Install Poetry (if not already installed)
+pipx install poetry
+
+# Clone the repository
+git clone <repository-url>
+cd opencode-framework
+
+# Install dependencies
+poetry install
+```
+
+### Run Tests
+
+```bash
+poetry run pytest
+```
+
+### Run CLI
+
+```bash
+poetry run ocframework --version
+```
+
+### Build
+
+```bash
+poetry build
+```

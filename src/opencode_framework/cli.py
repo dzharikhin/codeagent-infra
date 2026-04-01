@@ -126,12 +126,14 @@ def init(
     typer.echo("Generating .opencode/ directory...")
     generate_opencode_directory(repo_path, wizard_result)
     
-    from opencode_framework.generator import _get_launch_command
-    launch_cmd = _get_launch_command(wizard_result.optional_features)
+    from opencode_framework.generator import _get_launch_commands
+    commands = _get_launch_commands()
     
     typer.secho("Initialization complete!", fg=typer.colors.GREEN)
-    typer.echo("\nLaunch command:")
-    typer.echo(f"  {launch_cmd}")
+    typer.echo("\nCommands:")
+    typer.echo(f"  Launch: {commands['launch']}")
+    typer.echo(f"  Debug:  {commands['debug']}")
+    typer.echo(f"  Shell:  {commands['shell']}")
     typer.echo("\nopencode is started on attach via postAttachCommand.")
 
 

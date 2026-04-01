@@ -8,7 +8,8 @@
   "enabled_providers": [
     "openai",
     "anthropic",
-    "deepseek"
+    "deepseek",
+    "hh"
   ],
   "provider": {
     "anthropic": {
@@ -25,21 +26,40 @@
       "options": {
         "baseURL": "{env:DEEPSEEK_BASE_URL}"
       }
+    },
+    "hh": {
+      "name": "HH",
+      "npm":  "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "https://llm-gateway.pyn.ru/proxy/glm5-fp8/v1",
+        "apiKey": "{env:HH_API_KEY}"
+      },
+      "models": {
+        "glm5-fp8": {
+          "name": "GLM-5 FP8"
+        },
+        "minimax-m2.5": {
+          "name": "MiniMax M2.5"
+        },
+        "gpt-oss-120b": {
+          "name": "GPT-OSS 120B"
+        }
+      }
     }
   },
-  "model": "{env:MAIN_MODEL}",
-  "small_model": "{env:SMALL_MODEL}",
+  "model": "{env:OCF_MAIN_MODEL}",
+  "small_model": "{env:OCF_SMALL_MODEL}",
   "default_agent": "plan",
   "agent": {
     "plan": {
-      "model": "{env:MAIN_MODEL}",
+      "model": "{env:OCF_MAIN_MODEL}",
       "permission": {
         "session": "allow",
         "read": "allow"
       }
     },
     "build": {
-      "model": "{env:BUILD_MODEL}",
+      "model": "{env:OCF_BUILD_MODEL}",
       "permission": {
         "session": "allow"
       }

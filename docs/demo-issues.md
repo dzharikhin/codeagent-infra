@@ -68,11 +68,11 @@ No deprecated `ocf` alias needed.
 
 After fixes:
 
-1. Install: `pip install -e .`
-2. Run: `ocframework` (should print version)
-3. Run: `ocframework --version` (should print version)
-4. Run: `ocframework --help` (should show help)
-5. Run: `ocframework init` in a test repo (should work without import errors)
+1. Install: `poetry install`
+2. Run: `poetry run ocframework` (should print version)
+3. Run: `poetry run ocframework --version` (should print version)
+4. Run: `poetry run ocframework --help` (should show help)
+5. Run: `poetry run ocframework init` in a test repo (should work without import errors)
 6. Test devcontainer auto-creation when none exists
 
 ## Files to Modify

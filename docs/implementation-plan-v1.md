@@ -380,9 +380,9 @@ This document outlines the step-by-step implementation plan to complete v1 of th
 
 **Actions:**
 - [ ] Run full test suite
-- [ ] Install with `pip install -e .`
-- [ ] Test `ocframework` (bare command)
-- [ ] Test `ocframework --version`
+- [ ] Install with `poetry install`
+- [ ] Test `poetry run ocframework` (bare command)
+- [ ] Test `poetry run ocframework --version`
 - [ ] Test `ocframework --help`
 - [ ] Test `ocframework init` in fresh repo
 - [ ] Inspect generated `.opencode/`

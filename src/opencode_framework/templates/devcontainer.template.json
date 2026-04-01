@@ -1,0 +1,74 @@
+{
+  "$schema": "https://raw.githubusercontent.com/devcontainers/spec/main/schemas/devContainer.schema.json",
+  "name": "OpenCode - ${localWorkspaceFolderBasename}",
+  "image": "${localEnv:DEVCONTAINER_BASE_IMAGE:mcr.microsoft.com/devcontainers/base}:${localEnv:DEVCONTAINER_BASE_IMAGE_TAG:ubuntu-24.04}",
+  "runArgs": [
+    "--name", "${localWorkspaceFolderBasename}",
+    "--env-file", "${localWorkspaceFolder}/.opencode/.env"
+  ],
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "installZsh": false,
+      "configureZshAsDefaultShell": false
+    },
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/stu-bell/devcontainer-features/open-code:0": {
+      "open_code_version": "${localEnv:OPENCODE_VERSION:latest}"
+    }
+  },
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+  "mounts": [
+    {
+      "source": "${localWorkspaceFolder}/.opencode/runtime_data/.cache",
+      "target": "${localEnv:XDG_CACHE_HOME}",
+      "type": "bind",
+      "readOnly": false
+    },
+    {
+      "source": "${localWorkspaceFolder}/.opencode/runtime_data/.local/share",
+      "target": "${localEnv:XDG_DATA_HOME}",
+      "type": "bind",
+      "readOnly": false
+    },
+    {
+      "source": "${localWorkspaceFolder}/.opencode/runtime_data/.local/state",
+      "target": "${localEnv:XDG_STATE_HOME}",
+      "type": "bind",
+      "readOnly": false
+    },
+    {
+      "source": "${localEnv:OCF_LOCAL_GLOBAL_CONFIG_PATH}",
+      "target": "${localEnv:XDG_CONFIG_HOME}/opencode",
+      "type": "bind",
+      "readOnly": true
+    },
+    {
+      "source": "${localEnv:OCF_LOCAL_GLOBAL_AUTH_PATH}",
+      "target": "${localEnv:XDG_DATA_HOME}/opencode/auth.json",
+      "type": "bind",
+      "readOnly": true
+    },
+    {
+      "source": "${localEnv:OCF_LOCAL_FRAMEWORK_PATH}/framework-config/config.json",
+      "target": "${localEnv:OCF_REMOTE_FRAMEWORK_CONFIG_PATH}",
+      "type": "bind",
+      "readOnly": true
+    }
+  ],
+  "remoteEnv": {
+    "OPENCODE_CONFIG": "${localEnv:OCF_REMOTE_FRAMEWORK_CONFIG_PATH}",
+    "XDG_CONFIG_HOME": "${localEnv:XDG_CONFIG_HOME}",
+    "XDG_DATA_HOME": "${localEnv:XDG_DATA_HOME}",
+    "XDG_STATE_HOME": "${localEnv:XDG_STATE_HOME}",
+    "XDG_CACHE_HOME": "${localEnv:XDG_CACHE_HOME}"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": []
+    }
+  },
+  "containerUser": "${localEnv:REMOTE_USER:root}",
+  "remoteUser": "${localEnv:REMOTE_USER:root}",
+  "postAttachCommand": "opencode --continue"
+}
