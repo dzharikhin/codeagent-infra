@@ -29,11 +29,11 @@ ocframework = "opencode_framework.cli:app"
 
 [tool.poetry]
 packages = [
-    { include = "opencode_framework", from = "src" }
+    { include = "opencode_framework" }
 ]
 
 include = [
-    { path = "src/opencode_framework/templates/*", format = ["sdist", "wheel"] }
+    { path = "opencode_framework/templates/*", format = ["sdist", "wheel"] }
 ]
 
 [tool.poetry.group.dev.dependencies]
@@ -42,11 +42,10 @@ pytest-cov = ">=4.0.0"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
 addopts = "-v --tb=short"
 
 [tool.coverage.run]
-source = ["src/opencode_framework"]
+source = ["opencode_framework"]
 branch = true
 
 [tool.coverage.report]
