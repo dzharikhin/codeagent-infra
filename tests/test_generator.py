@@ -320,14 +320,14 @@ class TestLaunchCommands:
         assert commands["launch"] == "ocframework launch"
 
     def test_debug_command_is_cli(self):
-        """Debug command should use ocframework exec CLI."""
+        """Debug command should use ocframework launch with debug subcommand."""
         commands = DocumentationGenerator._get_launch_commands()
-        assert commands["debug"] == "ocframework exec -- opencode debug config"
+        assert commands["debug"] == "ocframework launch -- debug config"
 
-    def test_shell_command_is_cli(self):
-        """Shell command should use ocframework exec CLI."""
+    def test_shell_command_is_docker_exec(self):
+        """Shell command should use docker exec directly."""
         commands = DocumentationGenerator._get_launch_commands()
-        assert commands["shell"] == "ocframework exec -- bash"
+        assert commands["shell"] == "docker exec -it <container_name> /bin/bash"
 
 
 class TestReadmeLaunchCommand:
@@ -353,7 +353,7 @@ class TestReadmeLaunchCommand:
         gen.generate(ctx)
         
         readme_content = (tmp_path / ".opencode" / "README.md").read_text()
-        assert "opencode debug config" in readme_content
+        assert "launch -- debug config" in readme_content
 
     def test_readme_has_shell_command(self, tmp_path: Path):
         """README should show shell command."""

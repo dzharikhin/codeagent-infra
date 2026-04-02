@@ -63,14 +63,19 @@ ocframework launch --docker-context my-context
 
 By default, `DOCKER_CONTEXT=rootless` is used.
 
-### Execute Commands in the Container
+### Debug Configuration
 
 ```sh
-ocframework exec -- opencode debug config
-ocframework exec -- bash
+ocframework launch -- debug config
 ```
 
-Note: `--` separates framework options from the command to run.
+### Shell Access
+
+```sh
+docker exec -it <container_name> /bin/bash
+```
+
+Find container name with: `docker ps | grep ocf-`
 
 ### Version Information
 

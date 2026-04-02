@@ -1,6 +1,7 @@
 """Tests for preflight checks."""
 
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -52,25 +53,19 @@ class TestCheckDockerRootlessContext:
 class TestGitOperations:
     """Tests for Git-related preflight functions."""
 
-    @pytest.mark.skipif(
-        not is_inside_git_tree(Path("/app/project_root")),
-        reason="Not inside a git tree"
-    )
-    def test_is_inside_git_tree_true(self):
+    def test_is_inside_git_tree_true(self, tmp_path: Path):
         """Should return True when inside a git tree."""
-        assert is_inside_git_tree(Path("/app/project_root")) is True
+        subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+        assert is_inside_git_tree(tmp_path) is True
 
     def test_is_inside_git_tree_false(self, tmp_path: Path):
         """Should return False when not inside a git tree."""
         assert is_inside_git_tree(tmp_path) is False
 
-    @pytest.mark.skipif(
-        not is_inside_git_tree(Path("/app/project_root")),
-        reason="Not inside a git tree"
-    )
-    def test_get_repo_root_returns_path(self):
+    def test_get_repo_root_returns_path(self, tmp_path: Path):
         """Should return a Path when inside a git tree."""
-        result = get_repo_root(Path("/app/project_root"))
+        subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+        result = get_repo_root(tmp_path)
         assert result is not None
         assert isinstance(result, Path)
 

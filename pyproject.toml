@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [project]
 name = "opencode-framework"
-version = "0.1.0"
+version = "0.2.0"
 description = "Framework for attaching AI coding agents to existing projects safely"
 readme = "README.md"
 license = "MIT"

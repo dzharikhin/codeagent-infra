@@ -12,6 +12,7 @@ class TemplateHandler:
     # Template filenames (without extension)
     DEVCONTAINER_TEMPLATE = "devcontainer.template.json"
     ENV_TEMPLATE = "env.template"
+    COMPOSE_TEMPLATE = "docker-compose.template.yaml"
     README_TEMPLATE = "readme.template.md"
     GITIGNORE_TEMPLATE = "gitignore.template"
     
@@ -81,6 +82,24 @@ class TemplateHandler:
         return cls.load_text_template(cls.ENV_TEMPLATE)
     
     @classmethod
+    def load_compose_template(cls) -> str:
+        """Load docker-compose template.
+        
+        Returns:
+            Docker compose template content
+        """
+        return cls.load_text_template(cls.COMPOSE_TEMPLATE)
+    
+    @classmethod
+    def load_readme_template(cls) -> str:
+        """Load README template.
+        
+        Returns:
+            README template content
+        """
+        return cls.load_text_template(cls.README_TEMPLATE)
+    
+    @classmethod
     def render_env_template(
         cls,
         global_config_path: Optional[str] = None,
@@ -103,6 +122,54 @@ class TemplateHandler:
             "{{OCF_LOCAL_GLOBAL_CONFIG_PATH}}": global_config_path or "",
             "{{OCF_LOCAL_GLOBAL_AUTH_PATH}}": global_auth_path or "",
             "{{OCF_LOCAL_FRAMEWORK_PATH}}": framework_repo_path or "",
+        }
+        
+        return cls.render_template(template, replacements)
+    
+    @classmethod
+    def render_compose_template(cls, container_name: str) -> str:
+        """Render docker-compose template with container name.
+        
+        Args:
+            container_name: Name for the container
+            
+        Returns:
+            Rendered docker-compose content
+        """
+        template = cls.load_compose_template()
+        
+        replacements = {
+            "{{OCF_CONTAINER_NAME}}": container_name,
+        }
+        
+        return cls.render_template(template, replacements)
+    
+    @classmethod
+    def render_readme_template(
+        cls,
+        launch_command: str,
+        debug_command: str,
+        shell_command: str,
+        branch_name: str,
+    ) -> str:
+        """Render README template with commands and branch name.
+        
+        Args:
+            launch_command: CLI launch command
+            debug_command: CLI debug command
+            shell_command: CLI shell command
+            branch_name: Git branch name for config worktree
+            
+        Returns:
+            Rendered README content
+        """
+        template = cls.load_readme_template()
+        
+        replacements = {
+            "{{LAUNCH_COMMAND}}": launch_command,
+            "{{DEBUG_COMMAND}}": debug_command,
+            "{{SHELL_COMMAND}}": shell_command,
+            "{{BRANCH_NAME}}": branch_name,
         }
         
         return cls.render_template(template, replacements)

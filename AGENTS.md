@@ -534,7 +534,8 @@ Reason: avoid privileged DinD as the default path, keep security tradeoffs expli
 
 After `init`, the framework prints:
 - `ocframework launch` - start the container
-- `ocframework exec -- <command>` - execute commands inside the container
+- `ocframework launch --debug config` - debug configuration
+- `docker exec -it <container_name> /bin/bash` - shell access (find container name with `docker ps | grep ocf-`)
 - `ocframework launch --docker-context <name>` - override Docker context
 
 The generated devcontainer configuration auto-starts `opencode` via `postAttachCommand`.
