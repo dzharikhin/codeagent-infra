@@ -1,7 +1,7 @@
 """Devcontainer file generation."""
 
 import json
-from typing import Dict, List, Optional
+from typing import List
 
 from .base import FileGenerator, GenerationContext
 from .templates import TemplateHandler

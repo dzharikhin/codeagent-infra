@@ -124,7 +124,7 @@ class TestWizardBehavior:
 
     def test_incompatible_devcontainer_detection(self, tmp_path: Path):
         """Test that incompatible devcontainer is detected."""
-        from opencode_framework.devcontainer import detect_devcontainer, evaluate_compatibility
+        from opencode_framework.devcontainer import detect_devcontainer
 
         repo = tmp_path / "test-repo"
         repo.mkdir()

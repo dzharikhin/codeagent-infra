@@ -8,12 +8,10 @@ import pytest
 
 from opencode_framework.git_ops import (
     branch_exists,
-    create_orphan_branch,
     create_worktree,
     get_current_branch,
     is_worktree,
     list_worktrees,
-    make_initial_commit,
     remove_worktree,
     setup_opencode_worktree,
 )

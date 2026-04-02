@@ -2,7 +2,6 @@
 
 import json
 from importlib.resources import files
-from pathlib import Path
 from typing import Dict, Optional
 
 

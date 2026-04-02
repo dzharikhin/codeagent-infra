@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from opencode_framework.config import GlobalSettings
 
@@ -32,4 +32,3 @@ class FileGenerator(ABC):
         Args:
             ctx: Generation context with all necessary information
         """
-        pass

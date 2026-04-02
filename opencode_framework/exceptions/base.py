@@ -44,44 +44,35 @@ class FrameworkError(Exception):
 
 class ConfigurationError(FrameworkError):
     """Configuration-related errors."""
-    pass
 
 
 class GitError(FrameworkError):
     """Git operation errors."""
-    pass
 
 
 class ValidationError(FrameworkError):
     """Validation errors."""
-    pass
 
 
 class WorktreeError(GitError):
     """Git worktree-specific errors."""
-    pass
 
 
 class RuntimeError(FrameworkError):
     """Runtime environment errors."""
-    pass
 
 
 class GenerationError(FrameworkError):
     """File generation errors."""
-    pass
 
 
 class EnvError(RuntimeError):
     """Environment variable and .env file errors."""
-    pass
 
 
 class PreflighjError(FrameworkError):
     """Preflight check errors."""
-    pass
 
 
 class WizardError(FrameworkError):
     """Wizard interaction errors."""
-    pass

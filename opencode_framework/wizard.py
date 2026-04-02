@@ -1,10 +1,9 @@
 """Interactive wizard for setup decisions."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 import getpass
-import os
 
 import click
 import typer

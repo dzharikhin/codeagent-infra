@@ -1,6 +1,5 @@
 """CLI error handling and formatting."""
 
-import sys
 from typing import Optional
 
 import typer

@@ -4,8 +4,6 @@ import json
 import re
 import shutil
 import subprocess
-import sys
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
@@ -37,12 +35,10 @@ from opencode_framework.runtime import (
     validate_runtime_context,
     load_env_with_overrides,
     build_docker_env,
-    parse_cli_env_vars,
     load_image_id,
     save_image_id,
     EnvError,
 )
-from dotenv import dotenv_values
 
 
 app = typer.Typer(

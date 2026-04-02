@@ -2,11 +2,10 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional
 import subprocess
 
 from opencode_framework.models import GitResult
-from opencode_framework.exceptions import GitError
 
 
 @dataclass

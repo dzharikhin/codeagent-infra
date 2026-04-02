@@ -1,6 +1,5 @@
 """Tests for preflight checks."""
 
-import os
 import subprocess
 from pathlib import Path
 
@@ -10,9 +9,7 @@ from opencode_framework.preflight import (
     check_required_tools,
     check_docker_rootless_context,
     is_inside_git_tree,
-    is_bare_repository,
     get_repo_root,
-    has_staged_changes,
     opencode_directory_exists,
     run_preflight_checks,
     PreflightResult,

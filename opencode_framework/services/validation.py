@@ -1,11 +1,9 @@
 """Validation service for project setup."""
 
 from pathlib import Path
-from typing import Optional, List
 
 from opencode_framework.core import GitOperations, ConfigManager
 from opencode_framework.models import ValidationResult
-from opencode_framework.exceptions import ValidationError
 
 
 class ValidationService:

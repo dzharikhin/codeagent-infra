@@ -3,7 +3,6 @@
 import json
 from pathlib import Path
 
-import pytest
 
 from opencode_framework.generators import GenerationOrchestrator, GenerationContext
 from opencode_framework.generators.devcontainer import DevcontainerGenerator

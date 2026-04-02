@@ -3,12 +3,10 @@
 import json
 from pathlib import Path
 
-import pytest
 
 from opencode_framework.devcontainer import (
     detect_devcontainer,
     evaluate_compatibility,
-    DevcontainerInfo,
 )
 
 

@@ -35,12 +35,10 @@ class EnvError(Exception):
 
 class CircularReferenceError(EnvError):
     """Raised when circular references are detected in interpolation."""
-    pass
 
 
 class InterpolationError(EnvError):
     """Raised when interpolation fails."""
-    pass
 
 
 def validate_runtime_context(cwd: Path) -> Tuple[bool, str]:
