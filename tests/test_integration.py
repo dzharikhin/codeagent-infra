@@ -164,9 +164,11 @@ class TestGeneratedConfig:
 
     def test_devcontainer_json_structure(self, tmp_path: Path):
         """Test that generated devcontainer.json has correct structure."""
-        from opencode_framework.generator import _generate_scratch_devcontainer, GenerationContext
+        from opencode_framework.generators import GenerationContext
+        from opencode_framework.generators.devcontainer import DevcontainerGenerator
         from opencode_framework.config import GlobalSettings
 
+        (tmp_path / ".opencode").mkdir()
         ctx = GenerationContext(
             repo_root=tmp_path,
             opencode_dir=tmp_path / ".opencode",
@@ -184,20 +186,23 @@ class TestGeneratedConfig:
             ),
         )
 
-        result = _generate_scratch_devcontainer(ctx)
+        gen = DevcontainerGenerator()
+        gen.generate(ctx)
+        result = json.loads((tmp_path / ".opencode" / "devcontainer.json").read_text())
 
         assert "name" in result
         assert "image" in result
         assert "features" in result
         assert "workspaceFolder" in result
-        assert "mounts" in result
         assert result["workspaceFolder"] == "/workspace"
 
-    def test_devcontainer_has_remote_env(self, tmp_path: Path):
-        """Test that generated devcontainer has remoteEnv with OPENCODE_CONFIG."""
-        from opencode_framework.generator import _generate_scratch_devcontainer, GenerationContext
+    def test_devcontainer_no_remote_env(self, tmp_path: Path):
+        """Test that generated devcontainer does NOT have remoteEnv (moved to compose)."""
+        from opencode_framework.generators import GenerationContext
+        from opencode_framework.generators.devcontainer import DevcontainerGenerator
         from opencode_framework.config import GlobalSettings
 
+        (tmp_path / ".opencode").mkdir()
         ctx = GenerationContext(
             repo_root=tmp_path,
             opencode_dir=tmp_path / ".opencode",
@@ -215,16 +220,19 @@ class TestGeneratedConfig:
             ),
         )
 
-        result = _generate_scratch_devcontainer(ctx)
+        gen = DevcontainerGenerator()
+        gen.generate(ctx)
+        result = json.loads((tmp_path / ".opencode" / "devcontainer.json").read_text())
 
-        assert "remoteEnv" in result
-        assert "OPENCODE_CONFIG" in result["remoteEnv"]
+        assert "remoteEnv" not in result
 
     def test_editor_choice_sets_editor_env(self, tmp_path: Path):
-        """Test that editor choice sets EDITOR in remoteEnv via localEnv."""
-        from opencode_framework.generator import _generate_scratch_devcontainer, GenerationContext
+        """Test that editor choice sets EDITOR in .env file (not devcontainer)."""
+        from opencode_framework.generators import GenerationContext
+        from opencode_framework.generators.config_files import ConfigFilesGenerator
         from opencode_framework.config import GlobalSettings
 
+        (tmp_path / ".opencode").mkdir()
         ctx = GenerationContext(
             repo_root=tmp_path,
             opencode_dir=tmp_path / ".opencode",
@@ -242,16 +250,19 @@ class TestGeneratedConfig:
             ),
         )
 
-        result = _generate_scratch_devcontainer(ctx)
+        gen = ConfigFilesGenerator()
+        gen.generate(ctx)
+        env_content = (tmp_path / ".opencode" / ".env").read_text()
 
-        assert "remoteEnv" in result
-        assert result["remoteEnv"]["EDITOR"] == "${localEnv:EDITOR}"
+        assert "EDITOR=vi" in env_content
 
     def test_opencode_feature_present(self, tmp_path: Path):
         """Test that OpenCode feature is included in generated devcontainer."""
-        from opencode_framework.generator import _generate_scratch_devcontainer, GenerationContext
+        from opencode_framework.generators import GenerationContext
+        from opencode_framework.generators.devcontainer import DevcontainerGenerator
         from opencode_framework.config import GlobalSettings
 
+        (tmp_path / ".opencode").mkdir()
         ctx = GenerationContext(
             repo_root=tmp_path,
             opencode_dir=tmp_path / ".opencode",
@@ -269,6 +280,8 @@ class TestGeneratedConfig:
             ),
         )
 
-        result = _generate_scratch_devcontainer(ctx)
+        gen = DevcontainerGenerator()
+        gen.generate(ctx)
+        result = json.loads((tmp_path / ".opencode" / "devcontainer.json").read_text())
 
         assert "ghcr.io/stu-bell/devcontainer-features/open-code:0" in result["features"]

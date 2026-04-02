@@ -12,6 +12,7 @@ from .base import GenerationContext
 from .devcontainer import DevcontainerGenerator
 from .config_files import ConfigFilesGenerator
 from .documentation import DocumentationGenerator
+from .compose import ComposeGenerator
 
 
 class GenerationOrchestrator:
@@ -22,6 +23,7 @@ class GenerationOrchestrator:
         self.devcontainer_gen = DevcontainerGenerator()
         self.config_gen = ConfigFilesGenerator()
         self.docs_gen = DocumentationGenerator()
+        self.compose_gen = ComposeGenerator()
     
     def generate(self, repo_root: Path, wizard_result: WizardResult) -> None:
         """Generate the complete .opencode/ directory structure.
@@ -53,7 +55,15 @@ class GenerationOrchestrator:
         # Generate all files in order
         self.devcontainer_gen.generate(ctx)
         self.config_gen.generate(ctx)
+        self.compose_gen.generate(ctx)
         self.docs_gen.generate(ctx)
+        
+        # Create runtime_data directories
+        runtime_data = opencode_dir / "runtime_data"
+        runtime_data.mkdir(exist_ok=True)
+        (runtime_data / ".cache").mkdir(exist_ok=True)
+        (runtime_data / ".local" / "share").mkdir(parents=True, exist_ok=True)
+        (runtime_data / ".local" / "state").mkdir(parents=True, exist_ok=True)
     
     @staticmethod
     def backup_existing_opencode(repo_root: Path) -> Optional[Path]:

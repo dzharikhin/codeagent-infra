@@ -8,14 +8,15 @@ import pytest
 from opencode_framework.runtime import (
     validate_runtime_context,
     load_env_with_overrides,
-    build_devcontainer_env,
+    build_docker_env,
     parse_cli_env_vars,
     apply_combined_interpolation,
-    identify_resolved_variables,
-    add_remote_env_to_command,
     EnvError,
     CircularReferenceError,
     InterpolationError,
+    get_image_id_path,
+    load_image_id,
+    save_image_id,
 )
 
 
@@ -525,26 +526,26 @@ class TestApplyCustomInterpolation:
         assert result["RESULT"] == "prefix__suffix"
 
 
-class TestBuildDevcontainerEnv:
-    """Tests for building devcontainer subprocess environment."""
+class TestBuildDockerEnv:
+    """Tests for building Docker subprocess environment."""
 
     def test_merges_base_env(self):
         """Should merge base env with current environment."""
         base_env = {"REMOTE_USER": "root", "XDG_CONFIG_HOME": "/home/root/.config"}
         
-        result = build_devcontainer_env(base_env, "rootless")
+        result = build_docker_env(base_env, "rootless")
         
         assert result["REMOTE_USER"] == "root"
         assert result["XDG_CONFIG_HOME"] == "/home/root/.config"
 
     def test_sets_docker_context(self):
         """Should set DOCKER_CONTEXT."""
-        result = build_devcontainer_env({}, "rootless")
+        result = build_docker_env({}, "rootless")
         assert result["DOCKER_CONTEXT"] == "rootless"
 
     def test_overrides_docker_context(self):
         """Should allow overriding DOCKER_CONTEXT."""
-        result = build_devcontainer_env({}, "my-custom-context")
+        result = build_docker_env({}, "my-custom-context")
         assert result["DOCKER_CONTEXT"] == "my-custom-context"
 
     def test_base_env_overrides_process_env(self):
@@ -552,7 +553,7 @@ class TestBuildDevcontainerEnv:
         old_value = os.environ.get("TEST_VAR")
         try:
             os.environ["TEST_VAR"] = "process_value"
-            result = build_devcontainer_env({"TEST_VAR": "base_value"}, "rootless")
+            result = build_docker_env({"TEST_VAR": "base_value"}, "rootless")
             assert result["TEST_VAR"] == "base_value"
         finally:
             if old_value is None:
@@ -563,7 +564,7 @@ class TestBuildDevcontainerEnv:
     def test_inherits_process_env(self):
         """Should inherit current process environment."""
         old_value = os.environ.get("PATH")
-        result = build_devcontainer_env({}, "rootless")
+        result = build_docker_env({}, "rootless")
         assert "PATH" in result
         if old_value:
             assert result["PATH"] == old_value
@@ -651,112 +652,32 @@ class TestIntegrationScenarios:
             assert "missing.env" in str(e)
 
 
-class TestIdentifyResolvedVariables:
-    """Tests for identifying resolved variables."""
+class TestImageIdHelpers:
+    """Tests for image ID persistence helpers."""
 
-    def test_includes_cli_vars(self):
-        """CLI vars should always be included."""
-        result = identify_resolved_variables(
-            base_env={"A": "base"},
-            resolved_env={"A": "base"},
-            cli_vars={"B": "cli_value"}
-        )
-        assert result == {"B": "cli_value"}
+    def test_get_image_id_path(self):
+        """Should return correct path to image ID file."""
+        opencode_dir = Path("/tmp/test/.opencode")
+        assert get_image_id_path(opencode_dir) == Path("/tmp/test/.opencode/runtime_data/.image_id")
 
-    def test_includes_resolved_dollar_syntax(self):
-        """Vars with $VAR syntax that were resolved should be included."""
-        result = identify_resolved_variables(
-            base_env={"TEST": "$A"},
-            resolved_env={"A": "hello", "TEST": "hello"},
-            cli_vars={}
-        )
-        assert result == {"TEST": "hello"}
+    def test_load_image_id_missing(self, tmp_path: Path):
+        """Should return None if image ID file does not exist."""
+        assert load_image_id(tmp_path) is None
 
-    def test_includes_resolved_brace_syntax(self):
-        """Vars with ${VAR} syntax that were resolved should be included."""
-        result = identify_resolved_variables(
-            base_env={"TEST": "${A}"},
-            resolved_env={"A": "hello", "TEST": "hello"},
-            cli_vars={}
-        )
-        assert result == {"TEST": "hello"}
+    def test_load_image_id_exists(self, tmp_path: Path):
+        """Should return content if image ID file exists."""
+        save_image_id(tmp_path, "sha256:abc123")
+        assert load_image_id(tmp_path) == "sha256:abc123"
 
-    def test_excludes_unchanged_vars(self):
-        """Vars that didn't change should not be included."""
-        result = identify_resolved_variables(
-            base_env={"A": "hardcoded"},
-            resolved_env={"A": "hardcoded"},
-            cli_vars={}
-        )
-        assert result == {}
+    def test_save_image_id_creates_directory(self, tmp_path: Path):
+        """Should create runtime_data directory and file."""
+        opencode_dir = tmp_path / ".opencode"
+        save_image_id(opencode_dir, "sha256:def456")
+        assert (opencode_dir / "runtime_data" / ".image_id").exists()
+        assert (opencode_dir / "runtime_data" / ".image_id").read_text() == "sha256:def456"
 
-    def test_empty_inputs(self):
-        """Empty inputs should return empty dict."""
-        result = identify_resolved_variables(
-            base_env={},
-            resolved_env={},
-            cli_vars=None
-        )
-        assert result == {}
-
-    def test_cli_vars_override_base(self):
-        """CLI vars take precedence and are always included."""
-        result = identify_resolved_variables(
-            base_env={"A": "base_value"},
-            resolved_env={"A": "cli_value"},
-            cli_vars={"A": "cli_value"}
-        )
-        assert result == {"A": "cli_value"}
-
-    def test_mixed_scenario(self):
-        """Test with CLI vars, resolved vars, and unchanged vars."""
-        result = identify_resolved_variables(
-            base_env={
-                "A": "hardcoded",
-                "B": "${C}",
-                "D": "$E",
-            },
-            resolved_env={
-                "A": "hardcoded",
-                "B": "resolved_b",
-                "C": "resolved_b",
-                "D": "resolved_d",
-                "E": "resolved_d",
-            },
-            cli_vars={"F": "cli_f"}
-        )
-        assert result == {"F": "cli_f", "B": "resolved_b", "D": "resolved_d"}
-
-
-class TestAddRemoteEnvToCommand:
-    """Tests for adding --remote-env flags to commands."""
-
-    def test_adds_single_var(self):
-        """Should add a single variable correctly."""
-        result = add_remote_env_to_command(["devcontainer", "up"], {"A": "value"})
-        assert result == ["devcontainer", "up", "--remote-env", "A=value"]
-
-    def test_adds_multiple_vars(self):
-        """Should add multiple variables."""
-        result = add_remote_env_to_command(["cmd"], {"A": "1", "B": "2"})
-        assert result == ["cmd", "--remote-env", "A=1", "--remote-env", "B=2"]
-
-    def test_empty_vars_no_change(self):
-        """Empty vars dict should not modify command."""
-        result = add_remote_env_to_command(["cmd"], {})
-        assert result == ["cmd"]
-
-    def test_empty_command(self):
-        """Should work with empty command list."""
-        result = add_remote_env_to_command([], {"A": "value"})
-        assert result == ["--remote-env", "A=value"]
-
-    def test_value_with_equals(self):
-        """Should handle values containing equals signs."""
-        result = add_remote_env_to_command([], {"URL": "http://host?foo=bar"})
-        assert result == ["--remote-env", "URL=http://host?foo=bar"]
-
-    def test_empty_value(self):
-        """Should handle empty values."""
-        result = add_remote_env_to_command([], {"EMPTY": ""})
-        assert result == ["--remote-env", "EMPTY="]
+    def test_save_image_id_overwrites(self, tmp_path: Path):
+        """Should overwrite existing image ID."""
+        save_image_id(tmp_path, "sha256:old")
+        save_image_id(tmp_path, "sha256:new")
+        assert load_image_id(tmp_path) == "sha256:new"

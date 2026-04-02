@@ -1,8 +1,11 @@
 """CLI entrypoint for ocframework."""
 
+import json
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
@@ -33,10 +36,10 @@ from opencode_framework.git_ops import (
 from opencode_framework.runtime import (
     validate_runtime_context,
     load_env_with_overrides,
-    build_devcontainer_env,
-    identify_resolved_variables,
-    add_remote_env_to_command,
+    build_docker_env,
     parse_cli_env_vars,
+    load_image_id,
+    save_image_id,
     EnvError,
 )
 from dotenv import dotenv_values
@@ -219,7 +222,66 @@ def init(
     typer.echo(f"  Launch: {commands['launch']}")
     typer.echo(f"  Debug:  {commands['debug']}")
     typer.echo(f"  Shell:  {commands['shell']}")
-    typer.echo("\nopencode is started on attach via postAttachCommand.")
+
+
+def _parse_image_id_from_build_output(output: str) -> Optional[str]:
+    """Parse image ID from devcontainer build output.
+    
+    Devcontainer build outputs JSON lines. We look for the image ID in the output.
+    """
+    for line in output.strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+            if "imageId" in data:
+                return data["imageId"]
+            if "image" in data and "id" in data.get("image", {}):
+                return data["image"]["id"]
+        except json.JSONDecodeError:
+            continue
+    
+    sha256_pattern = re.compile(r'(sha256:[a-f0-9]{64}|[a-f0-9]{12,64})')
+    match = sha256_pattern.search(output)
+    if match:
+        return match.group(1)
+    
+    return None
+
+
+def _build_image(opencode_dir: Path, repo_root: Path, subprocess_env: dict) -> str:
+    """Build devcontainer image and return image ID."""
+    build_cmd = [
+        "devcontainer", "build",
+        "--config", str(opencode_dir / "devcontainer.json"),
+        "--workspace-folder", str(repo_root),
+    ]
+    
+    build_result = subprocess.run(
+        build_cmd,
+        env=subprocess_env,
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    
+    if build_result.returncode != 0:
+        typer.secho("Failed to build devcontainer image", fg=typer.colors.RED, err=True)
+        if build_result.stderr:
+            typer.echo(build_result.stderr, err=True)
+        raise typer.Exit(1)
+    
+    image_id = _parse_image_id_from_build_output(build_result.stdout)
+    
+    if not image_id:
+        typer.secho("Could not parse image ID from build output", fg=typer.colors.RED, err=True)
+        typer.echo("Build output:", err=True)
+        typer.echo(build_result.stdout, err=True)
+        raise typer.Exit(1)
+    
+    typer.echo(f"Built image: {image_id}")
+    return image_id
 
 
 @app.command()
@@ -227,7 +289,7 @@ def launch(
     docker_context: str = typer.Option(
         "rootless",
         "--docker-context",
-        help="Docker context to use for devcontainer",
+        help="Docker context to use",
     ),
     env_file: Optional[Path] = typer.Option(
         None,
@@ -243,11 +305,15 @@ def launch(
         "--env",
         help="Set environment variable (KEY=VALUE). Can be used multiple times.",
     ),
+    rebuild: bool = typer.Option(
+        False,
+        "--rebuild",
+        help="Force rebuild of the devcontainer image",
+    ),
 ) -> None:
-    """Launch the devcontainer for this project.
+    """Launch the OpenCode agent in a container.
     
-    Validates that the current directory is a Git repository root with
-    a properly initialized .opencode/ directory, then runs devcontainer up.
+    Builds the devcontainer image (if needed) and runs OpenCode using docker compose.
     
     Environment variables are loaded with precedence (lowest to highest):
     1. Base .opencode/.env file
@@ -264,32 +330,24 @@ def launch(
     
     Examples:
         ocframework launch
+        ocframework launch --rebuild
         ocframework launch --env-file prod.env
         ocframework launch -e API_KEY=$HOME/.key -e DEBUG=true
-        ocframework launch --env-file prod.env -e PORT=9000
     """
     cwd = Path.cwd()
     
-    # Validate runtime context
     valid, error = validate_runtime_context(cwd)
     if not valid:
         typer.secho(f"Error: {error}", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
     
-    # Get repo root
     repo_root = get_repo_root(cwd)
     if repo_root is None:
         typer.secho("Error: Could not determine repository root", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
     
-    # Load raw base environment (before resolution, for comparison)
     env_path = repo_root / ".opencode" / ".env"
-    base_env = {}
-    if env_path.exists():
-        base_env = dict(dotenv_values(env_path, interpolate=False))
-        base_env = {k: v if v is not None else "" for k, v in base_env.items()}
     
-    # Load resolved environment with overrides
     try:
         final_env = load_env_with_overrides(
             base_env_path=env_path,
@@ -306,45 +364,45 @@ def launch(
         typer.secho(f"Error loading environment: {e}", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
     
-    # Parse CLI variables for tracking
-    cli_env_dict = {}
-    if env_vars:
-        try:
-            cli_env_dict = parse_cli_env_vars(env_vars)
-        except ValueError as e:
-            typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
-            raise typer.Exit(1)
+    subprocess_env = build_docker_env(final_env, docker_context)
     
-    # Identify resolved variables to pass via --remote-env
-    resolved_vars = identify_resolved_variables(base_env, final_env, cli_env_dict)
+    opencode_dir = repo_root / ".opencode"
+    compose_path = opencode_dir / "docker-compose.yaml"
     
-    # Build subprocess environment
-    subprocess_env = build_devcontainer_env(final_env, docker_context)
+    if not compose_path.exists():
+        typer.secho(
+            "Error: docker-compose.yaml not found. Run 'ocframework init' first.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
     
-    # Prepare command
-    cmd = [
-        "devcontainer",
-        "up",
-        "--config",
-        ".opencode/devcontainer.json",
-        "--workspace-folder",
-        ".",
+    image_id = None
+    
+    if rebuild:
+        typer.echo("Building devcontainer image (--rebuild specified)...")
+        image_id = _build_image(opencode_dir, repo_root, subprocess_env)
+    else:
+        image_id = load_image_id(opencode_dir)
+        if image_id:
+            typer.echo(f"Using existing image: {image_id}")
+        else:
+            typer.echo("Building devcontainer image (no cached image ID found)...")
+            image_id = _build_image(opencode_dir, repo_root, subprocess_env)
+    
+    save_image_id(opencode_dir, image_id)
+    
+    subprocess_env["OCF_IMAGE_ID"] = image_id
+    subprocess_env["PWD"] = str(repo_root)
+    
+    typer.echo("Launching OpenCode...")
+    
+    run_cmd = [
+        "docker", "compose", "-f", str(compose_path),
+        "run", "--rm", "opencode", "opencode", "--continue",
     ]
     
-    # Add resolved variables as --remote-env flags
-    cmd = add_remote_env_to_command(cmd, resolved_vars)
-    
-    # Show what we're doing
-    typer.echo(f"Launching devcontainer with DOCKER_CONTEXT={docker_context}...")
-    if env_file:
-        typer.echo(f"Using override file: {env_file}")
-    if env_vars:
-        typer.echo(f"Applied {len(env_vars)} command-line variable(s)")
-    if resolved_vars:
-        typer.echo(f"Passing {len(resolved_vars)} resolved variable(s) via --remote-env")
-    
-    # Execute
-    result = subprocess.run(cmd, env=subprocess_env, cwd=repo_root)
+    result = subprocess.run(run_cmd, env=subprocess_env, cwd=repo_root)
     raise typer.Exit(result.returncode)
 
 
@@ -354,7 +412,7 @@ def exec(
     docker_context: str = typer.Option(
         "rootless",
         "--docker-context",
-        help="Docker context to use for devcontainer",
+        help="Docker context to use",
     ),
     env_file: Optional[Path] = typer.Option(
         None,
@@ -371,26 +429,19 @@ def exec(
         help="Set environment variable (KEY=VALUE). Can be used multiple times.",
     ),
 ) -> None:
-    """Execute a command inside the devcontainer.
+    """Execute a command inside a fresh OpenCode container.
     
-    Validates that the current directory is a Git repository root with
-    a properly initialized .opencode/ directory, then runs devcontainer exec.
+    Creates a new container with the same configuration as launch and runs the command.
     
     Environment variables are loaded with precedence (lowest to highest):
     1. Base .opencode/.env file
     2. Override file (--env-file)
     3. Command-line variables (-e KEY=VALUE)
     
-    Supports:
-    - Variable interpolation: $VAR, ${VAR}, ${VAR:-default}
-    - Export statements: export KEY=VALUE
-    - Comments: # comment
-    - Quoted values: KEY="value with spaces"
-    
     The command to execute must follow '--'. For example:
-        ocframework exec -- opencode debug config
         ocframework exec -- bash
-        ocframework exec --env-file prod.env -e KEY=value -- opencode debug config
+        ocframework exec -- opencode debug config
+        ocframework exec --env-file prod.env -e KEY=value -- ls -la
     """
     args = ctx.args
     if not args:
@@ -399,31 +450,23 @@ def exec(
             fg=typer.colors.RED,
             err=True,
         )
-        typer.echo("Example: ocframework exec -- opencode debug config")
+        typer.echo("Example: ocframework exec -- bash")
         raise typer.Exit(1)
     
     cwd = Path.cwd()
     
-    # Validate runtime context
     valid, error = validate_runtime_context(cwd)
     if not valid:
         typer.secho(f"Error: {error}", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
     
-    # Get repo root
     repo_root = get_repo_root(cwd)
     if repo_root is None:
         typer.secho("Error: Could not determine repository root", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
     
-    # Load raw base environment (before resolution, for comparison)
     env_path = repo_root / ".opencode" / ".env"
-    base_env = {}
-    if env_path.exists():
-        base_env = dict(dotenv_values(env_path, interpolate=False))
-        base_env = {k: v if v is not None else "" for k, v in base_env.items()}
     
-    # Load resolved environment with overrides
     try:
         final_env = load_env_with_overrides(
             base_env_path=env_path,
@@ -440,39 +483,37 @@ def exec(
         typer.secho(f"Error loading environment: {e}", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
     
-    # Parse CLI variables for tracking
-    cli_env_dict = {}
-    if env_vars:
-        try:
-            cli_env_dict = parse_cli_env_vars(env_vars)
-        except ValueError as e:
-            typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
-            raise typer.Exit(1)
+    subprocess_env = build_docker_env(final_env, docker_context)
     
-    # Identify resolved variables to pass via --remote-env
-    resolved_vars = identify_resolved_variables(base_env, final_env, cli_env_dict)
+    opencode_dir = repo_root / ".opencode"
+    compose_path = opencode_dir / "docker-compose.yaml"
     
-    # Build subprocess environment
-    subprocess_env = build_devcontainer_env(final_env, docker_context)
+    if not compose_path.exists():
+        typer.secho(
+            "Error: docker-compose.yaml not found. Run 'ocframework init' first.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
     
-    # Prepare command
-    cmd = [
-        "devcontainer",
-        "exec",
-        "--config",
-        ".opencode/devcontainer.json",
-        "--workspace-folder",
-        ".",
+    image_id = load_image_id(opencode_dir)
+    if not image_id:
+        typer.secho(
+            "Error: No cached image ID found. Run 'ocframework launch' first.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
+    
+    subprocess_env["OCF_IMAGE_ID"] = image_id
+    subprocess_env["PWD"] = str(repo_root)
+    
+    run_cmd = [
+        "docker", "compose", "-f", str(compose_path),
+        "run", "--rm", "opencode", *list(args),
     ]
     
-    # Add resolved variables as --remote-env flags
-    cmd = add_remote_env_to_command(cmd, resolved_vars)
-    
-    # Append the command to execute
-    cmd.extend(list(args))
-    
-    # Execute
-    result = subprocess.run(cmd, env=subprocess_env, cwd=repo_root)
+    result = subprocess.run(run_cmd, env=subprocess_env, cwd=repo_root)
     raise typer.Exit(result.returncode)
 
 

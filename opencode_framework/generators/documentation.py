@@ -4,16 +4,15 @@ from .base import FileGenerator, GenerationContext
 
 
 class DocumentationGenerator(FileGenerator):
-    """Generates .opencode/README.md and runtime_data directory."""
+    """Generates .opencode/README.md."""
     
     def generate(self, ctx: GenerationContext) -> None:
-        """Generate documentation and runtime data structure."""
+        """Generate documentation."""
         self._generate_readme(ctx)
-        self._generate_runtime_data(ctx)
     
     @staticmethod
     def _get_launch_commands() -> dict:
-        """Get the host-side devcontainer commands.
+        """Get the host-side commands.
         
         Returns CLI commands that handle environment loading and Docker context.
         """
@@ -34,7 +33,8 @@ This directory contains the project-level configuration for the OpenCode Framewo
 
 ## Structure
 
-- `devcontainer.json` - DevContainer configuration for the agent runtime
+- `devcontainer.json` - DevContainer build configuration (image, features)
+- `docker-compose.yaml` - Runtime configuration (env, mounts, command)
 - `.env` - Runtime environment variables
 - `runtime_data/` - Mutable runtime state (not versioned)
 
@@ -58,14 +58,18 @@ This directory contains the project-level configuration for the OpenCode Framewo
 {commands['shell']}
 ```
 
-OpenCode is started on attach via `postAttachCommand` in devcontainer.json.
+## How It Works
 
-## Teardown
+1. `devcontainer build` creates the container image with features
+2. `docker compose run` starts OpenCode with resolved environment and mounts
+3. Each `exec` creates a fresh container with the same configuration
 
-There is no `devcontainer down` flow yet. To stop and remove the container:
+## Rebuilding
+
+To rebuild the image (e.g., after changing features):
 
 ```sh
-docker rm -f $(basename "$(pwd)")
+ocframework launch --rebuild
 ```
 
 ## Version Control
@@ -88,25 +92,3 @@ from inside `.opencode/` to affect the configuration branch.
         
         readme_path = ctx.opencode_dir / "README.md"
         readme_path.write_text(readme_content)
-    
-    @staticmethod
-    def _generate_runtime_data(ctx: GenerationContext) -> None:
-        """Create .opencode/runtime_data/ directory structure.
-        
-        Only creates XDG-backed directories that are actually mounted:
-        - .cache/
-        - .local/share/
-        - .local/state/
-        """
-        runtime_data = ctx.opencode_dir / "runtime_data"
-        runtime_data.mkdir(exist_ok=True)
-        
-        subdirs = [
-            ".cache",
-            ".local/share",
-            ".local/state",
-        ]
-        
-        for subdir in subdirs:
-            dir_path = runtime_data / subdir
-            dir_path.mkdir(parents=True, exist_ok=True)

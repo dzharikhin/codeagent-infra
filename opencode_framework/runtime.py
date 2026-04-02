@@ -359,11 +359,11 @@ def _expand_all_variables(value: str, env: Dict[str, str], current_key: str) -> 
 
 
 
-def build_devcontainer_env(
+def build_docker_env(
     base_env: Dict[str, str],
     docker_context: str,
 ) -> Dict[str, str]:
-    """Build environment for devcontainer subprocess.
+    """Build environment for Docker/compose subprocess.
     
     Merges base_env with current process environment and sets DOCKER_CONTEXT.
     
@@ -380,51 +380,28 @@ def build_devcontainer_env(
     return result
 
 
-def identify_resolved_variables(
-    base_env: Dict[str, str],
-    resolved_env: Dict[str, str],
-    cli_vars: Optional[Dict[str, str]] = None,
-) -> Dict[str, str]:
-    """Identify variables that were resolved or changed.
-    
-    Returns variables that:
-    - Were specified on CLI (-e flags)
-    - Contained ${...} or $VAR syntax in base_env and were resolved
-    
-    Args:
-        base_env: Raw environment from .env file (before resolution)
-        resolved_env: Environment after interpolation
-        cli_vars: Variables from CLI (-e flags)
-        
-    Returns:
-        Dictionary of variables to pass as --remote-env
-    """
-    cli_vars = cli_vars or {}
-    resolved_vars = dict(cli_vars)
-    
-    for key, resolved_value in resolved_env.items():
-        if key in base_env:
-            base_value = base_env[key]
-            if '${' in str(base_value) or (('$' in str(base_value) and key not in cli_vars)):
-                if base_value != resolved_value:
-                    resolved_vars[key] = resolved_value
-    
-    return resolved_vars
+def get_image_id_path(opencode_dir: Path) -> Path:
+    """Return path to image ID file."""
+    return opencode_dir / "runtime_data" / ".image_id"
 
 
-def add_remote_env_to_command(
-    cmd: List[str],
-    resolved_vars: Dict[str, str],
-) -> List[str]:
-    """Add resolved variables as --remote-env flags to devcontainer command.
+def load_image_id(opencode_dir: Path) -> Optional[str]:
+    """Load persisted image ID from runtime_data.
     
-    Args:
-        cmd: Devcontainer command list
-        resolved_vars: Dictionary of variables to add
-        
     Returns:
-        Modified command list with --remote-env flags
+        Image ID string if file exists, None otherwise.
     """
-    for key, value in resolved_vars.items():
-        cmd.extend(["--remote-env", f"{key}={value}"])
-    return cmd
+    image_id_path = get_image_id_path(opencode_dir)
+    if image_id_path.exists():
+        return image_id_path.read_text().strip()
+    return None
+
+
+def save_image_id(opencode_dir: Path, image_id: str) -> None:
+    """Persist image ID to runtime_data.
+    
+    Ensures runtime_data directory exists.
+    """
+    image_id_path = get_image_id_path(opencode_dir)
+    image_id_path.parent.mkdir(parents=True, exist_ok=True)
+    image_id_path.write_text(image_id)
