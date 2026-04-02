@@ -3,8 +3,7 @@
   "name": "OpenCode - ${localWorkspaceFolderBasename}",
   "image": "${localEnv:DEVCONTAINER_BASE_IMAGE:mcr.microsoft.com/devcontainers/base}:${localEnv:DEVCONTAINER_BASE_IMAGE_TAG:ubuntu-24.04}",
   "runArgs": [
-    "--name", "${localWorkspaceFolderBasename}",
-    "--env-file", "${localWorkspaceFolder}/.opencode/.env"
+    "--name", "${localWorkspaceFolderBasename}"
   ],
   "features": {
     "ghcr.io/devcontainers/features/common-utils:2": {

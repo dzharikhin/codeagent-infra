@@ -12,6 +12,264 @@ pipx install -e <path-to-framework-git-clone>
 
 This is the only supported installation method. The framework repository is a required runtime asset, not just a development convenience. All framework commands fail immediately if the framework repository is not a valid git clone with all required files.
 
+## Development Environment Setup
+
+### Project Virtual Environment
+
+The framework uses Python virtual environment for development and testing. The project virtual environment is located at `.venv` in the repository root.
+
+### Poetry Dependency Management
+
+**Poetry is required for development** and is used to manage all project dependencies and virtual environments.
+
+#### Installation
+
+```sh
+# Install Poetry (if not already installed)
+curl -sSL https://install.python-poetry.org | python3 -
+export PATH="$HOME/.local/bin:$PATH"
+
+# Verify installation
+poetry --version
+```
+
+#### Initial Setup
+
+```sh
+# Clone the repository
+git clone <repository-url>
+cd opencode_framework
+
+# Install dependencies and create .venv
+poetry install
+
+# Activate the virtual environment
+source .venv/bin/activate
+# Or on Windows:
+# .venv\Scripts\activate
+```
+
+#### Virtual Environment Management with Poetry
+
+##### Creating/Updating the Virtual Environment
+
+```sh
+# Create or update the virtual environment with all dependencies
+poetry install
+
+# Install in development mode (includes dev dependencies like pytest)
+poetry install --with dev
+```
+
+##### Installing Additional Dependencies
+
+```sh
+# Add a new runtime dependency
+poetry add <package-name>
+
+# Add a development-only dependency
+poetry add --group dev <package-name>
+
+# Example: Adding a development dependency
+poetry add --group dev pytest pytest-cov
+```
+
+##### Updating Dependencies
+
+```sh
+# Update all dependencies to latest compatible versions
+poetry update
+
+# Update specific package
+poetry update <package-name>
+
+# Show current dependency tree
+poetry show --tree
+```
+
+##### Running Commands in Virtual Environment
+
+```sh
+# Run Python in the virtual environment
+poetry run python <script.py>
+
+# Run installed CLI tools
+poetry run ocframework init
+
+# Run tests
+poetry run pytest tests/
+
+# Run linting
+poetry run black opencode_framework/
+poetry run ruff check opencode_framework/
+```
+
+##### Entering the Virtual Environment
+
+```sh
+# Activate the virtual environment (shell-specific)
+source .venv/bin/activate    # Linux/Mac
+.\.venv\Scripts\activate     # Windows PowerShell
+
+# Once activated, run commands directly without 'poetry run'
+python script.py
+pytest tests/
+ocframework --version
+```
+
+### Virtual Environment Location
+
+The virtual environment is stored at `.venv` in the repository root:
+
+```
+opencode_framework/
+├── .venv/                    # Virtual environment (gitignored)
+│   ├── bin/                  # Executable scripts
+│   ├── lib/                  # Python packages
+│   └── pyvenv.cfg           # Venv configuration
+├── opencode_framework/       # Source code
+├── tests/                    # Test suite
+├── pyproject.toml           # Poetry project configuration
+└── poetry.lock              # Locked dependency versions
+```
+
+### Dependency Configuration
+
+Dependencies are defined in `pyproject.toml`:
+
+```toml
+[tool.poetry.dependencies]
+python = "^3.12"
+typer = "^0.12"              # CLI framework
+python-dotenv = "^1.0"       # Environment file parsing
+# ... other runtime dependencies
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.0"              # Testing framework
+pytest-cov = "^4.0"          # Coverage reporting
+# ... other development dependencies
+```
+
+#### Updating Dependencies
+
+When `pyproject.toml` is modified:
+1. Poetry automatically updates `.venv` on `poetry install`
+2. `poetry.lock` captures exact versions (commit to git)
+3. Other developers run `poetry install` to sync their environment
+
+### Development Workflow
+
+#### Before Starting Work
+
+```sh
+# Clone and setup
+git clone <repository-url>
+cd opencode_framework
+
+# Create virtual environment and install dependencies
+poetry install
+
+# Activate virtual environment
+source .venv/bin/activate
+```
+
+#### Running Tests
+
+```sh
+# Run all tests
+poetry run pytest
+
+# Run with coverage
+poetry run pytest --cov=opencode_framework tests/
+
+# Run specific test file
+poetry run pytest tests/test_runtime.py
+
+# Run with verbose output
+poetry run pytest -v
+```
+
+#### Running the Framework
+
+```sh
+# Run with poetry
+poetry run ocframework --version
+poetry run ocframework init
+
+# Or after activating venv
+source .venv/bin/activate
+ocframework init
+```
+
+#### Code Quality Checks
+
+```sh
+# Format code
+poetry run black opencode_framework/ tests/
+
+# Lint code
+poetry run ruff check opencode_framework/
+
+# Type checking (if mypy is installed)
+poetry run mypy opencode_framework/
+```
+
+### Troubleshooting
+
+#### Virtual Environment Issues
+
+```sh
+# Remove and recreate virtual environment
+rm -rf .venv
+poetry install
+
+# Clear Poetry cache (if experiencing dependency issues)
+poetry cache clear . --all
+poetry install
+```
+
+#### Dependency Conflicts
+
+```sh
+# Show detailed dependency information
+poetry show --tree
+
+# Check for outdated packages
+poetry update --dry-run
+
+# Update to latest versions (carefully)
+poetry update
+```
+
+#### Poetry Installation Issues
+
+```sh
+# Verify Poetry installation
+poetry --version
+
+# Update Poetry to latest version
+poetry self update
+
+# Check Poetry configuration
+poetry config --list
+```
+
+### CI/CD and Poetry
+
+In CI/CD environments:
+- Poetry uses `poetry.lock` to ensure reproducible builds
+- `.venv` is created fresh in each CI run
+- No virtual environment is committed to git
+
+### Important Notes
+
+- **Always commit `poetry.lock`** to version control for reproducible builds
+- **Never commit `.venv`** directory (it's in .gitignore)
+- **Use `poetry add`** for new dependencies, not manual `pip install`
+- **Run `poetry install`** after pulling changes that modify dependencies
+- The virtual environment is automatically created at `.venv` by Poetry
+- All development should happen within the Poetry-managed virtual environment
+
 ## Framework Repository Requirements
 
 A valid framework repository must contain:

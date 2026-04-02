@@ -11,6 +11,8 @@ from opencode_framework.runtime import (
     build_devcontainer_env,
     parse_cli_env_vars,
     apply_combined_interpolation,
+    identify_resolved_variables,
+    add_remote_env_to_command,
     EnvError,
     CircularReferenceError,
     InterpolationError,
@@ -647,3 +649,114 @@ class TestIntegrationScenarios:
             assert False, "Should have raised FileNotFoundError"
         except FileNotFoundError as e:
             assert "missing.env" in str(e)
+
+
+class TestIdentifyResolvedVariables:
+    """Tests for identifying resolved variables."""
+
+    def test_includes_cli_vars(self):
+        """CLI vars should always be included."""
+        result = identify_resolved_variables(
+            base_env={"A": "base"},
+            resolved_env={"A": "base"},
+            cli_vars={"B": "cli_value"}
+        )
+        assert result == {"B": "cli_value"}
+
+    def test_includes_resolved_dollar_syntax(self):
+        """Vars with $VAR syntax that were resolved should be included."""
+        result = identify_resolved_variables(
+            base_env={"TEST": "$A"},
+            resolved_env={"A": "hello", "TEST": "hello"},
+            cli_vars={}
+        )
+        assert result == {"TEST": "hello"}
+
+    def test_includes_resolved_brace_syntax(self):
+        """Vars with ${VAR} syntax that were resolved should be included."""
+        result = identify_resolved_variables(
+            base_env={"TEST": "${A}"},
+            resolved_env={"A": "hello", "TEST": "hello"},
+            cli_vars={}
+        )
+        assert result == {"TEST": "hello"}
+
+    def test_excludes_unchanged_vars(self):
+        """Vars that didn't change should not be included."""
+        result = identify_resolved_variables(
+            base_env={"A": "hardcoded"},
+            resolved_env={"A": "hardcoded"},
+            cli_vars={}
+        )
+        assert result == {}
+
+    def test_empty_inputs(self):
+        """Empty inputs should return empty dict."""
+        result = identify_resolved_variables(
+            base_env={},
+            resolved_env={},
+            cli_vars=None
+        )
+        assert result == {}
+
+    def test_cli_vars_override_base(self):
+        """CLI vars take precedence and are always included."""
+        result = identify_resolved_variables(
+            base_env={"A": "base_value"},
+            resolved_env={"A": "cli_value"},
+            cli_vars={"A": "cli_value"}
+        )
+        assert result == {"A": "cli_value"}
+
+    def test_mixed_scenario(self):
+        """Test with CLI vars, resolved vars, and unchanged vars."""
+        result = identify_resolved_variables(
+            base_env={
+                "A": "hardcoded",
+                "B": "${C}",
+                "D": "$E",
+            },
+            resolved_env={
+                "A": "hardcoded",
+                "B": "resolved_b",
+                "C": "resolved_b",
+                "D": "resolved_d",
+                "E": "resolved_d",
+            },
+            cli_vars={"F": "cli_f"}
+        )
+        assert result == {"F": "cli_f", "B": "resolved_b", "D": "resolved_d"}
+
+
+class TestAddRemoteEnvToCommand:
+    """Tests for adding --remote-env flags to commands."""
+
+    def test_adds_single_var(self):
+        """Should add a single variable correctly."""
+        result = add_remote_env_to_command(["devcontainer", "up"], {"A": "value"})
+        assert result == ["devcontainer", "up", "--remote-env", "A=value"]
+
+    def test_adds_multiple_vars(self):
+        """Should add multiple variables."""
+        result = add_remote_env_to_command(["cmd"], {"A": "1", "B": "2"})
+        assert result == ["cmd", "--remote-env", "A=1", "--remote-env", "B=2"]
+
+    def test_empty_vars_no_change(self):
+        """Empty vars dict should not modify command."""
+        result = add_remote_env_to_command(["cmd"], {})
+        assert result == ["cmd"]
+
+    def test_empty_command(self):
+        """Should work with empty command list."""
+        result = add_remote_env_to_command([], {"A": "value"})
+        assert result == ["--remote-env", "A=value"]
+
+    def test_value_with_equals(self):
+        """Should handle values containing equals signs."""
+        result = add_remote_env_to_command([], {"URL": "http://host?foo=bar"})
+        assert result == ["--remote-env", "URL=http://host?foo=bar"]
+
+    def test_empty_value(self):
+        """Should handle empty values."""
+        result = add_remote_env_to_command([], {"EMPTY": ""})
+        assert result == ["--remote-env", "EMPTY="]

@@ -23,11 +23,8 @@ from opencode_framework.preflight import (
     get_repo_root,
 )
 from opencode_framework.wizard import run_wizard
-from opencode_framework.generator import (
-    generate_opencode_directory,
-    backup_existing_opencode,
-    _get_launch_commands,
-)
+from opencode_framework.generators import GenerationOrchestrator
+from opencode_framework.generators.documentation import DocumentationGenerator
 from opencode_framework.git_ops import (
     setup_opencode_worktree,
     remove_worktree,
@@ -37,8 +34,12 @@ from opencode_framework.runtime import (
     validate_runtime_context,
     load_env_with_overrides,
     build_devcontainer_env,
+    identify_resolved_variables,
+    add_remote_env_to_command,
+    parse_cli_env_vars,
     EnvError,
 )
+from dotenv import dotenv_values
 
 
 app = typer.Typer(
@@ -170,7 +171,7 @@ def init(
                 )
                 raise typer.Exit(1)
         else:
-            backup_path = backup_existing_opencode(repo_path)
+            backup_path = GenerationOrchestrator.backup_existing_opencode(repo_path)
             if backup_path:
                 typer.echo(f"Backup created at: {backup_path}")
     
@@ -208,9 +209,10 @@ def init(
         raise typer.Exit(1)
     
     typer.echo("Generating .opencode/ directory...")
-    generate_opencode_directory(repo_path, wizard_result)
+    orchestrator = GenerationOrchestrator()
+    orchestrator.generate(repo_path, wizard_result)
     
-    commands = _get_launch_commands()
+    commands = DocumentationGenerator._get_launch_commands()
     
     typer.secho("Initialization complete!", fg=typer.colors.GREEN)
     typer.echo("\nCommands:")
@@ -280,8 +282,14 @@ def launch(
         typer.secho("Error: Could not determine repository root", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
     
-    # Load environment with overrides
+    # Load raw base environment (before resolution, for comparison)
     env_path = repo_root / ".opencode" / ".env"
+    base_env = {}
+    if env_path.exists():
+        base_env = dict(dotenv_values(env_path, interpolate=False))
+        base_env = {k: v if v is not None else "" for k, v in base_env.items()}
+    
+    # Load resolved environment with overrides
     try:
         final_env = load_env_with_overrides(
             base_env_path=env_path,
@@ -298,6 +306,18 @@ def launch(
         typer.secho(f"Error loading environment: {e}", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
     
+    # Parse CLI variables for tracking
+    cli_env_dict = {}
+    if env_vars:
+        try:
+            cli_env_dict = parse_cli_env_vars(env_vars)
+        except ValueError as e:
+            typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(1)
+    
+    # Identify resolved variables to pass via --remote-env
+    resolved_vars = identify_resolved_variables(base_env, final_env, cli_env_dict)
+    
     # Build subprocess environment
     subprocess_env = build_devcontainer_env(final_env, docker_context)
     
@@ -311,12 +331,17 @@ def launch(
         ".",
     ]
     
+    # Add resolved variables as --remote-env flags
+    cmd = add_remote_env_to_command(cmd, resolved_vars)
+    
     # Show what we're doing
     typer.echo(f"Launching devcontainer with DOCKER_CONTEXT={docker_context}...")
     if env_file:
         typer.echo(f"Using override file: {env_file}")
     if env_vars:
         typer.echo(f"Applied {len(env_vars)} command-line variable(s)")
+    if resolved_vars:
+        typer.echo(f"Passing {len(resolved_vars)} resolved variable(s) via --remote-env")
     
     # Execute
     result = subprocess.run(cmd, env=subprocess_env, cwd=repo_root)
@@ -391,8 +416,14 @@ def exec(
         typer.secho("Error: Could not determine repository root", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
     
-    # Load environment with overrides
+    # Load raw base environment (before resolution, for comparison)
     env_path = repo_root / ".opencode" / ".env"
+    base_env = {}
+    if env_path.exists():
+        base_env = dict(dotenv_values(env_path, interpolate=False))
+        base_env = {k: v if v is not None else "" for k, v in base_env.items()}
+    
+    # Load resolved environment with overrides
     try:
         final_env = load_env_with_overrides(
             base_env_path=env_path,
@@ -409,6 +440,18 @@ def exec(
         typer.secho(f"Error loading environment: {e}", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
     
+    # Parse CLI variables for tracking
+    cli_env_dict = {}
+    if env_vars:
+        try:
+            cli_env_dict = parse_cli_env_vars(env_vars)
+        except ValueError as e:
+            typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(1)
+    
+    # Identify resolved variables to pass via --remote-env
+    resolved_vars = identify_resolved_variables(base_env, final_env, cli_env_dict)
+    
     # Build subprocess environment
     subprocess_env = build_devcontainer_env(final_env, docker_context)
     
@@ -420,7 +463,13 @@ def exec(
         ".opencode/devcontainer.json",
         "--workspace-folder",
         ".",
-    ] + list(args)
+    ]
+    
+    # Add resolved variables as --remote-env flags
+    cmd = add_remote_env_to_command(cmd, resolved_vars)
+    
+    # Append the command to execute
+    cmd.extend(list(args))
     
     # Execute
     result = subprocess.run(cmd, env=subprocess_env, cwd=repo_root)

@@ -169,7 +169,7 @@ def _detect_framework_repo_path() -> Optional[str]:
     """
     package_path = Path(__file__).resolve().parent
     
-    repo_root = package_path.parent.parent
+    repo_root = package_path.parent
     
     valid, _ = validate_framework_repo(repo_root)
     if valid:

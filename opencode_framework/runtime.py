@@ -378,3 +378,53 @@ def build_devcontainer_env(
     result.update(base_env)
     result["DOCKER_CONTEXT"] = docker_context
     return result
+
+
+def identify_resolved_variables(
+    base_env: Dict[str, str],
+    resolved_env: Dict[str, str],
+    cli_vars: Optional[Dict[str, str]] = None,
+) -> Dict[str, str]:
+    """Identify variables that were resolved or changed.
+    
+    Returns variables that:
+    - Were specified on CLI (-e flags)
+    - Contained ${...} or $VAR syntax in base_env and were resolved
+    
+    Args:
+        base_env: Raw environment from .env file (before resolution)
+        resolved_env: Environment after interpolation
+        cli_vars: Variables from CLI (-e flags)
+        
+    Returns:
+        Dictionary of variables to pass as --remote-env
+    """
+    cli_vars = cli_vars or {}
+    resolved_vars = dict(cli_vars)
+    
+    for key, resolved_value in resolved_env.items():
+        if key in base_env:
+            base_value = base_env[key]
+            if '${' in str(base_value) or (('$' in str(base_value) and key not in cli_vars)):
+                if base_value != resolved_value:
+                    resolved_vars[key] = resolved_value
+    
+    return resolved_vars
+
+
+def add_remote_env_to_command(
+    cmd: List[str],
+    resolved_vars: Dict[str, str],
+) -> List[str]:
+    """Add resolved variables as --remote-env flags to devcontainer command.
+    
+    Args:
+        cmd: Devcontainer command list
+        resolved_vars: Dictionary of variables to add
+        
+    Returns:
+        Modified command list with --remote-env flags
+    """
+    for key, value in resolved_vars.items():
+        cmd.extend(["--remote-env", f"{key}={value}"])
+    return cmd
