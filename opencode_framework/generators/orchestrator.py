@@ -64,6 +64,14 @@ class GenerationOrchestrator:
         (runtime_data / ".cache").mkdir(exist_ok=True)
         (runtime_data / ".local" / "share").mkdir(parents=True, exist_ok=True)
         (runtime_data / ".local" / "state").mkdir(parents=True, exist_ok=True)
+        
+        # Create symlink to framework-nuts-and-bolts
+        framework_repo_path = ctx.global_settings.framework_repo_path
+        if framework_repo_path:
+            nuts_and_bolts_src = Path(framework_repo_path) / "framework-nuts-and-bolts"
+            nuts_and_bolts_link = opencode_dir / "framework-nuts-and-bolts"
+            if nuts_and_bolts_src.is_dir() and not nuts_and_bolts_link.exists():
+                nuts_and_bolts_link.symlink_to(nuts_and_bolts_src)
     
     @staticmethod
     def backup_existing_opencode(repo_root: Path) -> Optional[Path]:

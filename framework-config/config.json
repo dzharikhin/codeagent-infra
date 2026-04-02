@@ -5,48 +5,6 @@
   "plugin": [
     "opencode-sessions@1.0.0"
   ],
-  "enabled_providers": [
-    "openai",
-    "anthropic",
-    "deepseek",
-    "hh"
-  ],
-  "provider": {
-    "anthropic": {
-      "options": {
-        "baseURL": "{env:ANTHROPIC_BASE_URL}"
-      }
-    },
-    "openai": {
-      "options": {
-        "baseURL": "{env:OPENAI_BASE_URL}"
-      }
-    },
-    "deepseek": {
-      "options": {
-        "baseURL": "{env:DEEPSEEK_BASE_URL}"
-      }
-    },
-    "hh": {
-      "name": "HH",
-      "npm":  "@ai-sdk/openai-compatible",
-      "options": {
-        "baseURL": "https://llm-gateway.pyn.ru/proxy/glm5-fp8/v1",
-        "apiKey": "{env:HH_API_KEY}"
-      },
-      "models": {
-        "glm5-fp8": {
-          "name": "GLM-5 FP8"
-        },
-        "minimax-m2.5": {
-          "name": "MiniMax M2.5"
-        },
-        "gpt-oss-120b": {
-          "name": "GPT-OSS 120B"
-        }
-      }
-    }
-  },
   "model": "{env:OCF_MAIN_MODEL}",
   "small_model": "{env:OCF_SMALL_MODEL}",
   "default_agent": "plan",

@@ -158,6 +158,28 @@ class TestForceFlag:
         if backups:
             assert (backups[0] / "test.txt").read_text() == "existing content"
 
+    def test_force_preserves_symlinks(self, tmp_path: Path):
+        """Test that --force preserves symlinks in backup."""
+        repo = tmp_path / "test-repo"
+        repo.mkdir()
+
+        opencode_dir = repo / ".opencode"
+        opencode_dir.mkdir()
+
+        (opencode_dir / "test.txt").write_text("test content")
+        (opencode_dir / "link-to-test.txt").symlink_to("test.txt")
+        (opencode_dir / "broken-link").symlink_to("/nonexistent/path")
+
+        result = run_cli(["init", "--force"], cwd=repo)
+
+        backups = list(repo.glob(".opencode.backup-*"))
+        if backups:
+            backup = backups[0]
+            assert (backup / "test.txt").read_text() == "test content"
+            assert (backup / "link-to-test.txt").is_symlink()
+            assert (backup / "broken-link").is_symlink()
+            assert (backup / "broken-link").exists() is False
+
 
 class TestGeneratedConfig:
     """Tests for generated configuration files."""

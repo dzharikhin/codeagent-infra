@@ -163,7 +163,7 @@ def init(
             timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
             backup_path = repo_path / f".opencode.backup-{timestamp}"
             
-            shutil.copytree(opencode_dir, backup_path)
+            shutil.copytree(opencode_dir, backup_path, symlinks=True)
             typer.echo(f"Backup created at: {backup_path}")
             
             if not remove_worktree(opencode_dir, cwd=repo_path):
@@ -249,6 +249,22 @@ def _parse_image_id_from_build_output(output: str) -> Optional[str]:
     if match:
         return match.group(1)
     
+    return None
+
+
+def _extract_container_name(compose_path: Path) -> Optional[str]:
+    """Extract container_name from docker-compose.yaml.
+    
+    Args:
+        compose_path: Path to docker-compose.yaml
+        
+    Returns:
+        Container name if found, None otherwise
+    """
+    content = compose_path.read_text()
+    match = re.search(r'^\s*container_name:\s*(.+)$', content, re.MULTILINE)
+    if match:
+        return match.group(1).strip()
     return None
 
 
@@ -411,10 +427,15 @@ def launch(
     
     args = ctx.args
     
+    container_name = _extract_container_name(compose_path)
+    
     run_cmd = [
         "docker", "compose", "-f", str(compose_path),
         "run", "--rm",
     ]
+    
+    if container_name:
+        run_cmd.extend(["--name", container_name])
     
     for key, value in final_env.items():
         run_cmd.extend(["--env", f"{key}={value}"])
