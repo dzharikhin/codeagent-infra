@@ -3,10 +3,44 @@
 import os
 import re
 from pathlib import Path
-from typing import Tuple, Dict
+from typing import Tuple, Dict, Optional, List
+
+from dotenv import dotenv_values
 
 from opencode_framework.preflight import is_inside_git_tree, get_repo_root
 from opencode_framework.config import validate_framework_repo, get_framework_validation_error
+
+
+class EnvError(Exception):
+    """Base exception for environment loading errors with file/line context."""
+    
+    def __init__(
+        self,
+        message: str,
+        file_path: Optional[Path] = None,
+        line_num: Optional[int] = None,
+    ):
+        self.file_path = file_path
+        self.line_num = line_num
+        
+        # Build full error message with context
+        if file_path:
+            prefix = str(file_path)
+            if line_num:
+                prefix += f":{line_num}"
+            message = f"{prefix}: {message}"
+        
+        super().__init__(message)
+
+
+class CircularReferenceError(EnvError):
+    """Raised when circular references are detected in interpolation."""
+    pass
+
+
+class InterpolationError(EnvError):
+    """Raised when interpolation fails."""
+    pass
 
 
 def validate_runtime_context(cwd: Path) -> Tuple[bool, str]:
@@ -46,8 +80,13 @@ def validate_runtime_context(cwd: Path) -> Tuple[bool, str]:
     if not env_file.is_file():
         return False, ".opencode/.env does not exist. Run 'ocframework init' first."
     
-    env = load_and_expand_env(env_file)
-    framework_path_str = env.get("OCF_LOCAL_FRAMEWORK_PATH")
+    # Load base env to validate framework path
+    try:
+        base_env = dotenv_values(env_file, interpolate=True)
+    except Exception as e:
+        return False, f"Error reading .opencode/.env: {e}"
+    
+    framework_path_str = base_env.get("OCF_LOCAL_FRAMEWORK_PATH")
     if not framework_path_str:
         return False, "OCF_LOCAL_FRAMEWORK_PATH not set in .opencode/.env. Run 'ocframework init' again."
     
@@ -67,69 +106,383 @@ def validate_runtime_context(cwd: Path) -> Tuple[bool, str]:
     return True, ""
 
 
-def load_and_expand_env(env_path: Path) -> Dict[str, str]:
-    """Load .env file and expand variable references.
+def load_env_with_overrides(
+    base_env_path: Path,
+    override_env_path: Optional[Path] = None,
+    cli_env_vars: Optional[List[str]] = None,
+) -> Dict[str, str]:
+    """Load environment with proper precedence and interpolation.
+    
+    Uses python-dotenv for parsing, then applies recursive interpolation
+    across all sources together.
+    
+    Precedence (lowest to highest):
+    1. Base .env file
+    2. Override file (if provided)
+    3. CLI environment variables
     
     Supports:
-    - Simple KEY=VALUE lines
-    - ${VAR} references
-    - ${VAR:-default} syntax
-    
-    Expansion is done in order, so variables must be defined before use.
+    - Comments (#)
+    - Export statements (export KEY=VALUE)
+    - Basic interpolation: $VAR and ${VAR}
+    - Default values: ${VAR:-default}
+    - Escaped characters and quoted values
     
     Args:
-        env_path: Path to the .env file
+        base_env_path: Path to base .env file
+        override_env_path: Optional override env file
+        cli_env_vars: Optional list of KEY=VALUE strings from CLI
         
     Returns:
-        Dictionary of expanded key-value pairs
+        Merged and interpolated environment dictionary
+        
+    Raises:
+        EnvError: For any loading or parsing errors
+        CircularReferenceError: For circular references
+        FileNotFoundError: If specified files don't exist
     """
-    result: Dict[str, str] = {}
+    merged_env = {}
     
-    if not env_path.is_file():
-        return result
+    # 1. Load base environment using python-dotenv (without interpolation first)
+    if base_env_path.exists():
+        try:
+            # Load raw without interpolation
+            base_env = dotenv_values(base_env_path, interpolate=False)
+            # Convert None to empty string (dotenv returns None for some cases)
+            base_env = {k: v if v is not None else "" for k, v in base_env.items()}
+            merged_env.update(base_env)
+        except Exception as e:
+            raise EnvError(f"Failed to parse env file: {e}", file_path=base_env_path)
     
-    content = env_path.read_text()
+    # 2. Load override file if provided
+    if override_env_path:
+        if not override_env_path.exists():
+            raise FileNotFoundError(f"Override env file not found: {override_env_path}")
+        try:
+            override_env = dotenv_values(override_env_path, interpolate=False)
+            override_env = {k: v if v is not None else "" for k, v in override_env.items()}
+            merged_env.update(override_env)
+        except Exception as e:
+            raise EnvError(f"Failed to parse env file: {e}", file_path=override_env_path)
     
-    for line in content.splitlines():
-        line = line.strip()
+    # 3. Parse CLI variables
+    if cli_env_vars:
+        try:
+            cli_env = parse_cli_env_vars(cli_env_vars)
+            merged_env.update(cli_env)
+        except ValueError as e:
+            raise EnvError(f"Invalid CLI environment variable: {e}")
+    
+    # 4. Apply recursive interpolation to merged environment
+    # This handles both basic interpolation ($VAR, ${VAR}) and defaults (${VAR:-default})
+    try:
+        final_env = apply_combined_interpolation(merged_env, max_depth=5)
+    except CircularReferenceError:
+        raise
+    except Exception as e:
+        raise InterpolationError(f"Interpolation failed: {e}")
+    
+    return final_env
+
+
+def parse_cli_env_vars(env_vars: List[str]) -> Dict[str, str]:
+    """Parse KEY=VALUE pairs from command line.
+    
+    Note: Shell variables like $HOME are already expanded by shell.
+    
+    Args:
+        env_vars: List of KEY=VALUE strings
         
-        if not line or line.startswith("#"):
-            continue
+    Returns:
+        Parsed dictionary
         
-        if "=" not in line:
-            continue
+    Raises:
+        ValueError: For invalid format
+    """
+    result = {}
+    
+    for i, env_var in enumerate(env_vars, 1):
+        if '=' not in env_var:
+            raise ValueError(
+                f"Argument {i}: '{env_var}' - expected KEY=VALUE format"
+            )
         
-        key, _, value = line.partition("=")
+        key, _, value = env_var.partition('=')
         key = key.strip()
-        value = value.strip()
         
         if not key:
-            continue
+            raise ValueError(
+                f"Argument {i}: '{env_var}' - key cannot be empty"
+            )
         
-        expanded_value = _expand_value(value, result)
-        result[key] = expanded_value
+        # Validate key format (alphanumeric + underscores)
+        if not key.replace('_', '').isalnum():
+            raise ValueError(
+                f"Argument {i}: '{env_var}' - key must be alphanumeric with underscores"
+            )
+        
+        result[key] = value
     
     return result
 
 
-def _expand_value(value: str, env: Dict[str, str]) -> str:
-    """Expand variable references in a value.
+def apply_combined_interpolation(
+    env: Dict[str, str],
+    max_depth: int = 5,
+) -> Dict[str, str]:
+    """Apply combined interpolation for all variable reference styles.
     
-    Supports:
-    - ${VAR} - expand to value of VAR
-    - ${VAR:-default} - expand to value of VAR, or 'default' if not set
+    Handles:
+    - $VAR and ${VAR} basic references
+    - ${VAR:-default} with default values
+    
+    Works recursively across the merged environment to resolve transitive
+    references and enforce depth limits with circular reference detection.
+    
+    Args:
+        env: Environment dictionary to interpolate
+        max_depth: Maximum recursion depth
+        
+    Returns:
+        Fully interpolated dictionary
+        
+    Raises:
+        CircularReferenceError: If circular refs detected
+        InterpolationError: If max depth exceeded
+    """
+    result = env.copy()
+    
+    # Pattern for all variable references: $VAR, ${VAR}, and ${VAR:-default}
+    var_pattern = re.compile(r'\$\{?([A-Za-z_][A-Za-z0-9_]*(?:-[^}]*)?)?\}?|\$([A-Za-z_][A-Za-z0-9_]*)')
+    
+    for depth in range(max_depth):
+        changed = False
+        unresolved = set()
+        
+        for key, value in list(result.items()):
+            if not isinstance(value, str):
+                continue
+            
+            # Check if has variable syntax ($VAR or ${VAR})
+            if '$' not in value:
+                continue
+            
+            unresolved.add(key)
+            new_value = _expand_all_variables(value, result, key)
+            
+            if new_value != value:
+                result[key] = new_value
+                changed = True
+                # If fully resolved, remove from unresolved
+                if '$' not in new_value:
+                    unresolved.discard(key)
+        
+        if not changed:
+            break
+        
+        # Check for circular references
+        if depth > 0 and unresolved:
+            # Check if values are stuck (haven't changed from original)
+            stuck = all(result[k] == env[k] for k in unresolved)
+            if stuck:
+                raise CircularReferenceError(
+                    f"Circular references in: {', '.join(sorted(unresolved))}"
+                )
+    else:
+        # Max depth reached
+        remaining = [k for k, v in result.items() if isinstance(v, str) and '$' in v]
+        if remaining:
+            raise InterpolationError(
+                f"Max depth {max_depth} exceeded. Unresolved: {', '.join(remaining)}"
+            )
+    
+    return result
+
+
+def _expand_all_variables(value: str, env: Dict[str, str], current_key: str) -> str:
+    """Expand all variable reference styles: $VAR, ${VAR}, ${VAR:-default}.
+    
+    Args:
+        value: String with potential patterns
+        env: Environment dictionary
+        current_key: Current key (to avoid self-reference)
+        
+    Returns:
+        Expanded string
     """
     def replace_var(match: re.Match) -> str:
-        var_expr = match.group(1)
+        # Handle ${...} style
+        if match.group(1) is not None:
+            expr = match.group(1)
+            
+            # Handle ${VAR:-default} syntax
+            if ':-' in expr:
+                var_name, default = expr.split(':-', 1)
+                var_name = var_name.strip()
+                
+                # Avoid self-reference
+                if var_name == current_key:
+                    return default
+                
+                # Get value or use default
+                val = env.get(var_name, '')
+                return val if val else default
+            else:
+                # Handle simple ${VAR}
+                var_name = expr.strip()
+                
+                # Avoid self-reference
+                if var_name == current_key:
+                    return match.group(0)  # Leave as-is
+                
+                # Get value (leave unresolved if not found, for next pass)
+                return env.get(var_name, '')
         
-        if ":-" in var_expr:
-            var_name, default = var_expr.split(":-", 1)
-            return env.get(var_name, default) or ""
-        else:
-            return env.get(var_expr, "") or ""
+        # Handle $VAR style (simple reference)
+        elif match.group(2) is not None:
+            var_name = match.group(2)
+            
+            # Avoid self-reference
+            if var_name == current_key:
+                return match.group(0)  # Leave as-is
+            
+            # Get value
+            return env.get(var_name, '')
+        
+        return match.group(0)
     
-    pattern = r'\$\{([^}]+)\}'
-    return re.sub(pattern, replace_var, value)
+    # Match: ${VAR}, ${VAR:-default}, or $VAR
+    pattern = re.compile(r'\$\{([^}]+)\}|\$([A-Za-z_][A-Za-z0-9_]*)')
+    return pattern.sub(replace_var, value)
+
+
+def apply_custom_interpolation(
+    env: Dict[str, str],
+    max_depth: int = 5,
+) -> Dict[str, str]:
+    """Apply custom interpolation for ${VAR} and ${VAR:-default} syntax.
+    
+    Handles recursive resolution of variable references, including
+    basic ${VAR} references and default values ${VAR:-default}.
+    Detects circular references and enforces depth limits.
+    
+    Args:
+        env: Environment dictionary
+        max_depth: Maximum recursion depth
+        
+    Returns:
+        Interpolated dictionary
+        
+    Raises:
+        CircularReferenceError: If circular refs detected
+        InterpolationError: If max depth exceeded
+    """
+    result = env.copy()
+    
+    # Pattern for ${...} - both ${VAR} and ${VAR:-default}
+    var_pattern = re.compile(r'\$\{([^}]+)\}')
+    
+    for depth in range(max_depth):
+        changed = False
+        unresolved = set()
+        
+        for key, value in list(result.items()):
+            if not isinstance(value, str):
+                continue
+            
+            # Check if has variable syntax
+            if not var_pattern.search(value):
+                continue
+            
+            unresolved.add(key)
+            new_value = _expand_variables_recursive(value, result, key)
+            
+            if new_value != value:
+                result[key] = new_value
+                changed = True
+                # If fully resolved, remove from unresolved
+                if not var_pattern.search(new_value):
+                    unresolved.discard(key)
+        
+        if not changed:
+            break
+        
+        # Check for circular references
+        if depth > 0 and unresolved:
+            # Check if values are stuck (haven't changed)
+            stuck = all(result[k] == env[k] for k in unresolved)
+            if stuck:
+                raise CircularReferenceError(
+                    f"Circular references in: {', '.join(sorted(unresolved))}"
+                )
+    else:
+        # Max depth reached
+        remaining = [
+            k for k, v in result.items()
+            if isinstance(v, str) and var_pattern.search(v)
+        ]
+        if remaining:
+            raise InterpolationError(
+                f"Max depth {max_depth} exceeded. Unresolved: {', '.join(remaining)}"
+            )
+    
+    return result
+
+
+def _expand_variables_recursive(value: str, env: Dict[str, str], current_key: str) -> str:
+    """Expand ${VAR} and ${VAR:-default} patterns.
+    
+    Args:
+        value: String with potential patterns
+        env: Environment dictionary
+        current_key: Current key (avoid self-reference)
+        
+    Returns:
+        Expanded string
+    """
+    def replace_var(match: re.Match) -> str:
+        expr = match.group(1)
+        
+        # Handle ${VAR:-default} syntax
+        if ':-' in expr:
+            var_name, default = expr.split(':-', 1)
+            var_name = var_name.strip()
+            
+            # Avoid self-reference
+            if var_name == current_key:
+                return default
+            
+            # Get value or use default
+            val = env.get(var_name, '')
+            return val if val else default
+        else:
+            # Handle ${VAR} syntax
+            var_name = expr.strip()
+            
+            # Avoid self-reference
+            if var_name == current_key:
+                return match.group(0)  # Leave as-is
+            
+            # Get value or empty string (unresolved stays for next pass)
+            return env.get(var_name, '')
+    
+    return re.sub(r'\$\{([^}]+)\}', replace_var, value)
+
+
+def _expand_with_defaults(value: str, env: Dict[str, str], current_key: str) -> str:
+    """Expand ${VAR:-default} patterns.
+    
+    This is a wrapper for the main expansion for backward compatibility in tests.
+    
+    Args:
+        value: String with potential patterns
+        env: Environment dictionary
+        current_key: Current key (avoid self-reference)
+        
+    Returns:
+        Expanded string
+    """
+    return _expand_variables_recursive(value, env, current_key)
 
 
 def build_devcontainer_env(

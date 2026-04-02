@@ -2,7 +2,7 @@
 
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 import typer
 
@@ -211,40 +211,91 @@ def launch(
         "--docker-context",
         help="Docker context to use for devcontainer",
     ),
+    env_file: Optional[Path] = typer.Option(
+        None,
+        "--env-file",
+        help="Path to environment override file (.env format)",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+    ),
+    env_vars: Optional[List[str]] = typer.Option(
+        None,
+        "-e",
+        "--env",
+        help="Set environment variable (KEY=VALUE). Can be used multiple times.",
+    ),
 ) -> None:
     """Launch the devcontainer for this project.
     
     Validates that the current directory is a Git repository root with
     a properly initialized .opencode/ directory, then runs devcontainer up.
     
-    DOCKER_CONTEXT is set to 'rootless' by default for the devcontainer
-    subprocess. Use --docker-context to override.
+    Environment variables are loaded with precedence (lowest to highest):
+    1. Base .opencode/.env file
+    2. Override file (--env-file)
+    3. Command-line variables (-e KEY=VALUE)
+    
+    Supports:
+    - Variable interpolation: $VAR, ${VAR}, ${VAR:-default}
+    - Export statements: export KEY=VALUE
+    - Comments: # comment
+    - Quoted values: KEY="value with spaces"
+    
+    DOCKER_CONTEXT is set to 'rootless' by default. Use --docker-context to override.
+    
+    Examples:
+        ocframework launch
+        ocframework launch --env-file prod.env
+        ocframework launch -e API_KEY=$HOME/.key -e DEBUG=true
+        ocframework launch --env-file prod.env -e PORT=9000
     """
     import subprocess
     
     from opencode_framework.runtime import (
         validate_runtime_context,
-        load_and_expand_env,
+        load_env_with_overrides,
         build_devcontainer_env,
+        EnvError,
     )
     
     cwd = Path.cwd()
     
+    # Validate runtime context
     valid, error = validate_runtime_context(cwd)
     if not valid:
         typer.secho(f"Error: {error}", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
     
+    # Get repo root
     from opencode_framework.preflight import get_repo_root
     repo_root = get_repo_root(cwd)
     if repo_root is None:
         typer.secho("Error: Could not determine repository root", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
     
+    # Load environment with overrides
     env_path = repo_root / ".opencode" / ".env"
-    base_env = load_and_expand_env(env_path)
-    subprocess_env = build_devcontainer_env(base_env, docker_context)
+    try:
+        final_env = load_env_with_overrides(
+            base_env_path=env_path,
+            override_env_path=env_file,
+            cli_env_vars=env_vars,
+        )
+    except EnvError as e:
+        typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    except FileNotFoundError as e:
+        typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    except Exception as e:
+        typer.secho(f"Error loading environment: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
     
+    # Build subprocess environment
+    subprocess_env = build_devcontainer_env(final_env, docker_context)
+    
+    # Prepare command
     cmd = [
         "devcontainer",
         "up",
@@ -254,8 +305,14 @@ def launch(
         ".",
     ]
     
+    # Show what we're doing
     typer.echo(f"Launching devcontainer with DOCKER_CONTEXT={docker_context}...")
+    if env_file:
+        typer.echo(f"Using override file: {env_file}")
+    if env_vars:
+        typer.echo(f"Applied {len(env_vars)} command-line variable(s)")
     
+    # Execute
     result = subprocess.run(cmd, env=subprocess_env, cwd=repo_root)
     raise typer.Exit(result.returncode)
 
@@ -268,25 +325,49 @@ def exec(
         "--docker-context",
         help="Docker context to use for devcontainer",
     ),
+    env_file: Optional[Path] = typer.Option(
+        None,
+        "--env-file",
+        help="Path to environment override file (.env format)",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+    ),
+    env_vars: Optional[List[str]] = typer.Option(
+        None,
+        "-e",
+        "--env",
+        help="Set environment variable (KEY=VALUE). Can be used multiple times.",
+    ),
 ) -> None:
     """Execute a command inside the devcontainer.
     
     Validates that the current directory is a Git repository root with
     a properly initialized .opencode/ directory, then runs devcontainer exec.
     
-    DOCKER_CONTEXT is set to 'rootless' by default for the devcontainer
-    subprocess. Use --docker-context to override.
+    Environment variables are loaded with precedence (lowest to highest):
+    1. Base .opencode/.env file
+    2. Override file (--env-file)
+    3. Command-line variables (-e KEY=VALUE)
+    
+    Supports:
+    - Variable interpolation: $VAR, ${VAR}, ${VAR:-default}
+    - Export statements: export KEY=VALUE
+    - Comments: # comment
+    - Quoted values: KEY="value with spaces"
     
     The command to execute must follow '--'. For example:
         ocframework exec -- opencode debug config
         ocframework exec -- bash
+        ocframework exec --env-file prod.env -e KEY=value -- opencode debug config
     """
     import subprocess
     
     from opencode_framework.runtime import (
         validate_runtime_context,
-        load_and_expand_env,
+        load_env_with_overrides,
         build_devcontainer_env,
+        EnvError,
     )
     
     args = ctx.args
@@ -301,21 +382,41 @@ def exec(
     
     cwd = Path.cwd()
     
+    # Validate runtime context
     valid, error = validate_runtime_context(cwd)
     if not valid:
         typer.secho(f"Error: {error}", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
     
+    # Get repo root
     from opencode_framework.preflight import get_repo_root
     repo_root = get_repo_root(cwd)
     if repo_root is None:
         typer.secho("Error: Could not determine repository root", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
     
+    # Load environment with overrides
     env_path = repo_root / ".opencode" / ".env"
-    base_env = load_and_expand_env(env_path)
-    subprocess_env = build_devcontainer_env(base_env, docker_context)
+    try:
+        final_env = load_env_with_overrides(
+            base_env_path=env_path,
+            override_env_path=env_file,
+            cli_env_vars=env_vars,
+        )
+    except EnvError as e:
+        typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    except FileNotFoundError as e:
+        typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    except Exception as e:
+        typer.secho(f"Error loading environment: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
     
+    # Build subprocess environment
+    subprocess_env = build_devcontainer_env(final_env, docker_context)
+    
+    # Prepare command
     cmd = [
         "devcontainer",
         "exec",
@@ -325,6 +426,7 @@ def exec(
         ".",
     ] + list(args)
     
+    # Execute
     result = subprocess.run(cmd, env=subprocess_env, cwd=repo_root)
     raise typer.Exit(result.returncode)
 
