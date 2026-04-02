@@ -1,6 +1,9 @@
 """CLI entrypoint for ocframework."""
 
+import shutil
+import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
 
@@ -13,6 +16,28 @@ from opencode_framework.config import (
     get_framework_validation_error,
     get_config_root,
     get_local_data_home,
+)
+from opencode_framework.preflight import (
+    run_preflight_checks,
+    opencode_directory_exists,
+    get_repo_root,
+)
+from opencode_framework.wizard import run_wizard
+from opencode_framework.generator import (
+    generate_opencode_directory,
+    backup_existing_opencode,
+    _get_launch_commands,
+)
+from opencode_framework.git_ops import (
+    setup_opencode_worktree,
+    remove_worktree,
+    is_worktree,
+)
+from opencode_framework.runtime import (
+    validate_runtime_context,
+    load_env_with_overrides,
+    build_devcontainer_env,
+    EnvError,
 )
 
 
@@ -112,11 +137,6 @@ def init(
     
     Creates a .opencode/ directory with configuration for the AI coding agent.
     """
-    from opencode_framework.preflight import run_preflight_checks, opencode_directory_exists
-    from opencode_framework.wizard import run_wizard
-    from opencode_framework.generator import generate_opencode_directory, backup_existing_opencode
-    from opencode_framework.git_ops import setup_opencode_worktree, remove_worktree, is_worktree
-    
     repo_path = Path.cwd()
     
     typer.echo("Running preflight checks...")
@@ -136,9 +156,6 @@ def init(
     if force and opencode_directory_exists(repo_path):
         typer.echo("Backing up existing .opencode/...")
         if is_worktree(opencode_dir):
-            from datetime import datetime
-            import shutil
-            
             timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
             backup_path = repo_path / f".opencode.backup-{timestamp}"
             
@@ -193,7 +210,6 @@ def init(
     typer.echo("Generating .opencode/ directory...")
     generate_opencode_directory(repo_path, wizard_result)
     
-    from opencode_framework.generator import _get_launch_commands
     commands = _get_launch_commands()
     
     typer.secho("Initialization complete!", fg=typer.colors.GREEN)
@@ -250,15 +266,6 @@ def launch(
         ocframework launch -e API_KEY=$HOME/.key -e DEBUG=true
         ocframework launch --env-file prod.env -e PORT=9000
     """
-    import subprocess
-    
-    from opencode_framework.runtime import (
-        validate_runtime_context,
-        load_env_with_overrides,
-        build_devcontainer_env,
-        EnvError,
-    )
-    
     cwd = Path.cwd()
     
     # Validate runtime context
@@ -268,7 +275,6 @@ def launch(
         raise typer.Exit(1)
     
     # Get repo root
-    from opencode_framework.preflight import get_repo_root
     repo_root = get_repo_root(cwd)
     if repo_root is None:
         typer.secho("Error: Could not determine repository root", fg=typer.colors.RED, err=True)
@@ -361,15 +367,6 @@ def exec(
         ocframework exec -- bash
         ocframework exec --env-file prod.env -e KEY=value -- opencode debug config
     """
-    import subprocess
-    
-    from opencode_framework.runtime import (
-        validate_runtime_context,
-        load_env_with_overrides,
-        build_devcontainer_env,
-        EnvError,
-    )
-    
     args = ctx.args
     if not args:
         typer.secho(
@@ -389,7 +386,6 @@ def exec(
         raise typer.Exit(1)
     
     # Get repo root
-    from opencode_framework.preflight import get_repo_root
     repo_root = get_repo_root(cwd)
     if repo_root is None:
         typer.secho("Error: Could not determine repository root", fg=typer.colors.RED, err=True)

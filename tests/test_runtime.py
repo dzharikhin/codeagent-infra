@@ -10,8 +10,7 @@ from opencode_framework.runtime import (
     load_env_with_overrides,
     build_devcontainer_env,
     parse_cli_env_vars,
-    apply_custom_interpolation,
-    _expand_with_defaults,
+    apply_combined_interpolation,
     EnvError,
     CircularReferenceError,
     InterpolationError,
@@ -444,56 +443,19 @@ class TestParseCliEnvVars:
             parse_cli_env_vars(["KEY-INVALID=value"])
 
 
-class TestExpandWithDefaults:
-    """Tests for ${VAR:-default} expansion."""
-
-    def test_no_expansion_needed(self):
-        """Should return unchanged if no custom syntax."""
-        result = _expand_with_defaults("simple value", {}, "KEY")
-        assert result == "simple value"
-
-    def test_default_expansion(self):
-        """Should use default when variable not set."""
-        result = _expand_with_defaults("${VAR:-default}", {}, "KEY")
-        assert result == "default"
-
-    def test_uses_actual_when_set(self):
-        """Should use actual value when set."""
-        result = _expand_with_defaults("${VAR:-default}", {"VAR": "actual"}, "KEY")
-        assert result == "actual"
-
-    def test_multiple_defaults(self):
-        """Should handle multiple default values."""
-        result = _expand_with_defaults(
-            "${A:-fallbackA}/${B:-fallbackB}",
-            {"A": "valueA"},
-            "KEY"
-        )
-        assert result == "valueA/fallbackB"
-
-    def test_self_reference_with_default(self):
-        """Should use default for self-references."""
-        result = _expand_with_defaults(
-            "${PATH:-/usr/bin}:/custom",
-            {"PATH": "/existing"},
-            "PATH"
-        )
-        assert result == "/usr/bin:/custom"
-
-
 class TestApplyCustomInterpolation:
     """Tests for custom interpolation with ${VAR:-default}."""
 
     def test_simple_interpolation(self):
         """Should interpolate simple ${VAR:-default}."""
         env = {"VAR": "hello", "RESULT": "${VAR:-default}"}
-        result = apply_custom_interpolation(env)
+        result = apply_combined_interpolation(env)
         assert result["RESULT"] == "hello"
 
     def test_uses_default_when_undefined(self):
         """Should use default for undefined variables."""
         env = {"RESULT": "${UNDEFINED:-fallback}"}
-        result = apply_custom_interpolation(env)
+        result = apply_combined_interpolation(env)
         assert result["RESULT"] == "fallback"
 
     def test_recursive_interpolation(self):
@@ -504,7 +466,7 @@ class TestApplyCustomInterpolation:
             "C": "${B:-default}c",
             "D": "${C:-default}d",
         }
-        result = apply_custom_interpolation(env)
+        result = apply_combined_interpolation(env)
         assert result == {
             "A": "a",
             "B": "ab",
@@ -557,7 +519,7 @@ class TestApplyCustomInterpolation:
     def test_undefined_becomes_empty_string(self):
         """Undefined variables should become empty string."""
         env = {"RESULT": "prefix_${UNDEFINED:-}_suffix"}
-        result = apply_custom_interpolation(env)
+        result = apply_combined_interpolation(env)
         assert result["RESULT"] == "prefix__suffix"
 
 
