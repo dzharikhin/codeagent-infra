@@ -9,7 +9,7 @@ services:
     tty: true
     stdin_open: true
     environment:
-      - OPENCODE_CONFIG=${OCF_REMOTE_FRAMEWORK_CONFIG_PATH}
+      - OPENCODE_CONFIG=${OCF_REMOTE_FRAMEWORK_CONFIG_PATH}/config.json
       - OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT=true
       - XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-/root/.config}
       - XDG_DATA_HOME=${XDG_DATA_HOME:-/root/.local/share}
@@ -25,7 +25,7 @@ services:
       - ${PWD}/.opencode/runtime_data/.local/share:${XDG_DATA_HOME:-/root/.local/share}
       - ${PWD}/.opencode/runtime_data/.local/state:${XDG_STATE_HOME:-/root/.local/state}
       - ${OCF_LOCAL_GLOBAL_AUTH_PATH:-/dev/null}:${XDG_DATA_HOME:-/root/.local/share}/opencode/auth.json:ro
-      - ${OCF_LOCAL_FRAMEWORK_PATH:-/dev/null}/framework-config/config.json:${OCF_REMOTE_FRAMEWORK_CONFIG_PATH:-/tmp/unused}:ro
+      - ${OCF_LOCAL_FRAMEWORK_PATH}/framework-config:${OCF_REMOTE_FRAMEWORK_CONFIG_PATH}:ro
       - ${OCF_LOCAL_GLOBAL_CONFIG_PATH:-/dev/null}:${XDG_CONFIG_HOME:-/root/.config}/opencode:ro
     entrypoint: ["/bin/bash", "-i", "-c", "exec opencode \"$@\"", "--"]
     command: [""]
