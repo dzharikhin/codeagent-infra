@@ -231,12 +231,18 @@ def _parse_image_id_from_build_output(output: str) -> Optional[str]:
             continue
         try:
             data = json.loads(line)
-            if "imageName" in data and isinstance(data["imageName"], list) and data["imageName"]:
-                return data["imageName"][0]
-            if "imageId" in data:
-                return data["imageId"]
-            if "image" in data and "id" in data.get("image", {}):
-                return data["image"]["id"]
+            if "outcome" in data and "containerId" in data:
+                container_id = data["containerId"]
+                try:
+                    output = subprocess.run(
+                        ["docker", "inspect", "--format={{.Config.Image}}", container_id],
+                        capture_output=True,
+                        text=True
+                    )
+                finally:
+                    subprocess.run(["docker", "rm", "-f", container_id])
+                return output.stdout.strip()
+
         except json.JSONDecodeError:
             continue
     
@@ -265,13 +271,10 @@ def _extract_container_name(compose_path: Path) -> Optional[str]:
 
 
 def _build_image(opencode_dir: Path, repo_root: Path, subprocess_env: dict) -> str:
-    """Build devcontainer image and return image ID.
-    
-    Streams build output in real-time to the terminal while capturing it
-    for image ID parsing.
-    """
+    # devcontainer build does not call initializeCommand https://github.com/devcontainers/cli/issues/190
     build_cmd = [
-        "devcontainer", "build",
+        "devcontainer", "up",
+        "--remove-existing-container",
         "--config", str(opencode_dir / "devcontainer.json"),
         "--workspace-folder", str(repo_root),
     ]

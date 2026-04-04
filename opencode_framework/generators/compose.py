@@ -11,11 +11,9 @@ class ComposeGenerator(FileGenerator):
         """Generate docker-compose.yaml from template.
         
         The template uses environment variable interpolation:
-        - OCF_IMAGE_ID: Set at launch time after build
         - PWD: Set at launch time to repo root
         - Other vars: Loaded from .opencode/.env
         """
         compose_path = ctx.opencode_dir / "docker-compose.yaml"
-        container_name = f"ocf-{ctx.repo_root.name}"
-        compose_content = TemplateHandler.render_compose_template(container_name)
+        compose_content = TemplateHandler.render_compose_template(ctx.repo_root.name)
         compose_path.write_text(compose_content)

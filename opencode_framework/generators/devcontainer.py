@@ -95,8 +95,8 @@ class DevcontainerGenerator(FileGenerator):
         
         if "python" in optional_features:
             features["ghcr.io/devcontainers/features/python:1"] = {
-                "version": "${localEnv:PYTHON_VERSION:3.12}",
-                "installPoetry": True,
+                "version": "${localEnv:PYTHON_VERSION:3.14}",
+                "toolsToInstall": "poetry,virtualenv,pipenv,black,pytest",
             }
         
         if "nodejs" in optional_features:

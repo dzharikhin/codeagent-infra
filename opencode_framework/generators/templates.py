@@ -126,11 +126,11 @@ class TemplateHandler:
         return cls.render_template(template, replacements)
     
     @classmethod
-    def render_compose_template(cls, container_name: str) -> str:
+    def render_compose_template(cls, repo_root_name: str) -> str:
         """Render docker-compose template with container name.
         
         Args:
-            container_name: Name for the container
+            repo_root_name: Name of the repo
             
         Returns:
             Rendered docker-compose content
@@ -138,7 +138,7 @@ class TemplateHandler:
         template = cls.load_compose_template()
         
         replacements = {
-            "{{OCF_CONTAINER_NAME}}": container_name,
+            "{{OCF_REPO_ROOT_NAME}}": repo_root_name,
         }
         
         return cls.render_template(template, replacements)

@@ -1,18 +1,22 @@
 {
   "$schema": "https://raw.githubusercontent.com/devcontainers/spec/main/schemas/devContainer.schema.json",
   "name": "OpenCode - ${localWorkspaceFolderBasename}",
-  "image": "${localEnv:DEVCONTAINER_BASE_IMAGE:mcr.microsoft.com/devcontainers/base}:${localEnv:DEVCONTAINER_BASE_IMAGE_TAG:ubuntu-24.04}",
+  "build": {
+    "dockerfile": "runtime_data/Dockerfile",
+    "context": "."
+  },
+  "initializeCommand": "echo -e \"# syntax=docker/dockerfile:1\\nFROM ${localEnv:DEVCONTAINER_BASE_IMAGE:mcr.microsoft.com/devcontainers/base}:${localEnv:DEVCONTAINER_BASE_IMAGE_TAG:ubuntu-24.04}\\nARG _DEV_CONTAINERS_IMAGE_USER\\nRUN cat /etc/passwd\\nRUN ls -la /root\\nRUN <<EOF\\n    CURRENT_HOME=\\$(getent passwd \\\"\\${_DEV_CONTAINERS_IMAGE_USER}\\\" | cut -d: -f6)\\n    CURRENT_GROUP=\\$(getent passwd \\\"\\${_DEV_CONTAINERS_IMAGE_USER}\\\" | cut -d: -f4 | xargs getent group | cut -d: -f1)\\n    TARGET_HOME=\\\"/home/\\${_DEV_CONTAINERS_IMAGE_USER}\\\"\\n    if [ \\\"\\${CURRENT_HOME}\\\" != \\\"\\${TARGET_HOME}\\\" ]; then\\n        echo \\\"Current home is \\${CURRENT_HOME}. Updating to \\${TARGET_HOME}...\\\"\\n        mv \\\"\\${CURRENT_HOME}\\\" \\\"\\${TARGET_HOME}\\\"\\n        sed -i \\\"s|:\\${CURRENT_HOME}:|:\\${TARGET_HOME}:|\\\" /etc/passwd\\n    else\\n        echo \\\"Home directory is already set to \\$TARGET_HOME.\\\"\\n    fi\\nEOF\" > .opencode/runtime_data/Dockerfile",
   "features": {
     "ghcr.io/devcontainers/features/common-utils:2": {
       "installZsh": false,
       "configureZshAsDefaultShell": false
     },
     "ghcr.io/devcontainers/features/git:1": {},
-    "ghcr.io/stu-bell/devcontainer-features/open-code:0": {
-      "open_code_version": "${localEnv:OPENCODE_VERSION:latest}"
+    "ghcr.io/jsburckhardt/devcontainer-features/opencode:1.1.1": {
+      "version": "${localEnv:OPENCODE_VERSION:latest}"
     }
   },
-  "workspaceFolder": "/workspace",
+  "workspaceFolder": "/${localWorkspaceFolderBasename}",
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
   "customizations": {
     "vscode": {

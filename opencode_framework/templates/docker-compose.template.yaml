@@ -3,29 +3,30 @@
 
 services:
   opencode:
-    container_name: {{OCF_CONTAINER_NAME}}
+    container_name: ocf_{{OCF_REPO_ROOT_NAME}}
     image: "${OCF_IMAGE_ID}"
-    working_dir: /workspace
+    working_dir: /{{OCF_REPO_ROOT_NAME}}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     tty: true
     stdin_open: true
     environment:
       - OPENCODE_CONFIG=${OCF_REMOTE_FRAMEWORK_CONFIG_PATH}/config.json
       - OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT=true
-      - XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-/root/.config}
-      - XDG_DATA_HOME=${XDG_DATA_HOME:-/root/.local/share}
-      - XDG_STATE_HOME=${XDG_STATE_HOME:-/root/.local/state}
-      - XDG_CACHE_HOME=${XDG_CACHE_HOME:-/root/.cache}
+      - XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-/home/${REMOTE_USER}/.config}
+      - XDG_DATA_HOME=${XDG_DATA_HOME:-/home/${REMOTE_USER}/.local/share}
+      - XDG_STATE_HOME=${XDG_STATE_HOME:-/${REMOTE_USER}/.local/state}
+      - XDG_CACHE_HOME=${XDG_CACHE_HOME:-/${REMOTE_USER}/.cache}
       - OCF_MAIN_MODEL=${OCF_MAIN_MODEL:-}
       - OCF_BUILD_MODEL=${OCF_BUILD_MODEL:-}
       - OCF_SMALL_MODEL=${OCF_SMALL_MODEL:-}
       - EDITOR=${EDITOR:-}
     volumes:
-      - ${PWD}:/workspace
-      - ${PWD}/.opencode/runtime_data/.cache:${XDG_CACHE_HOME:-/root/.cache}
-      - ${PWD}/.opencode/runtime_data/.local/share:${XDG_DATA_HOME:-/root/.local/share}
-      - ${PWD}/.opencode/runtime_data/.local/state:${XDG_STATE_HOME:-/root/.local/state}
-      - ${OCF_LOCAL_GLOBAL_AUTH_PATH:-/dev/null}:${XDG_DATA_HOME:-/root/.local/share}/opencode/auth.json:ro
+      - ${PWD}:/{{OCF_REPO_ROOT_NAME}}
+      - ${PWD}/.opencode/runtime_data:${HOME:-/home/${REMOTE_USER}}
+      - ${OCF_LOCAL_GLOBAL_AUTH_PATH:-/dev/null}:${XDG_DATA_HOME:-/home/${REMOTE_USER}/.local/share}/opencode/auth.json:ro
+      - ${OCF_LOCAL_GLOBAL_CONFIG_PATH:-/dev/null}:${XDG_CONFIG_HOME:-/home/${REMOTE_USER}/.config}/opencode:ro
       - ${OCF_LOCAL_FRAMEWORK_PATH}/framework-config:${OCF_REMOTE_FRAMEWORK_CONFIG_PATH}:ro
-      - ${OCF_LOCAL_GLOBAL_CONFIG_PATH:-/dev/null}:${XDG_CONFIG_HOME:-/root/.config}/opencode:ro
-    entrypoint: ["/bin/bash", "-i", "-c", "exec opencode \"$@\"", "--"]
-    command: [""]
+      - ${OCF_LOCAL_FRAMEWORK_PATH}/framework-nuts-and-bolts:/{{OCF_REPO_ROOT_NAME}}/.opencode/framework-nuts-and-bolts:ro
+    entrypoint: ["opencode"]
+    command: ""
