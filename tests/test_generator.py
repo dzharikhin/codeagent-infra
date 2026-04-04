@@ -32,11 +32,9 @@ def _make_generation_context(tmp_path: Path, **kwargs):
         "repo_root": tmp_path,
         "opencode_dir": tmp_path / ".opencode",
         "branch_name": "codeagent-test",
-        "devcontainer_strategy": "from_scratch",
         "optional_features": [],
         "editor_choice": "none",
         "global_settings": _make_global_settings(),
-        "existing_devcontainer": None,
     }
     defaults.update(kwargs)
     return GenerationContext(**defaults)
@@ -54,10 +52,8 @@ class TestGenerateOpencodeDirectory:
 
         wizard_result = WizardResult(
             branch_name="codeagent-test",
-            devcontainer_strategy="from_scratch",
             optional_features=[],
             editor_choice="none",
-            existing_devcontainer=None,
             should_add_to_gitignore=True,
         )
 
@@ -79,10 +75,8 @@ class TestGenerateOpencodeDirectory:
 
         wizard_result = WizardResult(
             branch_name="codeagent-test",
-            devcontainer_strategy="from_scratch",
             optional_features=[],
             editor_choice="none",
-            existing_devcontainer=None,
             should_add_to_gitignore=True,
         )
 
@@ -160,45 +154,6 @@ class TestDevcontainerGenerator:
         assert "features" in dc_content
         assert "ghcr.io/devcontainers/features/git:1" in dc_content["features"]
 
-    def test_extended_preserves_existing_image(self, tmp_path: Path):
-        """Extended devcontainer should inherit image from existing."""
-        (tmp_path / ".opencode").mkdir()
-        existing = {"image": "custom-image:latest"}
-        ctx = _make_generation_context(
-            tmp_path,
-            devcontainer_strategy="extend",
-            existing_devcontainer=existing
-        )
-        
-        gen = DevcontainerGenerator()
-        gen.generate(ctx)
-        
-        dc_content = json.loads((tmp_path / ".opencode" / "devcontainer.json").read_text())
-        assert dc_content["image"] == "custom-image:latest"
-
-    def test_extended_merges_features(self, tmp_path: Path):
-        """Extended devcontainer should merge features."""
-        (tmp_path / ".opencode").mkdir()
-        existing = {
-            "image": "ubuntu:22.04",
-            "features": {
-                "ghcr.io/devcontainers/features/python:1": {"version": "3.11"},
-            },
-        }
-        ctx = _make_generation_context(
-            tmp_path,
-            devcontainer_strategy="extend",
-            optional_features=["nodejs"],
-            existing_devcontainer=existing
-        )
-        
-        gen = DevcontainerGenerator()
-        gen.generate(ctx)
-        
-        dc_content = json.loads((tmp_path / ".opencode" / "devcontainer.json").read_text())
-        assert "ghcr.io/devcontainers/features/python:1" in dc_content["features"]
-        assert "ghcr.io/devcontainers/features/node:1" in dc_content["features"]
-
     def test_remote_user_uses_env_var(self, tmp_path: Path):
         """Devcontainer should use REMOTE_USER env var."""
         (tmp_path / ".opencode").mkdir()
@@ -223,27 +178,11 @@ class TestOpenCodeFeature:
         gen.generate(ctx)
         
         dc_content = json.loads((tmp_path / ".opencode" / "devcontainer.json").read_text())
-        assert "ghcr.io/stu-bell/devcontainer-features/open-code:0" in dc_content["features"]
+        assert "ghcr.io/jsburckhardt/devcontainer-features/opencode:1.1.1" in dc_content["features"]
         
-        feature = dc_content["features"]["ghcr.io/stu-bell/devcontainer-features/open-code:0"]
-        assert "open_code_version" in feature
-        assert "OPENCODE_VERSION" in feature["open_code_version"]
-
-    def test_opencode_feature_in_extend(self, tmp_path: Path):
-        """Extended devcontainer should include OpenCode feature."""
-        (tmp_path / ".opencode").mkdir()
-        existing = {"image": "ubuntu:22.04"}
-        ctx = _make_generation_context(
-            tmp_path,
-            devcontainer_strategy="extend",
-            existing_devcontainer=existing
-        )
-        
-        gen = DevcontainerGenerator()
-        gen.generate(ctx)
-        
-        dc_content = json.loads((tmp_path / ".opencode" / "devcontainer.json").read_text())
-        assert "ghcr.io/stu-bell/devcontainer-features/open-code:0" in dc_content["features"]
+        feature = dc_content["features"]["ghcr.io/jsburckhardt/devcontainer-features/opencode:1.1.1"]
+        assert "version" in feature
+        assert "OPENCODE_VERSION" in feature["version"]
 
 
 class TestEnvFileGeneration:
@@ -378,10 +317,8 @@ class TestRuntimeDataStructure:
 
         wizard_result = WizardResult(
             branch_name="codeagent-test",
-            devcontainer_strategy="from_scratch",
             optional_features=[],
             editor_choice="none",
-            existing_devcontainer=None,
             should_add_to_gitignore=True,
         )
 
@@ -404,10 +341,8 @@ class TestRuntimeDataStructure:
 
         wizard_result = WizardResult(
             branch_name="codeagent-test",
-            devcontainer_strategy="from_scratch",
             optional_features=[],
             editor_choice="none",
-            existing_devcontainer=None,
             should_add_to_gitignore=True,
         )
 
@@ -429,10 +364,8 @@ class TestRuntimeDataStructure:
 
         wizard_result = WizardResult(
             branch_name="codeagent-test",
-            devcontainer_strategy="from_scratch",
             optional_features=[],
             editor_choice="none",
-            existing_devcontainer=None,
             should_add_to_gitignore=True,
         )
 

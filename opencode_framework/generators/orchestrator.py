@@ -37,19 +37,13 @@ class GenerationOrchestrator:
         if not opencode_dir.exists():
             opencode_dir.mkdir(parents=True, exist_ok=True)
         
-        existing_dc = None
-        if wizard_result.existing_devcontainer:
-            existing_dc = wizard_result.existing_devcontainer.content
-        
         ctx = GenerationContext(
             repo_root=repo_root,
             opencode_dir=opencode_dir,
             branch_name=wizard_result.branch_name,
-            devcontainer_strategy=wizard_result.devcontainer_strategy,
             optional_features=wizard_result.optional_features,
             editor_choice=wizard_result.editor_choice,
             global_settings=discover_global_settings(),
-            existing_devcontainer=existing_dc,
         )
         
         # Generate all files in order

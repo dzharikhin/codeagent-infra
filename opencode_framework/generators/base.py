@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 from opencode_framework.config import GlobalSettings
 
@@ -15,11 +15,9 @@ class GenerationContext:
     repo_root: Path
     opencode_dir: Path
     branch_name: str
-    devcontainer_strategy: str
     optional_features: List[str]
     editor_choice: str
     global_settings: GlobalSettings
-    existing_devcontainer: Optional[dict] = None
 
 
 class FileGenerator(ABC):

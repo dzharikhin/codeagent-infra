@@ -2,14 +2,13 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 import getpass
 
 import click
 import typer
 
 from opencode_framework.preflight import PreflightResult, check_docker_rootless_context
-from opencode_framework.devcontainer import detect_devcontainer, DevcontainerInfo
 
 
 @dataclass
@@ -17,10 +16,8 @@ class WizardResult:
     """Collected wizard decisions."""
     
     branch_name: str
-    devcontainer_strategy: str  # "extend", "from_scratch", or "skip"
     optional_features: List[str]
     editor_choice: str  # "none", "vi", or "nano"
-    existing_devcontainer: Optional[DevcontainerInfo]
     should_add_to_gitignore: bool
     create_global_config: bool = False
 
@@ -73,30 +70,6 @@ def run_wizard(repo_root: Path, preflight_result: PreflightResult) -> WizardResu
         type=str,
     )
     
-    existing_devcontainer = detect_devcontainer(repo_root)
-    
-    if existing_devcontainer:
-        typer.echo(f"\nFound existing devcontainer at: {existing_devcontainer.path}")
-        
-        if existing_devcontainer.compatible:
-            typer.echo("The existing devcontainer appears compatible.")
-            strategy = typer.prompt(
-                "Devcontainer strategy",
-                type=click.Choice(["extend", "from_scratch"]),
-                default="extend",
-            )
-        else:
-            typer.secho(
-                f"\nThe existing devcontainer is incompatible: {existing_devcontainer.incompatibility_reason}",
-                fg=typer.colors.RED,
-            )
-            typer.echo("\nRecommended action: create a new devcontainer from scratch.")
-            typer.echo("To proceed, move or remove the existing devcontainer and re-run init.")
-            raise typer.Exit(code=1)
-    else:
-        typer.echo("\nNo existing devcontainer found.")
-        strategy = "from_scratch"
-    
     typer.echo("\nOptional features:")
     available_features = [
         ("docker", "Docker access (DinD with rootless context)"),
@@ -137,10 +110,8 @@ def run_wizard(repo_root: Path, preflight_result: PreflightResult) -> WizardResu
     
     return WizardResult(
         branch_name=branch_name,
-        devcontainer_strategy=strategy,
         optional_features=optional_features,
         editor_choice=editor_choice,
-        existing_devcontainer=existing_devcontainer,
         should_add_to_gitignore=True,
         create_global_config=create_global_config,
     )

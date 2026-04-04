@@ -12,10 +12,7 @@ class DevcontainerGenerator(FileGenerator):
     
     def generate(self, ctx: GenerationContext) -> None:
         """Generate devcontainer configuration (build-only)."""
-        if ctx.devcontainer_strategy == "extend" and ctx.existing_devcontainer:
-            devcontainer = self._generate_extended(ctx)
-        else:
-            devcontainer = self._generate_scratch(ctx)
+        devcontainer = self._generate_scratch(ctx)
         
         dc_path = ctx.opencode_dir / "devcontainer.json"
         dc_path.write_text(json.dumps(devcontainer, indent=2) + "\n")
@@ -34,46 +31,6 @@ class DevcontainerGenerator(FileGenerator):
         
         devcontainer = dict(template)
         devcontainer["features"] = features
-        
-        return devcontainer
-    
-    def _generate_extended(self, ctx: GenerationContext) -> dict:
-        """Generate extended devcontainer config using additive merge.
-        
-        Preserves all existing project-specific config.
-        Adds only OpenCode-managed additions from template (build features only).
-        """
-        existing = ctx.existing_devcontainer or {}
-        template = DevcontainerGenerator._load_template()
-        
-        features = dict(existing.get("features", {}))
-        template_features = template.get("features", {})
-        
-        for feature_name, feature_config in template_features.items():
-            if feature_name not in features:
-                features[feature_name] = feature_config
-        
-        self._add_optional_features(features, ctx.optional_features, ctx.editor_choice)
-        
-        devcontainer = {
-            "name": f"OpenCode - {ctx.repo_root.name}",
-            "features": features,
-            "workspaceFolder": existing.get("workspaceFolder", template.get("workspaceFolder")),
-            "workspaceMount": existing.get("workspaceMount", template.get("workspaceMount")),
-            "customizations": existing.get("customizations", template.get("customizations")),
-            "containerUser": existing.get("containerUser", template.get("containerUser")),
-            "remoteUser": existing.get("remoteUser", template.get("remoteUser")),
-        }
-        
-        if "image" in existing:
-            devcontainer["image"] = existing["image"]
-        elif "build" in existing:
-            devcontainer["build"] = existing["build"]
-        else:
-            devcontainer["image"] = template.get("image")
-        
-        if "$schema" in template:
-            devcontainer["$schema"] = template["$schema"]
         
         return devcontainer
     

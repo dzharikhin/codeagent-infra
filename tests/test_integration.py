@@ -195,7 +195,6 @@ class TestGeneratedConfig:
             repo_root=tmp_path,
             opencode_dir=tmp_path / ".opencode",
             branch_name="test-branch",
-            devcontainer_strategy="from_scratch",
             optional_features=["python"],
             editor_choice="none",
             global_settings=GlobalSettings(
@@ -213,10 +212,9 @@ class TestGeneratedConfig:
         result = json.loads((tmp_path / ".opencode" / "devcontainer.json").read_text())
 
         assert "name" in result
-        assert "image" in result
         assert "features" in result
         assert "workspaceFolder" in result
-        assert result["workspaceFolder"] == "/workspace"
+        assert result["workspaceFolder"] == "/${localWorkspaceFolderBasename}"
 
     def test_devcontainer_no_remote_env(self, tmp_path: Path):
         """Test that generated devcontainer does NOT have remoteEnv (moved to compose)."""
@@ -229,7 +227,6 @@ class TestGeneratedConfig:
             repo_root=tmp_path,
             opencode_dir=tmp_path / ".opencode",
             branch_name="test-branch",
-            devcontainer_strategy="from_scratch",
             optional_features=[],
             editor_choice="none",
             global_settings=GlobalSettings(
@@ -259,7 +256,6 @@ class TestGeneratedConfig:
             repo_root=tmp_path,
             opencode_dir=tmp_path / ".opencode",
             branch_name="test-branch",
-            devcontainer_strategy="from_scratch",
             optional_features=[],
             editor_choice="vi",
             global_settings=GlobalSettings(
@@ -289,7 +285,6 @@ class TestGeneratedConfig:
             repo_root=tmp_path,
             opencode_dir=tmp_path / ".opencode",
             branch_name="test-branch",
-            devcontainer_strategy="from_scratch",
             optional_features=[],
             editor_choice="none",
             global_settings=GlobalSettings(
@@ -306,4 +301,4 @@ class TestGeneratedConfig:
         gen.generate(ctx)
         result = json.loads((tmp_path / ".opencode" / "devcontainer.json").read_text())
 
-        assert "ghcr.io/stu-bell/devcontainer-features/open-code:0" in result["features"]
+        assert "ghcr.io/jsburckhardt/devcontainer-features/opencode:1.1.1" in result["features"]
