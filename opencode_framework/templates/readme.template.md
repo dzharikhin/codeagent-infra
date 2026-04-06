@@ -33,16 +33,12 @@ Find container name with: `docker ps | grep ocf-`
 
 ## How It Works
 
-1. `devcontainer build` creates the container image with features
-2. `docker compose run` starts OpenCode with resolved environment and mounts
-3. Each `exec` creates a fresh container with the same configuration
-
 ## Rebuilding
 
 To rebuild the image (e.g., after changing features):
 
 ```sh
-ocframework launch --rebuild
+{{LAUNCH_COMMAND}} --rebuild
 ```
 
 ## Version Control

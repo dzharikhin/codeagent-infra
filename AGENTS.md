@@ -271,6 +271,26 @@ Fails unless:
 - Repository is not bare
 - No staged changes in Git index
 
+### Architecture
+
+The framework separates build and runtime concerns:
+
+1. **DevContainer (Build)** - `devcontainer.json`
+   - Defines container image via features
+   - Installs tools (Python, Node.js, Docker, etc.)
+   - Build output: cached Docker image
+
+2. **Docker Compose (Runtime)** - `docker-compose.yaml`
+   - Environment variable injection
+   - Bind mounts (project source, config)
+   - Named volumes (persistent dependencies)
+   - Runtime configuration (user, command, etc.)
+
+This hybrid approach enables:
+- Environment propagation from host (DevContainer CLI lacks this)
+- Fast container starts without rebuilding
+- Persistent dependency caches via named volumes
+
 ### Git Worktree Model
 
 - `.opencode/` is a nested linked Git worktree on a separate branch

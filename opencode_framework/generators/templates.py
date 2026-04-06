@@ -2,7 +2,7 @@
 
 import json
 from importlib.resources import files
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 
 class TemplateHandler:
@@ -136,19 +136,37 @@ class TemplateHandler:
         return cls.render_template(template, replacements)
     
     @classmethod
-    def render_compose_template(cls, repo_root_name: str) -> str:
+    def render_compose_template(
+        cls, 
+        repo_root_name: str, 
+        optional_features: Optional[List[str]] = None
+    ) -> str:
         """Render docker-compose template with container name.
         
         Args:
             repo_root_name: Name of the repo
+            optional_features: List of enabled optional features (e.g., ["python"])
             
         Returns:
             Rendered docker-compose content
         """
         template = cls.load_compose_template()
         
+        additional_volume_mounts = ""
+        top_level_volumes_section = ""
+        
+        if optional_features and "python" in optional_features:
+            additional_volume_mounts = (
+                f"\n      - venv-{repo_root_name}:/{repo_root_name}/.venv"
+            )
+            top_level_volumes_section = (
+                f"\nvolumes:\n  venv-{repo_root_name}:\n"
+            )
+        
         replacements = {
             "{{OCF_REPO_ROOT_NAME}}": repo_root_name,
+            "{{ADDITIONAL_VOLUME_MOUNTS}}": additional_volume_mounts,
+            "{{TOP_LEVEL_VOLUMES_SECTION}}": top_level_volumes_section,
         }
         
         return cls.render_template(template, replacements)

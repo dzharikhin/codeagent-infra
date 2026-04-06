@@ -8,6 +8,7 @@ from opencode_framework.generators import GenerationOrchestrator, GenerationCont
 from opencode_framework.generators.devcontainer import DevcontainerGenerator
 from opencode_framework.generators.config_files import ConfigFilesGenerator
 from opencode_framework.generators.documentation import DocumentationGenerator
+from opencode_framework.generators.compose import ComposeGenerator
 from opencode_framework.wizard import WizardResult
 from opencode_framework.config import GlobalSettings
 
@@ -390,3 +391,62 @@ class TestReadmeFrameworkUrl:
         
         readme_content = (tmp_path / ".opencode" / "README.md").read_text()
         assert "https://github.com/dzharikhin/codeagent-infra" in readme_content
+
+
+class TestComposeGenerator:
+    """Tests for docker-compose generation."""
+
+    def test_python_feature_adds_venv_volume(self, tmp_path: Path):
+        """Python feature should add venv named volume to compose."""
+        repo_root = tmp_path / "myproject"
+        repo_root.mkdir()
+        opencode_dir = repo_root / ".opencode"
+        opencode_dir.mkdir()
+        
+        ctx = _make_generation_context(
+            repo_root,
+            optional_features=["python"],
+        )
+        
+        gen = ComposeGenerator()
+        gen.generate(ctx)
+        
+        compose_content = (opencode_dir / "docker-compose.yaml").read_text()
+        assert "venv-myproject" in compose_content
+        assert "volumes:" in compose_content
+        assert "/myproject/.venv" in compose_content
+
+    def test_no_python_feature_no_venv_volume(self, tmp_path: Path):
+        """Without Python feature, no venv volume should be added."""
+        repo_root = tmp_path / "myproject"
+        repo_root.mkdir()
+        opencode_dir = repo_root / ".opencode"
+        opencode_dir.mkdir()
+        
+        ctx = _make_generation_context(
+            repo_root,
+            optional_features=["nodejs"],
+        )
+        
+        gen = ComposeGenerator()
+        gen.generate(ctx)
+        
+        compose_content = (opencode_dir / "docker-compose.yaml").read_text()
+        assert "venv-" not in compose_content
+
+    def test_compose_has_required_volumes(self, tmp_path: Path):
+        """Generated compose should have required volume mounts."""
+        repo_root = tmp_path / "myproject"
+        repo_root.mkdir()
+        opencode_dir = repo_root / ".opencode"
+        opencode_dir.mkdir()
+        
+        ctx = _make_generation_context(repo_root)
+        
+        gen = ComposeGenerator()
+        gen.generate(ctx)
+        
+        compose_content = (opencode_dir / "docker-compose.yaml").read_text()
+        assert "runtime_data" in compose_content
+        assert "framework-config" in compose_content
+        assert "framework-nuts-and-bolts" in compose_content
