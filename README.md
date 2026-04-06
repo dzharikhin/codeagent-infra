@@ -2,6 +2,14 @@
 
 Framework for attaching AI coding agents to existing projects safely.
 
+## TL:DR
+1. git clone <framework-repo-url> /path/to/opencode-framework
+2. pipx install -e /path/to/opencode-framework
+3. switch to the target project
+4. ocframework init
+5. ocframework launch
+6. profit. now you can start tweak the framework to the target project
+
 See [vision.md](vision.md) for project goals, scope, and architecture.
 
 ## Requirements

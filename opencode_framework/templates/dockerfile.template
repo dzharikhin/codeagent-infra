@@ -1,0 +1,17 @@
+# syntax=docker/dockerfile:1
+FROM ${localEnv:DEVCONTAINER_BASE_IMAGE:mcr.microsoft.com/devcontainers/base}:${localEnv:DEVCONTAINER_BASE_IMAGE_TAG:ubuntu-24.04}
+ARG _DEV_CONTAINERS_IMAGE_USER
+RUN cat /etc/passwd
+RUN ls -la /root
+RUN <<EOF
+    CURRENT_HOME=$(getent passwd "${_DEV_CONTAINERS_IMAGE_USER}" | cut -d: -f6)
+    CURRENT_GROUP=$(getent passwd "${_DEV_CONTAINERS_IMAGE_USER}" | cut -d: -f4 | xargs getent group | cut -d: -f1)
+    TARGET_HOME="/home/${_DEV_CONTAINERS_IMAGE_USER}"
+    if [ "${CURRENT_HOME}" != "${TARGET_HOME}" ]; then
+        echo "Current home is ${CURRENT_HOME}. Updating to ${TARGET_HOME}..."
+        mv "${CURRENT_HOME}" "${TARGET_HOME}"
+        sed -i "s|:${CURRENT_HOME}:|:${TARGET_HOME}:|" /etc/passwd
+    else
+        echo "Home directory is already set to $TARGET_HOME."
+    fi
+EOF

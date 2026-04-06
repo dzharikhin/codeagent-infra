@@ -1,6 +1,7 @@
 """Devcontainer file generation."""
 
 import json
+import re
 from typing import List
 
 from .base import FileGenerator, GenerationContext
@@ -9,6 +10,8 @@ from .templates import TemplateHandler
 
 class DevcontainerGenerator(FileGenerator):
     """Generates .opencode/devcontainer.json for build configuration."""
+    
+    PLACEHOLDER_DOCKERFILE_INITIALIZER = "{{DOCKERFILE_INITIALIZER}}"
     
     def generate(self, ctx: GenerationContext) -> None:
         """Generate devcontainer configuration (build-only)."""
@@ -22,6 +25,42 @@ class DevcontainerGenerator(FileGenerator):
         """Load devcontainer template from package resources."""
         return TemplateHandler.load_devcontainer_template()
     
+    @staticmethod
+    def _escape_for_echo_e(content: str) -> str:
+        """Escape content for use in shell echo -e command.
+        
+        Escapes:
+        - Backslashes: \ -> \\
+        - Double quotes: " -> \"
+        - Dollar signs: $ -> \$ (except devcontainer variables)
+        
+        Devcontainer variables (${localEnv:...}, ${localWorkspaceFolderBasename})
+        are preserved without escaping.
+        """
+        result = content
+        result = result.replace("\\", "\\\\")
+        result = result.replace('"', '\\"')
+        result = re.sub(
+            r'\$(?!\{localEnv:)(?!\{localWorkspaceFolderBasename)',
+            r'\\$',
+            result
+        )
+        return result
+    
+    @staticmethod
+    def _build_dockerfile_initializer() -> str:
+        """Build the initializeCommand for Dockerfile generation.
+        
+        Loads the dockerfile template and formats it as an echo -e command
+        that writes the Dockerfile to .opencode/runtime_data/Dockerfile.
+        
+        Returns:
+            Shell command string for initializeCommand
+        """
+        dockerfile_content = TemplateHandler.load_dockerfile_template()
+        escaped_content = DevcontainerGenerator._escape_for_echo_e(dockerfile_content)
+        return f'echo -e "{escaped_content}" > .opencode/runtime_data/Dockerfile'
+    
     def _generate_scratch(self, ctx: GenerationContext) -> dict:
         """Generate devcontainer config from template (build-only)."""
         template = DevcontainerGenerator._load_template()
@@ -31,6 +70,9 @@ class DevcontainerGenerator(FileGenerator):
         
         devcontainer = dict(template)
         devcontainer["features"] = features
+        
+        if self.PLACEHOLDER_DOCKERFILE_INITIALIZER in devcontainer.get("initializeCommand", ""):
+            devcontainer["initializeCommand"] = self._build_dockerfile_initializer()
         
         return devcontainer
     

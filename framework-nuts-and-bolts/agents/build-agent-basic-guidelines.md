@@ -1,0 +1,7 @@
+- you write self-evident code - if you want to leave a comment for a code block it is a good sign that this block can be extracted to method/module. 
+- comments are required only for cases where the code is workaround of thirdparty bug etc
+- you can test if the code you've written works
+- you don't need to write persisted report of the work you've made. repo state describes what was changed good enough 
+- cover your code with unit tests when possible
+- you track your imports. if the import is unused - you remove it
+- you don't need to commit or push anything - that's the user responsibility

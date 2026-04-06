@@ -10,6 +10,7 @@ class TemplateHandler:
     
     # Template filenames (without extension)
     DEVCONTAINER_TEMPLATE = "devcontainer.template.json"
+    DOCKERFILE_TEMPLATE = "dockerfile.template"
     ENV_TEMPLATE = "env.template"
     COMPOSE_TEMPLATE = "docker-compose.template.yaml"
     README_TEMPLATE = "readme.template.md"
@@ -70,6 +71,15 @@ class TemplateHandler:
             Parsed devcontainer.json template
         """
         return cls.load_json_template(cls.DEVCONTAINER_TEMPLATE)
+    
+    @classmethod
+    def load_dockerfile_template(cls) -> str:
+        """Load Dockerfile template.
+        
+        Returns:
+            Dockerfile template content
+        """
+        return cls.load_text_template(cls.DOCKERFILE_TEMPLATE)
     
     @classmethod
     def load_env_template(cls) -> str:
