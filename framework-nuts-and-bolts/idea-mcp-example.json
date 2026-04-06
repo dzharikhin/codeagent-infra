@@ -1,0 +1,15 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "openide": {
+      "enabled": true,
+      "type": "remote",
+      "url": "http://host.docker.internal:64342/sse",
+      "oauth": false,
+      "headers": {
+        "Host": "127.0.0.1",
+        "IJ_MCP_SERVER_PROJECT_PATH": "{project basename}"
+      }
+    }
+  }
+}
