@@ -17,9 +17,10 @@ services:
       - XDG_DATA_HOME=${XDG_DATA_HOME:-/home/${REMOTE_USER}/.local/share}
       - XDG_STATE_HOME=${XDG_STATE_HOME:-/${REMOTE_USER}/.local/state}
       - XDG_CACHE_HOME=${XDG_CACHE_HOME:-/${REMOTE_USER}/.cache}
+      - OPENCODE_NOTIFIER_CONFIG_PATH=/{{OCF_REPO_ROOT_NAME}}/.opencode/opencode-notifier.json
     volumes:
       - ${PWD}:/{{OCF_REPO_ROOT_NAME}}
-      - ${PWD}/.opencode/runtime_data:${HOME:-/home/${REMOTE_USER}}
+      - ${PWD}/.opencode/runtime_data:/home/${REMOTE_USER}
       - ${OCF_LOCAL_GLOBAL_AUTH_PATH:-/dev/null}:${XDG_DATA_HOME:-/home/${REMOTE_USER}/.local/share}/opencode/auth.json:ro
       - ${OCF_LOCAL_GLOBAL_CONFIG_PATH:-/dev/null}:${XDG_CONFIG_HOME:-/home/${REMOTE_USER}/.config}/opencode:ro
       - ${OCF_LOCAL_FRAMEWORK_PATH}/framework-config:${OCF_REMOTE_FRAMEWORK_CONFIG_PATH}:ro

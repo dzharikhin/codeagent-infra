@@ -4,7 +4,6 @@
   "autoupdate": "notify",
   "plugin": [
     "opencode-sessions@1.0.0",
-    "@spoons-and-mirrors/subtask2@latest",
     "@mohak34/opencode-notifier@latest"
   ],
   "model": "{env:OCF_MAIN_MODEL}",

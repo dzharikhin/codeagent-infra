@@ -16,7 +16,7 @@
     "path": "/bin/bash",
     "args": [
       "-c",
-      "{env:NOTIFICATION_SHELL_CMD:echo '[{event}] {message}' >> /home/{env:REMOTE_USER}/opencode.log}"
+      "echo '[{event}] {message}' >> /home/{env:REMOTE_USER}/opencode.log}"
     ],
     "minDuration": 0
   },
