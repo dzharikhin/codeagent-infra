@@ -20,6 +20,38 @@ See [vision.md](vision.md) for project goals, scope, and architecture.
 - devcontainer CLI (`@devcontainers/cli`)
 - pipx
 
+## Rootless Docker Configuration
+
+When using rootless Docker (the default `DOCKER_CONTEXT=rootless`), containers may need access to the host machine. This is required for use cases like accessing MCPs (Model Context Protocol servers) running on your host machine from IDEs or other tools.
+
+### Configure Host Access
+
+1. **Add to daemon.json**:
+   ```json
+   {
+     "host-gateway-ips": ["10.0.2.2"]
+   }
+   ```
+
+2. **Enable host loopback** via systemd:
+   ```sh
+   systemctl --user edit docker.service
+   ```
+   
+   Add this line to the override:
+   ```ini
+   [Service]
+   Environment="DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=false"
+   ```
+   
+   Then reload:
+   ```sh
+   systemctl --user daemon-reload
+   systemctl --user restart docker
+   ```
+
+This allows containers to reach the host using `host.docker.internal` or the configured gateway IP.
+
 ## Installation
 
 The framework must be installed as an editable package from a git clone:
