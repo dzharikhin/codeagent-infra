@@ -34,9 +34,8 @@ This level contains elements reused across projects:
 - provider blacklists/whitelists
 - base provider configuration (URLs, models)
 
-The framework does not ask the user about global settings location or creation.
-
 Configuration at this level:
+- is optional if the user wants to fully configure each of his projects
 - cannot be modified by the agent
 - is controlled by the developer outside of project work
 - may or may not be version-controlled
@@ -63,7 +62,7 @@ Individual settings for each project:
 - agent configuration (settings, MCP servers, skills, tools)
 
 Configuration at this level:
-- cannot be modified by the agent
+- is part of the project thus can be modified by the agent
 - is controlled by the developer outside agent sessions
 - must be version-controlled within the project
 
@@ -85,19 +84,11 @@ Configuration at this level:
 1. Update the framework repository
 2. All configured projects automatically pick up configuration template changes
 
-### Reconfiguring a Project
-
-1. Navigate to the project
-2. Run the setup script with `--force` to clean current configuration and regenerate
-
 ## Non-Goals for V1
 
 - multiple agent backends
-- cross-machine portability of per-project developer config
-- automatic install of missing dependencies
+- automatic install of missing required dependencies
 - automatic repair of broken environments
-- framework-owned launch wrapper beyond setup output
-- custom configuration merge engine on top of `opencode`
 
 ## Main Decisions
 
@@ -111,7 +102,7 @@ Configuration at this level:
 ## Success Criteria
 
 - `init` works in a supported Git repo and produces `.opencode/`
-- Generated config is sufficient to launch via `devcontainer`
+- Generated config is sufficient to launch the container with opencode on board
 - `opencode` starts automatically from the generated setup
 - Project config can be versioned independently from the main project branch
 - Missing prerequisites and incompatible states fail with concrete remediation guidance

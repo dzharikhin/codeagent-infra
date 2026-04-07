@@ -158,7 +158,7 @@ Both print version info, framework repo path, global config status, and auth.jso
 There is no `devcontainer down` command. To stop and remove the container:
 
 ```sh
-docker rm -f $(basename "$(pwd)")
+docker rm -f ocf_$(basename "$(pwd)")
 ```
 
 ## Architecture
@@ -184,10 +184,6 @@ By using devcontainer for image building and docker compose for runtime, we get:
 
 ### Install Poetry
 
-```sh
-pipx install poetry
-```
-
 ### Install Dependencies
 
 ```sh
@@ -196,20 +192,8 @@ cd opencode-framework
 poetry install
 ```
 
-### Run Tests
-
-```sh
-poetry run pytest
-```
-
 ### Run CLI
 
 ```sh
 poetry run ocframework --version
-```
-
-### Build
-
-```sh
-poetry build
 ```
