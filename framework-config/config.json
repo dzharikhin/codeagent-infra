@@ -15,12 +15,22 @@
       "permission": {
         "session": "allow",
         "read": "allow"
+      },
+      "steps": {env:PLAN_MAX_BEFORE_RESPONSE_STEPS},
+      "thinking": {
+        "type": "enabled",
+        "budgetTokens": {env:PLAN_THINKING_MAX_TOKENS}
       }
     },
     "build": {
       "model": "{env:OCF_BUILD_MODEL}",
       "permission": {
         "session": "allow"
+      },
+      "steps": {env:BUILD_MAX_BEFORE_RESPONSE_STEPS},
+      "thinking": {
+        "type": "enabled",
+        "budgetTokens": {env:BUILD_THINKING_MAX_TOKENS}
       }
     }
   },
