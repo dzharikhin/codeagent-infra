@@ -25,6 +25,6 @@ services:
       - ${OCF_LOCAL_GLOBAL_CONFIG_PATH:-/dev/null}:${XDG_CONFIG_HOME:-/home/${REMOTE_USER}/.config}/opencode:ro
       - ${OCF_LOCAL_FRAMEWORK_PATH}/framework-config:${OCF_REMOTE_FRAMEWORK_CONFIG_PATH}:ro
       - ${OCF_LOCAL_FRAMEWORK_PATH}/framework-nuts-and-bolts:/{{OCF_REPO_ROOT_NAME}}/.opencode/framework-nuts-and-bolts:ro{{ADDITIONAL_VOLUME_MOUNTS}}
-    entrypoint: ["opencode"]
+    entrypoint: ["opencode"] # ["/usr/local/share/docker-init.sh", "opencode"] # if you added DinD feature and need docker daemon
     command: ""
 {{TOP_LEVEL_VOLUMES_SECTION}}

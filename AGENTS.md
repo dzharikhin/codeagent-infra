@@ -316,10 +316,9 @@ When the `docker` optional feature is selected during `ocframework init`:
 - The generated `docker-compose.yaml` includes `privileged: true` on the service
 - The container image includes `/etc/docker/daemon.json` with `{"storage-driver": "vfs"}` (baked in unconditionally — harmless without Docker installed)
 - The `docker-in-docker:2` devcontainer feature installs Docker CE and `/usr/local/share/docker-init.sh`
-- Docker daemon is **not started automatically** with the container. Start it on demand:
+- Docker daemon is **not started automatically** with the container. Start it on demand (systemd is not available):
   ```sh
-  service docker start
-  # or
-  dockerd &
+  /usr/local/share/docker-init.sh &
   ```
+  This script (installed by the `docker-in-docker:2` feature) handles PID cleanup, cgroup v2 nesting, and retries. It blocks until `dockerd` is ready.
 - The `vfs` storage driver is used instead of `overlay2` because sandboxed/containerized environments often lack kernel overlayfs support
