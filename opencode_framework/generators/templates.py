@@ -154,6 +154,7 @@ class TemplateHandler:
         
         additional_volume_mounts = ""
         top_level_volumes_section = ""
+        docker_privileged = ""
         
         if optional_features and "python" in optional_features:
             additional_volume_mounts = (
@@ -163,10 +164,14 @@ class TemplateHandler:
                 f"\nvolumes:\n  venv-{repo_root_name}:\n"
             )
         
+        if optional_features and "docker" in optional_features:
+            docker_privileged = "    privileged: true\n"
+        
         replacements = {
             "{{OCF_REPO_ROOT_NAME}}": repo_root_name,
             "{{ADDITIONAL_VOLUME_MOUNTS}}": additional_volume_mounts,
             "{{TOP_LEVEL_VOLUMES_SECTION}}": top_level_volumes_section,
+            "{{DOCKER_PRIVILEGED}}": docker_privileged,
         }
         
         return cls.render_template(template, replacements)

@@ -130,6 +130,29 @@ To rebuild the image (e.g., after changing devcontainer features):
 ocframework launch --rebuild
 ```
 
+### Docker-in-Docker
+
+If you selected the `docker` optional feature during `ocframework init`, the container includes Docker CE and runs with `privileged: true`. The image is pre-configured with the `vfs` storage driver for compatibility with sandboxed environments.
+
+Start the Docker daemon inside the container:
+
+```sh
+service docker start
+```
+
+Or run it in the background:
+
+```sh
+dockerd &
+```
+
+Verify it's running:
+
+```sh
+docker info | grep "Storage Driver"
+# Should output: Storage Driver: vfs
+```
+
 ### Debug Configuration
 
 ```sh

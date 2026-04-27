@@ -308,3 +308,18 @@ Read-only mounts:
 Read-write mounts:
 - `.opencode/runtime_data/`
 - Project source repository
+
+### Docker-in-Docker Support
+
+When the `docker` optional feature is selected during `ocframework init`:
+
+- The generated `docker-compose.yaml` includes `privileged: true` on the service
+- The container image includes `/etc/docker/daemon.json` with `{"storage-driver": "vfs"}` (baked in unconditionally — harmless without Docker installed)
+- The `docker-in-docker:2` devcontainer feature installs Docker CE and `/usr/local/share/docker-init.sh`
+- Docker daemon is **not started automatically** with the container. Start it on demand:
+  ```sh
+  service docker start
+  # or
+  dockerd &
+  ```
+- The `vfs` storage driver is used instead of `overlay2` because sandboxed/containerized environments often lack kernel overlayfs support

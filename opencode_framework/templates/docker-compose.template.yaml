@@ -6,6 +6,7 @@ services:
     container_name: ocf_{{OCF_REPO_ROOT_NAME}}
     image: "${OCF_IMAGE_ID}"
     working_dir: /{{OCF_REPO_ROOT_NAME}}
+{{DOCKER_PRIVILEGED}}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     tty: true

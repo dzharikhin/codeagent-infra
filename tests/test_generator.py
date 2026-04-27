@@ -450,3 +450,39 @@ class TestComposeGenerator:
         assert "runtime_data" in compose_content
         assert "framework-config" in compose_content
         assert "framework-nuts-and-bolts" in compose_content
+
+    def test_docker_feature_adds_privileged(self, tmp_path: Path):
+        """Docker feature should add privileged: true to compose."""
+        repo_root = tmp_path / "myproject"
+        repo_root.mkdir()
+        opencode_dir = repo_root / ".opencode"
+        opencode_dir.mkdir()
+        
+        ctx = _make_generation_context(
+            repo_root,
+            optional_features=["docker"],
+        )
+        
+        gen = ComposeGenerator()
+        gen.generate(ctx)
+        
+        compose_content = (opencode_dir / "docker-compose.yaml").read_text()
+        assert "privileged: true" in compose_content
+
+    def test_no_docker_feature_no_privileged(self, tmp_path: Path):
+        """Without Docker feature, no privileged line should be added."""
+        repo_root = tmp_path / "myproject"
+        repo_root.mkdir()
+        opencode_dir = repo_root / ".opencode"
+        opencode_dir.mkdir()
+        
+        ctx = _make_generation_context(
+            repo_root,
+            optional_features=["python"],
+        )
+        
+        gen = ComposeGenerator()
+        gen.generate(ctx)
+        
+        compose_content = (opencode_dir / "docker-compose.yaml").read_text()
+        assert "privileged" not in compose_content

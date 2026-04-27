@@ -15,3 +15,4 @@ RUN <<EOF
         echo "Home directory is already set to $TARGET_HOME."
     fi
 EOF
+RUN mkdir -p /etc/docker && echo '{"storage-driver": "vfs"}' > /etc/docker/daemon.json
