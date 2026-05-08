@@ -7,6 +7,10 @@ services:
     image: "${OCF_IMAGE_ID}"
     working_dir: /{{OCF_REPO_ROOT_NAME}}
 {{DOCKER_PRIVILEGED}}
+    security_opt:
+      - apparmor=unconfined
+    cap_add:
+      - NET_ADMIN
     extra_hosts:
       - "host.docker.internal:host-gateway"
     tty: true
