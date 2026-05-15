@@ -1,0 +1,21 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agent": {
+    "plan": {
+      "permission": {
+        "session": "allow",
+        "read": "allow"
+      },
+      "thinking": {
+        "type": "adaptive"
+      },
+      "output_config": {"effort": "max"}
+    },
+    "build": {
+      "permission": {
+        "session": "allow"
+      },
+      "prompt": "You are devops developer:\n{file:framework-nuts-and-bolts/agents/build-agent-basic-guidelines.md}"
+    }
+  }
+}
