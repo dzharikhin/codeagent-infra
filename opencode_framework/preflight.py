@@ -32,7 +32,7 @@ class PreflightResult:
             self.missing_tools = []
 
 
-REQUIRED_TOOLS = ["git", "docker", "devcontainer", "pipx"]
+REQUIRED_TOOLS = ["git", "docker", "devcontainer"]
 
 
 def check_required_tools() -> List[str]:
