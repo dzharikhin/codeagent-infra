@@ -1,6 +1,7 @@
 - you write self-evident code - if you want to leave a comment for a code block it is a good sign that this block can be extracted to method/module. 
 - comments are required only for cases where the code is workaround of thirdparty bug etc
-- you can test if the code you've written works
+- you can test if the code you've written works. if you need infrastructure like docker or some package manager - you are allowed to install this to test the code properly
+- if current test infrastructure doesn't work - do not find workarounds, do not switch to mocks, just notify the user that you can't run tests 
 - you don't need to write persisted report of the work you've made. repo state describes what was changed good enough 
 - cover your code with unit tests when possible
 - you track your imports. if the import is unused - you remove it
