@@ -2,9 +2,11 @@
   "$schema": "https://opencode.ai/config.json",
   "share": "disabled",
   "autoupdate": "notify",
+  "lsp": true,
   "plugin": [
-    "opencode-sessions@1.0.0",
-    "@mohak34/opencode-notifier@latest"
+    "opencode-handoff@0.5.0",
+    "@mohak34/opencode-notifier@latest",
+    "opencode-cost-guard@1.1.1"
   ],
   "model": "{env:OCF_MAIN_MODEL}",
   "small_model": "{env:OCF_SMALL_MODEL}",
@@ -16,22 +18,14 @@
         "session": "allow",
         "read": "allow"
       },
-      "steps": {env:PLAN_MAX_BEFORE_RESPONSE_STEPS},
-      "thinking": {
-        "type": "enabled",
-        "budgetTokens": {env:PLAN_THINKING_MAX_TOKENS}
-      }
+      "steps": {env:PLAN_MAX_BEFORE_RESPONSE_STEPS}
     },
     "build": {
       "model": "{env:OCF_BUILD_MODEL}",
       "permission": {
         "session": "allow"
       },
-      "steps": {env:BUILD_MAX_BEFORE_RESPONSE_STEPS},
-      "thinking": {
-        "type": "enabled",
-        "budgetTokens": {env:BUILD_THINKING_MAX_TOKENS}
-      }
+      "steps": {env:BUILD_MAX_BEFORE_RESPONSE_STEPS}
     }
   },
   "permission": {
