@@ -1,0 +1,19 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "enabled_providers": [
+    "zai"
+  ],
+  "plugin": [
+    "opencode-models-discovery@latest"
+  ],
+  "provider": {
+    "zai": {
+      "options": {
+        "baseURL": "https://api.z.ai/api/coding/paas/v4",
+        "modelsDiscovery": {
+          "enabled": true
+        }
+      }
+    }
+  }
+}
