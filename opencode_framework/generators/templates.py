@@ -155,7 +155,8 @@ class TemplateHandler:
         additional_volume_mounts = ""
         top_level_volumes_section = ""
         docker_privileged = ""
-        
+        entrypoint = '["opencode"]'
+
         if optional_features and "python" in optional_features:
             additional_volume_mounts += (
                 f"\n      - venv-{repo_root_name}:/{repo_root_name}/.venv"
@@ -174,12 +175,14 @@ class TemplateHandler:
 
         if optional_features and "docker" in optional_features:
             docker_privileged = "    privileged: true\n"
-        
+            entrypoint = '["/usr/local/share/docker-init.sh", "opencode"]'
+
         replacements = {
             "{{OCF_REPO_ROOT_NAME}}": repo_root_name,
             "{{ADDITIONAL_VOLUME_MOUNTS}}": additional_volume_mounts,
             "{{TOP_LEVEL_VOLUMES_SECTION}}": top_level_volumes_section,
             "{{DOCKER_PRIVILEGED}}": docker_privileged,
+            "{{ENTRYPOINT}}": entrypoint,
         }
         
         return cls.render_template(template, replacements)

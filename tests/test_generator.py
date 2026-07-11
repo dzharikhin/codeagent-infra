@@ -469,17 +469,18 @@ class TestComposeGenerator:
         repo_root.mkdir()
         opencode_dir = repo_root / ".opencode"
         opencode_dir.mkdir()
-        
+
         ctx = _make_generation_context(
             repo_root,
             optional_features=["docker"],
         )
-        
+
         gen = ComposeGenerator()
         gen.generate(ctx)
-        
+
         compose_content = (opencode_dir / "docker-compose.yaml").read_text()
         assert "privileged: true" in compose_content
+        assert "docker-init.sh" in compose_content
 
     def test_no_docker_feature_no_privileged(self, tmp_path: Path):
         """Without Docker feature, no privileged line should be added."""
@@ -487,17 +488,19 @@ class TestComposeGenerator:
         repo_root.mkdir()
         opencode_dir = repo_root / ".opencode"
         opencode_dir.mkdir()
-        
+
         ctx = _make_generation_context(
             repo_root,
             optional_features=["python"],
         )
-        
+
         gen = ComposeGenerator()
         gen.generate(ctx)
-        
+
         compose_content = (opencode_dir / "docker-compose.yaml").read_text()
         assert "privileged" not in compose_content
+        assert '["opencode"]' in compose_content
+        assert "docker-init.sh" not in compose_content
 
     def test_java_feature_adds_m2_volume(self, tmp_path: Path):
         """Java feature should add m2 named volume to compose."""
@@ -557,4 +560,4 @@ class TestComposeGenerator:
         assert "m2-myproject" in compose_content
         assert "/myproject/.venv" in compose_content
         assert "/home/${REMOTE_USER}/.m2" in compose_content
-        assert compose_content.count("volumes:") == 1  # Should have only one volumes header
+        assert compose_content.count("volumes:") == 2  # One in services, one top-level for named volumes

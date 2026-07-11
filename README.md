@@ -134,13 +134,7 @@ ocframework launch --rebuild
 
 If you selected the `docker` optional feature during `ocframework init`, the container includes Docker CE and runs with `privileged: true`. The image is pre-configured with the `vfs` storage driver for compatibility with sandboxed environments.
 
-Start the Docker daemon inside the container (systemd is not available):
-
-```sh
-/usr/local/share/docker-init.sh &
-```
-
-This script handles daemon startup with readiness checks.
+The Docker daemon **starts automatically** on container launch. The container entrypoint runs `/usr/local/share/docker-init.sh` before `opencode`, which starts dockerd with readiness checks.
 
 Verify it's running:
 
