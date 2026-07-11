@@ -9,7 +9,8 @@
   "features": {
     "ghcr.io/devcontainers/features/common-utils:2": {
       "installZsh": false,
-      "configureZshAsDefaultShell": false
+      "configureZshAsDefaultShell": false,
+      "installPackages": "ripgrep"
     },
     "ghcr.io/devcontainers/features/git:1": {},
     "ghcr.io/jsburckhardt/devcontainer-features/opencode:1.1.1": {
