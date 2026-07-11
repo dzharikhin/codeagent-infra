@@ -1,7 +1,7 @@
 """Docker Compose file generation."""
 
 import re
-from typing import List
+from typing import List, Optional
 
 from .base import FileGenerator, GenerationContext
 from .templates import TemplateHandler
@@ -24,22 +24,57 @@ class ComposeGenerator(FileGenerator):
         compose_content = TemplateHandler.render_compose_template(
             repo_root_name=ctx.repo_root.name,
             optional_features=ctx.optional_features,
+            port_mappings=ctx.port_mappings,
         )
         compose_path.write_text(compose_content)
+
+    @staticmethod
+    def detect_ports(compose_text: str) -> List[str]:
+        """Extract port mappings from an existing compose file.
+
+        Scans for a service-level ``ports:`` key and collects its list
+        children (``- <spec>`` lines).
+
+        Args:
+            compose_text: Current docker-compose.yaml content
+
+        Returns:
+            List of port specs (e.g. ``["8080:8080", "3000:3000"]``)
+        """
+        lines = compose_text.split("\n")
+        ports: List[str] = []
+        in_ports = False
+        for line in lines:
+            if not in_ports:
+                if line == "    ports:":
+                    in_ports = True
+                continue
+            if line.startswith("      - "):
+                ports.append(line.strip()[2:])
+            elif line.strip() == "":
+                continue
+            else:
+                in_ports = False
+        return ports
 
     @staticmethod
     def rebuild_features(
         compose_text: str,
         repo_name: str,
         optional_features: List[str],
+        port_mappings: Optional[List[str]] = None,
     ) -> str:
         """Surgically update feature-dependent parts of a compose file.
 
         Strips the managed feature footprints (privileged line, python/java
         volume mounts and their top-level volume keys, the docker-init
-        entrypoint) and re-injects only those for the requested feature set.
-        All other lines (environment, custom mounts, security_opt, user-added
-        volumes) are preserved.
+        entrypoint, the managed ports block) and re-injects only those for
+        the requested feature set.  All other lines (environment, custom
+        mounts, security_opt, user-added volumes) are preserved.
+
+        When ``port_mappings`` is ``None`` the ports block is left untouched.
+        When it is a list (including empty) the ports block is reconciled to
+        exactly that set.
 
         Idempotent: applying the same feature set twice yields identical output.
 
@@ -47,6 +82,7 @@ class ComposeGenerator(FileGenerator):
             compose_text: Current docker-compose.yaml content
             repo_name: Repository name (used in managed volume names)
             optional_features: Final feature set to apply
+            port_mappings: Desired port mappings, or None to leave ports as-is
 
         Returns:
             Updated compose file content
@@ -69,6 +105,9 @@ class ComposeGenerator(FileGenerator):
         )
 
         lines = compose_text.split("\n")
+
+        if port_mappings is not None:
+            lines = ComposeGenerator._strip_managed_ports(lines)
 
         # Pass 1: drop managed footprints, rewrite entrypoint value.
         out: List[str] = []
@@ -112,7 +151,33 @@ class ComposeGenerator(FileGenerator):
         if vol_keys:
             lines = ComposeGenerator._ensure_volumes_block_lines(lines, vol_keys)
 
+        if port_mappings:
+            port_block = ["    ports:"] + [f"      - {p}" for p in port_mappings]
+            lines = ComposeGenerator._insert_after_block(
+                lines, "    working_dir", port_block
+            )
+
         return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _strip_managed_ports(lines: List[str]) -> List[str]:
+        """Remove a managed '    ports:' key and its list children."""
+        out: List[str] = []
+        in_ports = False
+        for line in lines:
+            if not in_ports:
+                if line == "    ports:":
+                    in_ports = True
+                else:
+                    out.append(line)
+                continue
+            if line.startswith("      - "):
+                continue
+            if line.strip() == "":
+                continue
+            in_ports = False
+            out.append(line)
+        return out
 
     @staticmethod
     def _strip_trailing_blank_lines(lines: List[str]) -> List[str]:
@@ -151,6 +216,19 @@ class ComposeGenerator(FileGenerator):
             out.append(line)
             if not inserted and line.startswith(prefix):
                 out.append(content)
+                inserted = True
+        return out
+
+    @staticmethod
+    def _insert_after_block(
+        lines: List[str], prefix: str, contents: List[str]
+    ) -> List[str]:
+        out: List[str] = []
+        inserted = False
+        for line in lines:
+            out.append(line)
+            if not inserted and line.startswith(prefix):
+                out.extend(contents)
                 inserted = True
         return out
 

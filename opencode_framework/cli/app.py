@@ -26,6 +26,7 @@ from opencode_framework.preflight import (
 from opencode_framework.wizard import run_wizard
 from opencode_framework.features import update_features
 from opencode_framework.generators import GenerationOrchestrator
+from opencode_framework.generators.compose import ComposeGenerator
 from opencode_framework.generators.documentation import DocumentationGenerator
 from opencode_framework.git_ops import (
     setup_opencode_worktree,
@@ -436,6 +437,9 @@ def launch(
         "docker", "compose", "-f", str(compose_path),
         "run", "--rm",
     ]
+    
+    if ComposeGenerator.detect_ports(compose_path.read_text()):
+        run_cmd.append("--service-ports")
     
     if container_name:
         run_cmd.extend(["--name", container_name])

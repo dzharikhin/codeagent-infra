@@ -19,8 +19,8 @@ def _dc_with_features(*features: str, editor: str = "none") -> dict:
     return dc
 
 
-def _render_compose(repo_name: str, features: List[str]) -> str:
-    return TemplateHandler.render_compose_template(repo_name, features)
+def _render_compose(repo_name: str, features: List[str], ports: List[str] = None) -> str:
+    return TemplateHandler.render_compose_template(repo_name, features, ports)
 
 
 class TestDetect:
@@ -258,6 +258,116 @@ class TestRebuildFeatures:
         assert lines[svc_idx + 1].startswith("      - ")
 
 
+class TestDetectPorts:
+    """Tests for ComposeGenerator.detect_ports."""
+
+    def test_detects_single_port(self):
+        text = _render_compose("repo", [], ["8080:8080"])
+        assert ComposeGenerator.detect_ports(text) == ["8080:8080"]
+
+    def test_detects_multiple_ports(self):
+        ports = ["8080:8080", "3000:3000", "127.0.0.1:9090:9090"]
+        text = _render_compose("repo", [], ports)
+        assert ComposeGenerator.detect_ports(text) == ports
+
+    def test_no_ports_returns_empty(self):
+        text = _render_compose("repo", [], [])
+        assert ComposeGenerator.detect_ports(text) == []
+
+    def test_detect_stops_at_next_key(self):
+        text = _render_compose("repo", ["docker"], ["8080:8080"])
+        ports = ComposeGenerator.detect_ports(text)
+        assert ports == ["8080:8080"]
+
+    def test_detect_protocol_suffix(self):
+        text = _render_compose("repo", [], ["8443:443/tcp"])
+        assert ComposeGenerator.detect_ports(text) == ["8443:443/tcp"]
+
+    def test_detect_roundtrip_with_rebuild(self):
+        """Ports detected from rendered output match what was passed in."""
+        ports = ["8080:8080", "3000:3000"]
+        text = _render_compose("repo", ["python"], ports)
+        rebuilt = ComposeGenerator.rebuild_features(
+            text, "repo", ["python"], port_mappings=ports
+        )
+        assert ComposeGenerator.detect_ports(rebuilt) == ports
+
+
+class TestRebuildPorts:
+    """Tests for port handling in ComposeGenerator.rebuild_features."""
+
+    REPO = "myrepo"
+
+    def test_add_ports_to_empty(self):
+        text = _render_compose(self.REPO, [])
+        rebuilt = ComposeGenerator.rebuild_features(
+            text, self.REPO, [], port_mappings=["8080:8080"]
+        )
+        assert "    ports:" in rebuilt
+        assert "      - 8080:8080" in rebuilt
+        assert ComposeGenerator.detect_ports(rebuilt) == ["8080:8080"]
+
+    def test_remove_ports(self):
+        text = _render_compose(self.REPO, [], ["8080:8080"])
+        rebuilt = ComposeGenerator.rebuild_features(
+            text, self.REPO, [], port_mappings=[]
+        )
+        assert "ports:" not in rebuilt
+        assert ComposeGenerator.detect_ports(rebuilt) == []
+
+    def test_replace_ports(self):
+        text = _render_compose(self.REPO, [], ["8080:8080"])
+        rebuilt = ComposeGenerator.rebuild_features(
+            text, self.REPO, [], port_mappings=["3000:3000", "9090:9090"]
+        )
+        assert ComposeGenerator.detect_ports(rebuilt) == ["3000:3000", "9090:9090"]
+        assert "8080" not in rebuilt
+
+    def test_none_preserves_existing_ports(self):
+        """port_mappings=None must leave existing ports untouched."""
+        text = _render_compose(self.REPO, [], ["8080:8080"])
+        rebuilt = ComposeGenerator.rebuild_features(
+            text, self.REPO, ["python"], port_mappings=None
+        )
+        assert ComposeGenerator.detect_ports(rebuilt) == ["8080:8080"]
+
+    def test_idempotent(self):
+        """Applying the same ports twice yields identical output."""
+        ports = ["8080:8080", "3000:3000"]
+        text = _render_compose(self.REPO, ["docker"], ports)
+        once = ComposeGenerator.rebuild_features(
+            text, self.REPO, ["docker"], port_mappings=ports
+        )
+        twice = ComposeGenerator.rebuild_features(
+            once, self.REPO, ["docker"], port_mappings=ports
+        )
+        assert once == twice
+
+    def test_ports_coexist_with_docker_and_features(self):
+        """Ports, privileged, and volume mounts all present together."""
+        ports = ["8080:8080"]
+        text = _render_compose(self.REPO, [], [])
+        rebuilt = ComposeGenerator.rebuild_features(
+            text, self.REPO, ["python", "docker"], port_mappings=ports
+        )
+        assert "    privileged: true" in rebuilt
+        assert f"venv-{self.REPO}:/{self.REPO}/.venv" in rebuilt
+        assert ComposeGenerator.detect_ports(rebuilt) == ports
+
+    def test_preserves_manual_env_var_with_ports(self):
+        """User-added environment lines survive a port rebuild."""
+        text = _render_compose(self.REPO, [])
+        text = text.replace(
+            "      - OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT=true",
+            "      - OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT=true\n      - MY_CUSTOM=keepme",
+            1,
+        )
+        rebuilt = ComposeGenerator.rebuild_features(
+            text, self.REPO, [], port_mappings=["8080:8080"]
+        )
+        assert "MY_CUSTOM=keepme" in rebuilt
+
+
 class TestRenderComposeTemplateVolumeFix:
     """Regression tests for the java-without-python volumes: header bug."""
 
@@ -331,6 +441,7 @@ class TestUpdateFeatures:
             "prompt_feature_changes",
             lambda cur, ed: (list(cur), ed),
         )
+        monkeypatch.setattr(features, "prompt_port_mappings", lambda cur=None: [])
         opencode_dir = self._seed_opencode(tmp_path, ["python"])
         dc_before = (opencode_dir / "devcontainer.json").read_text()
 
@@ -347,6 +458,7 @@ class TestUpdateFeatures:
             "prompt_feature_changes",
             lambda cur, ed: (["python", "docker", "java"], ed),
         )
+        monkeypatch.setattr(features, "prompt_port_mappings", lambda cur=None: [])
         opencode_dir = self._seed_opencode(tmp_path, ["python"])
 
         result = features.update_features(opencode_dir, tmp_path.name)
@@ -377,6 +489,28 @@ class TestUpdateFeatures:
         detected, _ = DevcontainerGenerator.detect(dc)
         assert detected == ["python"]
 
+    def test_port_only_change_writes_compose(self, tmp_path: Path, monkeypatch):
+        """A port-only change (features unchanged) updates compose but not devcontainer."""
+        monkeypatch.setattr(features, "is_interactive", lambda: True)
+        monkeypatch.setattr(
+            features,
+            "prompt_feature_changes",
+            lambda cur, ed: (list(cur), ed),
+        )
+        monkeypatch.setattr(
+            features, "prompt_port_mappings", lambda cur=None: ["8080:8080"]
+        )
+        opencode_dir = self._seed_opencode(tmp_path, ["python"])
+        dc_before = (opencode_dir / "devcontainer.json").read_text()
+
+        result = features.update_features(opencode_dir, tmp_path.name)
+        assert result is True
+        # devcontainer unchanged (features didn't change)
+        assert (opencode_dir / "devcontainer.json").read_text() == dc_before
+        # compose now has ports
+        compose = (opencode_dir / "docker-compose.yaml").read_text()
+        assert "      - 8080:8080" in compose
+
 
 class TestInteractiveDetection:
     """Tests for features.is_interactive."""
@@ -403,4 +537,35 @@ class TestInteractiveDetection:
 
         monkeypatch.setattr(features.sys, "stdin", _FakeStdin())
         assert features.is_interactive() is False
+
+
+class TestParsePortMappings:
+    """Tests for features.parse_port_mappings."""
+
+    def test_single_port(self):
+        assert features.parse_port_mappings("8080:8080") == ["8080:8080"]
+
+    def test_multiple_ports(self):
+        assert features.parse_port_mappings("8080:8080, 3000:3000") == [
+            "8080:8080",
+            "3000:3000",
+        ]
+
+    def test_strips_whitespace(self):
+        assert features.parse_port_mappings("  8080:8080  ,  3000  ") == [
+            "8080:8080",
+            "3000",
+        ]
+
+    def test_empty_string(self):
+        assert features.parse_port_mappings("") == []
+
+    def test_blank_entries_dropped(self):
+        assert features.parse_port_mappings("8080:8080, , ,3000:3000") == [
+            "8080:8080",
+            "3000:3000",
+        ]
+
+    def test_protocol_suffix_preserved(self):
+        assert features.parse_port_mappings("8443:443/tcp") == ["8443:443/tcp"]
 

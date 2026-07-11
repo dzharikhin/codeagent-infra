@@ -1,13 +1,13 @@
 """Interactive wizard for setup decisions."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
 import getpass
 
 import typer
 
-from opencode_framework.features import prompt_feature_changes
+from opencode_framework.features import prompt_feature_changes, prompt_port_mappings
 from opencode_framework.preflight import PreflightResult
 
 
@@ -20,6 +20,7 @@ class WizardResult:
     editor_choice: str  # "none", "vi", or "nano"
     should_add_to_gitignore: bool
     create_global_config: bool = False
+    port_mappings: List[str] = field(default_factory=list)
 
 
 def suggest_branch_name() -> str:
@@ -72,6 +73,8 @@ def run_wizard(repo_root: Path, preflight_result: PreflightResult) -> WizardResu
     
     optional_features, editor_choice = prompt_feature_changes([], "none")
     
+    port_mappings = prompt_port_mappings()
+    
     if check_gitignore_needs_opencode(repo_root):
         typer.secho(
             "\nNote: .opencode/ is not in .gitignore. Consider adding it to avoid committing framework files.",
@@ -84,4 +87,5 @@ def run_wizard(repo_root: Path, preflight_result: PreflightResult) -> WizardResu
         editor_choice=editor_choice,
         should_add_to_gitignore=True,
         create_global_config=create_global_config,
+        port_mappings=port_mappings,
     )

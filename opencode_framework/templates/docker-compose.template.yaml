@@ -6,6 +6,7 @@ services:
     container_name: ocf_{{OCF_REPO_ROOT_NAME}}
     image: "${OCF_IMAGE_ID}"
     working_dir: /{{OCF_REPO_ROOT_NAME}}
+{{PORTS_SECTION}}
 {{DOCKER_PRIVILEGED}}
     security_opt:
       - apparmor=unconfined

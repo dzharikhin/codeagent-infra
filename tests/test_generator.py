@@ -561,3 +561,59 @@ class TestComposeGenerator:
         assert "/myproject/.venv" in compose_content
         assert "/home/${REMOTE_USER}/.m2" in compose_content
         assert compose_content.count("volumes:") == 2  # One in services, one top-level for named volumes
+
+    def test_port_mappings_adds_ports_block(self, tmp_path: Path):
+        """Port mappings should produce a ports: block in compose."""
+        repo_root = tmp_path / "myproject"
+        repo_root.mkdir()
+        opencode_dir = repo_root / ".opencode"
+        opencode_dir.mkdir()
+
+        ctx = _make_generation_context(
+            repo_root,
+            port_mappings=["8080:8080", "3000:3000"],
+        )
+
+        gen = ComposeGenerator()
+        gen.generate(ctx)
+
+        compose_content = (opencode_dir / "docker-compose.yaml").read_text()
+        assert "    ports:" in compose_content
+        assert "      - 8080:8080" in compose_content
+        assert "      - 3000:3000" in compose_content
+
+    def test_no_port_mappings_no_ports_block(self, tmp_path: Path):
+        """Without port mappings, no ports: block should appear."""
+        repo_root = tmp_path / "myproject"
+        repo_root.mkdir()
+        opencode_dir = repo_root / ".opencode"
+        opencode_dir.mkdir()
+
+        ctx = _make_generation_context(repo_root)
+
+        gen = ComposeGenerator()
+        gen.generate(ctx)
+
+        compose_content = (opencode_dir / "docker-compose.yaml").read_text()
+        assert "ports:" not in compose_content
+
+    def test_ports_and_docker_feature_coexist(self, tmp_path: Path):
+        """Ports and docker feature should both render without conflict."""
+        repo_root = tmp_path / "myproject"
+        repo_root.mkdir()
+        opencode_dir = repo_root / ".opencode"
+        opencode_dir.mkdir()
+
+        ctx = _make_generation_context(
+            repo_root,
+            optional_features=["docker"],
+            port_mappings=["8080:8080"],
+        )
+
+        gen = ComposeGenerator()
+        gen.generate(ctx)
+
+        compose_content = (opencode_dir / "docker-compose.yaml").read_text()
+        assert "    ports:" in compose_content
+        assert "      - 8080:8080" in compose_content
+        assert "    privileged: true" in compose_content

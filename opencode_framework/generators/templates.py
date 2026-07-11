@@ -137,15 +137,17 @@ class TemplateHandler:
     
     @classmethod
     def render_compose_template(
-        cls, 
-        repo_root_name: str, 
-        optional_features: Optional[List[str]] = None
+        cls,
+        repo_root_name: str,
+        optional_features: Optional[List[str]] = None,
+        port_mappings: Optional[List[str]] = None,
     ) -> str:
         """Render docker-compose template with container name.
         
         Args:
             repo_root_name: Name of the repo
             optional_features: List of enabled optional features (e.g., ["python"])
+            port_mappings: List of Docker-style port mappings (e.g., ["8080:8080"])
             
         Returns:
             Rendered docker-compose content
@@ -181,11 +183,17 @@ class TemplateHandler:
                 "\nvolumes:\n" + "\n".join(volume_keys) + "\n"
             )
 
+        ports_section = ""
+        if port_mappings:
+            port_lines = "".join(f"      - {p}\n" for p in port_mappings)
+            ports_section = f"    ports:\n{port_lines}"
+
         replacements = {
             "{{OCF_REPO_ROOT_NAME}}": repo_root_name,
             "{{ADDITIONAL_VOLUME_MOUNTS}}": additional_volume_mounts,
             "{{TOP_LEVEL_VOLUMES_SECTION}}": top_level_volumes_section,
             "{{DOCKER_PRIVILEGED}}": docker_privileged,
+            "{{PORTS_SECTION}}": ports_section,
             "{{ENTRYPOINT}}": entrypoint,
         }
         

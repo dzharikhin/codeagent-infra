@@ -1,7 +1,7 @@
 """Base generator class and context definitions."""
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
 
@@ -18,6 +18,7 @@ class GenerationContext:
     optional_features: List[str]
     editor_choice: str
     global_settings: GlobalSettings
+    port_mappings: List[str] = field(default_factory=list)
 
 
 class FileGenerator(ABC):

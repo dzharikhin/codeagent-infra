@@ -3,7 +3,7 @@
 import json
 import sys
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import click
 import typer
@@ -91,6 +91,41 @@ def prompt_feature_changes(
     return selected, editor_choice
 
 
+def parse_port_mappings(raw: str) -> List[str]:
+    """Parse a comma-separated port string into a list of port specs.
+
+    Empty/blank entries are dropped.  Specs are passed through verbatim
+    (no validation of internals).
+
+    Args:
+        raw: Comma-separated string (e.g. "8080:8080, 3000:3000")
+
+    Returns:
+        List of port specs (e.g. ["8080:8080", "3000:3000"])
+    """
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+
+def prompt_port_mappings(current_ports: Optional[List[str]] = None) -> List[str]:
+    """Prompt for port mappings as comma-separated Docker-style strings.
+
+    Args:
+        current_ports: Existing port mappings (pre-fills the default on rebuild)
+
+    Returns:
+        List of port specs
+    """
+    if current_ports is None:
+        current_ports = []
+    default_str = ", ".join(current_ports)
+    raw = typer.prompt(
+        "\nPort mappings (host:container, comma-separated; blank for none)",
+        default=default_str,
+        show_default=bool(current_ports),
+    )
+    return parse_port_mappings(raw)
+
+
 def update_features(opencode_dir: Path, repo_name: str) -> bool:
     """Interactively offer to add/remove devcontainer features.
 
@@ -125,21 +160,38 @@ def update_features(opencode_dir: Path, repo_name: str) -> bool:
     current_features, current_editor = DevcontainerGenerator.detect(devcontainer)
     new_features, new_editor = prompt_feature_changes(current_features, current_editor)
 
-    if set(new_features) == set(current_features) and new_editor == current_editor:
-        typer.echo("No feature changes; rebuilding with current configuration.")
-        return False
-
-    add = [f for f in new_features if f not in current_features]
-    remove = [f for f in current_features if f not in new_features]
-    DevcontainerGenerator.apply_delta(devcontainer, add=add, remove=remove, editor=new_editor)
-    devcontainer_path.write_text(json.dumps(devcontainer, indent=2) + "\n")
-    typer.secho("Updated .opencode/devcontainer.json", fg=typer.colors.GREEN)
-
     compose_path = opencode_dir / "docker-compose.yaml"
+    compose_text = ""
+    current_ports: List[str] = []
     if compose_path.exists():
         compose_text = compose_path.read_text()
+        current_ports = ComposeGenerator.detect_ports(compose_text)
+        new_ports = prompt_port_mappings(current_ports)
+    else:
+        new_ports = []
+
+    features_changed = (
+        set(new_features) != set(current_features)
+        or new_editor != current_editor
+    )
+    ports_changed = new_ports != current_ports
+
+    if not features_changed and not ports_changed:
+        typer.echo("No changes; rebuilding with current configuration.")
+        return False
+
+    if features_changed:
+        add = [f for f in new_features if f not in current_features]
+        remove = [f for f in current_features if f not in new_features]
+        DevcontainerGenerator.apply_delta(devcontainer, add=add, remove=remove, editor=new_editor)
+        devcontainer_path.write_text(json.dumps(devcontainer, indent=2) + "\n")
+        typer.secho("Updated .opencode/devcontainer.json", fg=typer.colors.GREEN)
+
+    if compose_path.exists() and (features_changed or ports_changed):
         compose_path.write_text(
-            ComposeGenerator.rebuild_features(compose_text, repo_name, new_features)
+            ComposeGenerator.rebuild_features(
+                compose_text, repo_name, new_features, port_mappings=new_ports
+            )
         )
         typer.secho("Updated .opencode/docker-compose.yaml", fg=typer.colors.GREEN)
 
