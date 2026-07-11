@@ -5,10 +5,10 @@ from pathlib import Path
 from typing import List
 import getpass
 
-import click
 import typer
 
-from opencode_framework.preflight import PreflightResult, check_docker_rootless_context
+from opencode_framework.features import prompt_feature_changes
+from opencode_framework.preflight import PreflightResult
 
 
 @dataclass
@@ -70,37 +70,7 @@ def run_wizard(repo_root: Path, preflight_result: PreflightResult) -> WizardResu
         type=str,
     )
     
-    typer.echo("\nOptional features:")
-    available_features = [
-        ("docker", "Docker access (DinD with rootless context)"),
-        ("python", "Python + Poetry"),
-        ("nodejs", "Node.js + npm"),
-        ("java", "Java + Maven"),
-    ]
-    
-    optional_features = []
-    for feature_key, feature_desc in available_features:
-        if feature_key == "docker":
-            if typer.confirm(f"  Enable {feature_desc}?", default=False):
-                if not check_docker_rootless_context():
-                    typer.secho(
-                        "    Warning: No rootless Docker context found. Docker access requires a 'rootless' context.",
-                        fg=typer.colors.RED,
-                    )
-                    typer.echo("    Create it with: docker context create rootless --docker 'host=unix:///run/user/$(id -u)/docker.sock'")
-                    if typer.confirm("    Enable Docker anyway? (Not recommended)", default=False):
-                        optional_features.append(feature_key)
-                else:
-                    optional_features.append(feature_key)
-        else:
-            if typer.confirm(f"  Enable {feature_desc}?", default=False):
-                optional_features.append(feature_key)
-    
-    editor_choice = typer.prompt(
-        "\nEditor preference",
-        type=click.Choice(["none", "vi", "nano"]),
-        default="none",
-    )
+    optional_features, editor_choice = prompt_feature_changes([], "none")
     
     if check_gitignore_needs_opencode(repo_root):
         typer.secho(

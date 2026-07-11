@@ -153,7 +153,6 @@ class TemplateHandler:
         template = cls.load_compose_template()
         
         additional_volume_mounts = ""
-        top_level_volumes_section = ""
         docker_privileged = ""
         entrypoint = '["opencode"]'
 
@@ -161,21 +160,26 @@ class TemplateHandler:
             additional_volume_mounts += (
                 f"\n      - venv-{repo_root_name}:/{repo_root_name}/.venv"
             )
-            top_level_volumes_section += (
-                f"\nvolumes:\n  venv-{repo_root_name}:\n"
-            )
 
         if optional_features and "java" in optional_features:
             additional_volume_mounts += (
                 f"\n      - m2-{repo_root_name}:/home/${{REMOTE_USER}}/.m2"
             )
-            top_level_volumes_section += (
-                f"  m2-{repo_root_name}:\n"
-            )
 
         if optional_features and "docker" in optional_features:
             docker_privileged = "    privileged: true\n"
             entrypoint = '["/usr/local/share/docker-init.sh", "opencode"]'
+
+        volume_keys = []
+        if optional_features and "python" in optional_features:
+            volume_keys.append(f"  venv-{repo_root_name}:")
+        if optional_features and "java" in optional_features:
+            volume_keys.append(f"  m2-{repo_root_name}:")
+        top_level_volumes_section = ""
+        if volume_keys:
+            top_level_volumes_section = (
+                "\nvolumes:\n" + "\n".join(volume_keys) + "\n"
+            )
 
         replacements = {
             "{{OCF_REPO_ROOT_NAME}}": repo_root_name,

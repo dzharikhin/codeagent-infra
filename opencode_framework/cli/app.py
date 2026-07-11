@@ -24,6 +24,7 @@ from opencode_framework.preflight import (
     get_repo_root,
 )
 from opencode_framework.wizard import run_wizard
+from opencode_framework.features import update_features
 from opencode_framework.generators import GenerationOrchestrator
 from opencode_framework.generators.documentation import DocumentationGenerator
 from opencode_framework.git_ops import (
@@ -407,7 +408,10 @@ def launch(
     image_id = None
     
     if rebuild:
-        typer.echo("Building devcontainer image (--rebuild specified)...")
+        if update_features(opencode_dir, repo_root.name):
+            typer.echo("Feature configuration changed; rebuilding image...")
+        else:
+            typer.echo("Building devcontainer image (--rebuild specified)...")
         image_id = _build_image(opencode_dir, repo_root, subprocess_env)
     else:
         image_id = load_image_id(opencode_dir)

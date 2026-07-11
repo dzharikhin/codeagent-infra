@@ -130,6 +130,10 @@ To rebuild the image (e.g., after changing devcontainer features):
 ocframework launch --rebuild
 ```
 
+When run interactively (stdin is a TTY), `--rebuild` offers to **add or remove devcontainer features** before rebuilding. The current feature set and editor preference are shown, pre-filled as the defaults, so you can toggle docker/python/nodejs/java and the editor (vi/nano) on or off. Only the feature-dependent parts of `.opencode/devcontainer.json` and `.opencode/docker-compose.yaml` are updated; any manual customizations elsewhere are preserved.
+
+In a non-interactive context (e.g. CI, piped stdin) the prompt is skipped and the image rebuilds with the existing configuration.
+
 ### Docker-in-Docker
 
 If you selected the `docker` optional feature during `ocframework init`, the container includes Docker CE and runs with `privileged: true`. The image is pre-configured with the `vfs` storage driver for compatibility with sandboxed environments.

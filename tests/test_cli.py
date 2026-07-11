@@ -258,3 +258,94 @@ class TestLaunchCommand:
         assert result.returncode != 0
         assert ".env" in result.stdout or ".env" in result.stderr
 
+
+class TestLaunchRebuildFeaturePrompt:
+    """Tests that --rebuild wires into interactive feature management.
+
+    Heavy runtime/docker dependencies are monkeypatched so the wiring can be
+    exercised without Docker or the devcontainer CLI.
+    """
+
+    def _setup_repo(self, tmp_path: Path) -> Path:
+        opencode = tmp_path / ".opencode"
+        opencode.mkdir()
+        (opencode / "docker-compose.yaml").write_text(
+            "services:\n  opencode:\n    container_name: ocf_repo\n"
+        )
+        return opencode
+
+    def _patch_launch_deps(self, monkeypatch, tmp_path: Path):
+        import importlib
+
+        app_module = importlib.import_module("opencode_framework.cli.app")
+
+        monkeypatch.setattr(app_module, "validate_runtime_context", lambda cwd: (True, ""))
+        monkeypatch.setattr(app_module, "get_repo_root", lambda cwd: tmp_path.resolve())
+        monkeypatch.setattr(app_module, "load_env_with_overrides", lambda **kw: {})
+        monkeypatch.setattr(app_module, "build_docker_env", lambda env, ctx: {})
+        monkeypatch.setattr(app_module, "load_image_id", lambda d: None)
+        monkeypatch.setattr(app_module, "_build_image", lambda *a, **kw: "sha256:fake")
+        monkeypatch.setattr(app_module, "save_image_id", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            app_module.subprocess, "run",
+            lambda *a, **kw: type("R", (), {"returncode": 0})(),
+        )
+        return app_module
+
+    def test_rebuild_invokes_update_features(self, tmp_path: Path, monkeypatch):
+        """--rebuild must call update_features before building."""
+        self._setup_repo(tmp_path)
+        app_module = self._patch_launch_deps(monkeypatch, tmp_path)
+
+        calls = {}
+
+        def fake_update(opencode_dir, repo_name):
+            calls["args"] = (opencode_dir, repo_name)
+            return False
+
+        monkeypatch.setattr(app_module, "update_features", fake_update)
+
+        from typer.testing import CliRunner
+        result = CliRunner().invoke(app_module.app, ["launch", "--rebuild"])
+
+        assert result.exit_code == 0
+        assert "args" in calls
+        assert calls["args"][0].name == ".opencode"
+        assert calls["args"][1] == tmp_path.name
+
+    def test_rebuild_changed_message(self, tmp_path: Path, monkeypatch):
+        """When features change, the changed message is shown."""
+        self._setup_repo(tmp_path)
+        app_module = self._patch_launch_deps(monkeypatch, tmp_path)
+        monkeypatch.setattr(app_module, "update_features", lambda *a, **kw: True)
+
+        from typer.testing import CliRunner
+        result = CliRunner().invoke(app_module.app, ["launch", "--rebuild"])
+
+        assert result.exit_code == 0
+        assert "Feature configuration changed" in result.output
+
+    def test_rebuild_no_change_message(self, tmp_path: Path, monkeypatch):
+        """When features are unchanged, the normal rebuild message is shown."""
+        self._setup_repo(tmp_path)
+        app_module = self._patch_launch_deps(monkeypatch, tmp_path)
+        monkeypatch.setattr(app_module, "update_features", lambda *a, **kw: False)
+
+        from typer.testing import CliRunner
+        result = CliRunner().invoke(app_module.app, ["launch", "--rebuild"])
+
+        assert result.exit_code == 0
+        assert "Building devcontainer image (--rebuild specified)" in result.output
+
+    def test_no_rebuild_skips_update_features(self, tmp_path: Path, monkeypatch):
+        """Without --rebuild, update_features must not be called."""
+        self._setup_repo(tmp_path)
+        app_module = self._patch_launch_deps(monkeypatch, tmp_path)
+        monkeypatch.setattr(app_module, "load_image_id", lambda d: "sha256:cached")
+        monkeypatch.setattr(app_module, "update_features", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("should not be called")))
+
+        from typer.testing import CliRunner
+        result = CliRunner().invoke(app_module.app, ["launch"])
+
+        assert result.exit_code == 0
+
