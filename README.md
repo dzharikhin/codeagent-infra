@@ -178,6 +178,34 @@ There is no `devcontainer down` command. To stop and remove the container:
 docker rm -f ocf_$(basename "$(pwd)")
 ```
 
+### Run a Headless Server (Serve)
+
+You can run the OpenCode server inside the container so that external clients
+(the TUI via `opencode attach`, the SDK, IDE plugins, or the web UI) can connect
+to it. This combines the `serve` subcommand with port mappings.
+
+1. **Configure a port mapping.** During `ocframework init`, or interactively via
+   `ocframework launch --rebuild`, add a mapping such as `4096:4096`. Existing
+   mappings can be checked in `.opencode/docker-compose.yaml`.
+
+2. **Launch the server**, passing `serve` (and any of its flags) through `launch`:
+
+   ```sh
+   ocframework launch -- serve --hostname 0.0.0.0 --port 4096
+   ```
+
+   The framework automatically adds `--service-ports` to `docker compose run`
+   when ports are configured, exposing them to the host.
+
+3. **Connect a client** to the mapped port, e.g.:
+
+   ```sh
+   opencode attach http://localhost:4096
+   ```
+
+Set `OPENCODE_SERVER_PASSWORD` (and optionally `OPENCODE_SERVER_USERNAME`) in
+`.opencode/.env` to enable HTTP basic auth on the server.
+
 ## Architecture
 
 ### DevContainer + Docker Compose
