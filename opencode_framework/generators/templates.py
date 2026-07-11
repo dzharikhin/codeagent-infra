@@ -157,13 +157,21 @@ class TemplateHandler:
         docker_privileged = ""
         
         if optional_features and "python" in optional_features:
-            additional_volume_mounts = (
+            additional_volume_mounts += (
                 f"\n      - venv-{repo_root_name}:/{repo_root_name}/.venv"
             )
-            top_level_volumes_section = (
+            top_level_volumes_section += (
                 f"\nvolumes:\n  venv-{repo_root_name}:\n"
             )
-        
+
+        if optional_features and "java" in optional_features:
+            additional_volume_mounts += (
+                f"\n      - m2-{repo_root_name}:/home/${{REMOTE_USER}}/.m2"
+            )
+            top_level_volumes_section += (
+                f"  m2-{repo_root_name}:\n"
+            )
+
         if optional_features and "docker" in optional_features:
             docker_privileged = "    privileged: true\n"
         

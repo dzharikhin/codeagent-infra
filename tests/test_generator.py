@@ -498,3 +498,63 @@ class TestComposeGenerator:
         
         compose_content = (opencode_dir / "docker-compose.yaml").read_text()
         assert "privileged" not in compose_content
+
+    def test_java_feature_adds_m2_volume(self, tmp_path: Path):
+        """Java feature should add m2 named volume to compose."""
+        repo_root = tmp_path / "myproject"
+        repo_root.mkdir()
+        opencode_dir = repo_root / ".opencode"
+        opencode_dir.mkdir()
+
+        ctx = _make_generation_context(
+            repo_root,
+            optional_features=["java"],
+        )
+
+        gen = ComposeGenerator()
+        gen.generate(ctx)
+
+        compose_content = (opencode_dir / "docker-compose.yaml").read_text()
+        assert "m2-myproject" in compose_content
+        assert "volumes:" in compose_content
+        assert "/home/${REMOTE_USER}/.m2" in compose_content
+
+    def test_no_java_feature_no_m2_volume(self, tmp_path: Path):
+        """Without Java feature, no m2 volume should be added."""
+        repo_root = tmp_path / "myproject"
+        repo_root.mkdir()
+        opencode_dir = repo_root / ".opencode"
+        opencode_dir.mkdir()
+
+        ctx = _make_generation_context(
+            repo_root,
+            optional_features=["python"],
+        )
+
+        gen = ComposeGenerator()
+        gen.generate(ctx)
+
+        compose_content = (opencode_dir / "docker-compose.yaml").read_text()
+        assert "m2-" not in compose_content
+
+    def test_python_and_java_features_both_add_volumes(self, tmp_path: Path):
+        """Python and Java features should both add volumes without clobbering."""
+        repo_root = tmp_path / "myproject"
+        repo_root.mkdir()
+        opencode_dir = repo_root / ".opencode"
+        opencode_dir.mkdir()
+
+        ctx = _make_generation_context(
+            repo_root,
+            optional_features=["python", "java"],
+        )
+
+        gen = ComposeGenerator()
+        gen.generate(ctx)
+
+        compose_content = (opencode_dir / "docker-compose.yaml").read_text()
+        assert "venv-myproject" in compose_content
+        assert "m2-myproject" in compose_content
+        assert "/myproject/.venv" in compose_content
+        assert "/home/${REMOTE_USER}/.m2" in compose_content
+        assert compose_content.count("volumes:") == 1  # Should have only one volumes header
