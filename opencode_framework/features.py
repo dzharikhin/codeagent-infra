@@ -14,7 +14,7 @@ from opencode_framework.preflight import check_docker_rootless_context
 # Order matters: it defines the prompt order and is reused by the init wizard.
 AVAILABLE_FEATURES: List[Tuple[str, str]] = [
     ("docker", "Docker access (DinD with rootless context)"),
-    ("python", "Python + Poetry"),
+    ("python", "Python + Poetry + uv"),
     ("nodejs", "Node.js + npm"),
     ("java", "Java + Maven"),
 ]
