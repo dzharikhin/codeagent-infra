@@ -2,7 +2,7 @@
 
 import json
 import re
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from .base import FileGenerator, GenerationContext
 from .templates import TemplateHandler
@@ -56,12 +56,12 @@ class DevcontainerGenerator(FileGenerator):
     @staticmethod
     def _escape_for_echo_e(content: str) -> str:
         """Escape content for use in shell echo -e command.
-        
+
         Escapes:
         - Backslashes: \\ -> \\
         - Double quotes: " -> \"
         - Dollar signs: $ -> \\$ (except devcontainer variables)
-        
+
         Devcontainer variables (${localEnv:...}, ${localWorkspaceFolderBasename})
         are preserved without escaping.
         """
@@ -88,22 +88,28 @@ class DevcontainerGenerator(FileGenerator):
         return f'echo -e "{escaped_content}" > .opencode/runtime_data/Dockerfile'
 
     @staticmethod
-    def _reconcile_java_build_tools(features: dict, java_build_tools: List[str]) -> None:
+    def _reconcile_java_build_tools(
+        features: dict, java_build_tools: List[str]
+    ) -> None:
         """Set installMaven and installGradle flags on the Java feature.
 
         Args:
             features: The features dict (mutated in place)
             java_build_tools: List of enabled tools (e.g. ["maven"], ["gradle"], ["maven","gradle"])
         """
-        if "java" not in features:
+        java_url = DevcontainerGenerator.FEATURE_URL_MAP["java"]
+        if java_url not in features:
             return
 
-        # Determine if maven should be installed
-        maven_installed = "maven" in java_build_tools if java_build_tools else True
-        gradle_installed = "gradle" in java_build_tools if java_build_tools else False
+        # None = backward compat default (maven only); [] = explicit empty choice
+        if java_build_tools is None:
+            maven_installed, gradle_installed = True, False
+        else:
+            maven_installed = "maven" in java_build_tools
+            gradle_installed = "gradle" in java_build_tools
 
-        features[DevcontainerGenerator.FEATURE_URL_MAP["java"]]["installMaven"] = maven_installed
-        features[DevcontainerGenerator.FEATURE_URL_MAP["java"]]["installGradle"] = gradle_installed
+        features[java_url]["installMaven"] = maven_installed
+        features[java_url]["installGradle"] = gradle_installed
 
     def _generate_scratch(self, ctx: GenerationContext) -> dict:
         """Generate devcontainer config from template (build-only)."""
@@ -169,7 +175,9 @@ class DevcontainerGenerator(FileGenerator):
 
         # Reconcile Java build tools after all features are added
         if java_build_tools is not None:
-            DevcontainerGenerator._reconcile_java_build_tools(features, java_build_tools)
+            DevcontainerGenerator._reconcile_java_build_tools(
+                features, java_build_tools
+            )
 
     @staticmethod
     def _detect_editor(features: dict) -> str:
@@ -218,7 +226,10 @@ class DevcontainerGenerator(FileGenerator):
             tools.append("gradle")
 
         # Backward compatibility: if Java is present but no flags set, default to maven
-        if not tools and java_url in features:
+        has_explicit_flags = (
+            "installMaven" in java_feature or "installGradle" in java_feature
+        )
+        if not tools and not has_explicit_flags:
             tools = ["maven"]
 
         return tools

@@ -101,7 +101,6 @@ class ComposeGenerator(FileGenerator):
             f"  m2-{repo_name}:",
             f"  gradle-{repo_name}:",
             "    privileged: true",
-            "    init: true",
         }
 
         has_docker = "docker" in optional_features
@@ -142,7 +141,7 @@ class ComposeGenerator(FileGenerator):
         # Pass 3: re-inject footprints for the desired feature set.
         if has_docker:
             lines = ComposeGenerator._insert_after_line(
-                lines, "    working_dir", "    privileged: true\n    init: true"
+                lines, "    working_dir", "    privileged: true"
             )
 
         mounts: List[str] = []

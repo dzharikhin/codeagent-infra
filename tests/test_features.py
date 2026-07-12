@@ -8,7 +8,10 @@ import pytest
 
 from opencode_framework import features
 from opencode_framework.generators.compose import ComposeGenerator
-from opencode_framework.generators.devcontainer import DevcontainerGenerator, COMMON_UTILS_URL
+from opencode_framework.generators.devcontainer import (
+    DevcontainerGenerator,
+    COMMON_UTILS_URL,
+)
 from opencode_framework.generators.templates import TemplateHandler
 
 
@@ -20,9 +23,14 @@ def _dc_with_features(*features: str, editor: str = "none") -> dict:
 
 
 def _render_compose(
-    repo_name: str, features: List[str], ports: List[str] = None, java_build_tools: List[str] = None
+    repo_name: str,
+    features: List[str],
+    ports: List[str] = None,
+    java_build_tools: List[str] = None,
 ) -> str:
-    return TemplateHandler.render_compose_template(repo_name, features, ports, java_build_tools)
+    return TemplateHandler.render_compose_template(
+        repo_name, features, ports, java_build_tools
+    )
 
 
 class TestDetect:
@@ -89,29 +97,45 @@ class TestDetect:
 
     def test_detect_build_tools_maven_only(self):
         dc = _dc_with_features("java")
-        dc["features"][DevcontainerGenerator.FEATURE_URL_MAP["java"]]["installMaven"] = True
-        dc["features"][DevcontainerGenerator.FEATURE_URL_MAP["java"]]["installGradle"] = False
+        dc["features"][DevcontainerGenerator.FEATURE_URL_MAP["java"]][
+            "installMaven"
+        ] = True
+        dc["features"][DevcontainerGenerator.FEATURE_URL_MAP["java"]][
+            "installGradle"
+        ] = False
         tools = DevcontainerGenerator.detect_build_tools(dc)
         assert tools == ["maven"]
 
     def test_detect_build_tools_gradle_only(self):
         dc = _dc_with_features("java")
-        dc["features"][DevcontainerGenerator.FEATURE_URL_MAP["java"]]["installMaven"] = False
-        dc["features"][DevcontainerGenerator.FEATURE_URL_MAP["java"]]["installGradle"] = True
+        dc["features"][DevcontainerGenerator.FEATURE_URL_MAP["java"]][
+            "installMaven"
+        ] = False
+        dc["features"][DevcontainerGenerator.FEATURE_URL_MAP["java"]][
+            "installGradle"
+        ] = True
         tools = DevcontainerGenerator.detect_build_tools(dc)
         assert tools == ["gradle"]
 
     def test_detect_build_tools_both(self):
         dc = _dc_with_features("java")
-        dc["features"][DevcontainerGenerator.FEATURE_URL_MAP["java"]]["installMaven"] = True
-        dc["features"][DevcontainerGenerator.FEATURE_URL_MAP["java"]]["installGradle"] = True
+        dc["features"][DevcontainerGenerator.FEATURE_URL_MAP["java"]][
+            "installMaven"
+        ] = True
+        dc["features"][DevcontainerGenerator.FEATURE_URL_MAP["java"]][
+            "installGradle"
+        ] = True
         tools = DevcontainerGenerator.detect_build_tools(dc)
         assert tools == ["maven", "gradle"]
 
     def test_detect_build_tools_none_explicit(self):
         dc = _dc_with_features("java")
-        dc["features"][DevcontainerGenerator.FEATURE_URL_MAP["java"]]["installMaven"] = False
-        dc["features"][DevcontainerGenerator.FEATURE_URL_MAP["java"]]["installGradle"] = False
+        dc["features"][DevcontainerGenerator.FEATURE_URL_MAP["java"]][
+            "installMaven"
+        ] = False
+        dc["features"][DevcontainerGenerator.FEATURE_URL_MAP["java"]][
+            "installGradle"
+        ] = False
         tools = DevcontainerGenerator.detect_build_tools(dc)
         assert tools == []
 
@@ -128,7 +152,9 @@ class TestDetect:
 
     def test_detect_build_tools_mixed_features(self):
         dc = _dc_with_features("python", "java", "nodejs")
-        dc["features"][DevcontainerGenerator.FEATURE_URL_MAP["java"]]["installGradle"] = True
+        dc["features"][DevcontainerGenerator.FEATURE_URL_MAP["java"]][
+            "installGradle"
+        ] = True
         tools = DevcontainerGenerator.detect_build_tools(dc)
         assert tools == ["gradle"]
 
@@ -137,41 +163,41 @@ class TestReconcile:
     """Tests for DevcontainerGenerator._reconcile_java_build_tools."""
 
     def test_reconcile_maven_only(self):
-        dc = {"features": {}}
-        DevcontainerGenerator._reconcile_java_build_tools(dc, ["maven"])
+        dc = _dc_with_features("java")
+        DevcontainerGenerator._reconcile_java_build_tools(dc["features"], ["maven"])
         java_url = DevcontainerGenerator.FEATURE_URL_MAP["java"]
         assert dc["features"][java_url]["installMaven"] is True
         assert dc["features"][java_url]["installGradle"] is False
 
     def test_reconcile_gradle_only(self):
-        dc = {"features": {}}
-        DevcontainerGenerator._reconcile_java_build_tools(dc, ["gradle"])
+        dc = _dc_with_features("java")
+        DevcontainerGenerator._reconcile_java_build_tools(dc["features"], ["gradle"])
         java_url = DevcontainerGenerator.FEATURE_URL_MAP["java"]
         assert dc["features"][java_url]["installMaven"] is False
         assert dc["features"][java_url]["installGradle"] is True
 
     def test_reconcile_both(self):
-        dc = {"features": {}}
-        DevcontainerGenerator._reconcile_java_build_tools(dc, ["maven", "gradle"])
+        dc = _dc_with_features("java")
+        DevcontainerGenerator._reconcile_java_build_tools(
+            dc["features"], ["maven", "gradle"]
+        )
         java_url = DevcontainerGenerator.FEATURE_URL_MAP["java"]
         assert dc["features"][java_url]["installMaven"] is True
         assert dc["features"][java_url]["installGradle"] is True
 
     def test_reconcile_none(self):
-        dc = {"features": {}}
-        DevcontainerGenerator._reconcile_java_build_tools(dc, [])
+        dc = _dc_with_features("java")
+        DevcontainerGenerator._reconcile_java_build_tools(dc["features"], [])
         java_url = DevcontainerGenerator.FEATURE_URL_MAP["java"]
         assert dc["features"][java_url]["installMaven"] is False
         assert dc["features"][java_url]["installGradle"] is False
 
     def test_reconcile_preserves_existing_params(self):
-        dc = {"features": {}}
-        dc["features"][DevcontainerGenerator.FEATURE_URL_MAP["java"]] = {
-            "version": "21",
-            "custom": "keep",
-        }
-        DevcontainerGenerator._reconcile_java_build_tools(dc, ["gradle"])
+        dc = _dc_with_features("java")
         java_url = DevcontainerGenerator.FEATURE_URL_MAP["java"]
+        dc["features"][java_url]["version"] = "21"
+        dc["features"][java_url]["custom"] = "keep"
+        DevcontainerGenerator._reconcile_java_build_tools(dc["features"], ["gradle"])
         assert dc["features"][java_url]["version"] == "21"
         assert dc["features"][java_url]["custom"] == "keep"
         assert dc["features"][java_url]["installMaven"] is False
@@ -180,8 +206,9 @@ class TestReconcile:
     def test_reconcile_none_java_not_in_features(self):
         """No change when Java feature not present."""
         dc = {"features": {}}
-        DevcontainerGenerator._reconcile_java_build_tools(dc, ["maven"])
-        assert "java" not in dc["features"]
+        DevcontainerGenerator._reconcile_java_build_tools(dc["features"], ["maven"])
+        java_url = DevcontainerGenerator.FEATURE_URL_MAP["java"]
+        assert java_url not in dc["features"]
 
 
 class TestApplyDelta:
@@ -239,7 +266,9 @@ class TestApplyDelta:
     def test_apply_delta_returns_same_object(self):
         """apply_delta mutates and returns the passed-in dict."""
         dc = {"features": {}}
-        result = DevcontainerGenerator.apply_delta(dc, add=["docker"], remove=[], editor="none")
+        result = DevcontainerGenerator.apply_delta(
+            dc, add=["docker"], remove=[], editor="none"
+        )
         assert result is dc
 
     def test_apply_delta_creates_features_key_if_missing(self):
@@ -254,31 +283,63 @@ class TestRebuildFeatures:
 
     REPO = "myrepo"
 
-    def _rebuild(self, text: str, features: List[str], java_build_tools: List[str] = None) -> str:
-        return ComposeGenerator.rebuild_features(text, self.REPO, features, java_build_tools=java_build_tools)
+    def _rebuild(
+        self, text: str, features: List[str], java_build_tools: List[str] = None
+    ) -> str:
+        return ComposeGenerator.rebuild_features(
+            text, self.REPO, features, java_build_tools=java_build_tools
+        )
 
-    def assert_managed(self, text: str, features: List[str], java_build_tools: List[str] = None) -> None:
+    def assert_managed(
+        self, text: str, features: List[str], java_build_tools: List[str] = None
+    ) -> None:
         has_docker = "docker" in features
         assert ("    privileged: true" in text.split("\n")) is has_docker
-        assert ('docker-init.sh' in text) is has_docker
-        assert (f"venv-{self.REPO}:/{self.REPO}/.venv" in text) is ("python" in features)
-        assert (f"m2-{self.REPO}:/home" in text) is ("java" in features and ("maven" in (java_build_tools or ["maven"])))
-        assert (f"gradle-{self.REPO}:/home" in text) is ("java" in features and ("gradle" in (java_build_tools or ["maven"])))
-        if "python" in features or ("java" in features and ("maven" in (java_build_tools or ["maven"]) or "gradle" in (java_build_tools or ["maven"]))):
+        assert ("    init: true" in text.split("\n")) is True
+        assert ("docker-init.sh" in text) is has_docker
+        assert (f"venv-{self.REPO}:/{self.REPO}/.venv" in text) is (
+            "python" in features
+        )
+        assert (f"m2-{self.REPO}:/home" in text) is (
+            "java" in features and ("maven" in (java_build_tools or ["maven"]))
+        )
+        assert (f"gradle-{self.REPO}:/home" in text) is (
+            "java" in features and ("gradle" in (java_build_tools or ["maven"]))
+        )
+        if "python" in features or (
+            "java" in features
+            and (
+                "maven" in (java_build_tools or ["maven"])
+                or "gradle" in (java_build_tools or ["maven"])
+            )
+        ):
             assert "\nvolumes:" in text
         else:
             assert "\nvolumes:" not in text
 
     def test_no_change_roundtrip(self):
-        for feats in ([], ["python"], ["java"], ["docker"],
-                      ["python", "java"], ["python", "java", "docker"], ["nodejs"]):
+        for feats in (
+            [],
+            ["python"],
+            ["java"],
+            ["docker"],
+            ["python", "java"],
+            ["python", "java", "docker"],
+            ["nodejs"],
+        ):
             text = _render_compose(self.REPO, feats)
             rebuilt = self._rebuild(text, feats)
             self.assert_managed(rebuilt, feats)
 
     def test_idempotent(self):
         """Applying the same feature set twice yields identical output."""
-        for feats in ([], ["python"], ["java"], ["java", "docker"], ["python", "java", "docker"]):
+        for feats in (
+            [],
+            ["python"],
+            ["java"],
+            ["java", "docker"],
+            ["python", "java", "docker"],
+        ):
             text = _render_compose(self.REPO, feats)
             once = self._rebuild(text, feats)
             twice = self._rebuild(once, feats)
@@ -311,8 +372,14 @@ class TestRebuildFeatures:
 
     def test_all_transitions_consistent(self):
         """Every add/remove transition must match the rendered target."""
-        sets = [[], ["python"], ["java"], ["docker"],
-                ["python", "java"], ["python", "java", "docker"]]
+        sets = [
+            [],
+            ["python"],
+            ["java"],
+            ["docker"],
+            ["python", "java"],
+            ["python", "java", "docker"],
+        ]
         for src in sets:
             for dst in sets:
                 rebuilt = self._rebuild(_render_compose(self.REPO, src), dst)
@@ -352,9 +419,57 @@ class TestRebuildFeatures:
         text = _render_compose(self.REPO, [])
         rebuilt = self._rebuild(text, ["python"])
         lines = rebuilt.split("\n")
-        svc_idx = next(i for i, ln in enumerate(lines) if ln.strip() == "volumes:" and ln.startswith(" "))
+        svc_idx = next(
+            i
+            for i, ln in enumerate(lines)
+            if ln.strip() == "volumes:" and ln.startswith(" ")
+        )
         # the line right after the service-level volumes: key must be a mount, not a top-level key
         assert lines[svc_idx + 1].startswith("      - ")
+
+    def test_gradle_mount_adds_gradle_volume_to_managed_lines(self):
+        """Gradle mount is added to managed_lines and thus stripped/re-added."""
+        # Render with gradle, then rebuild with maven only
+        text = _render_compose(self.REPO, ["java"], java_build_tools=["gradle"])
+        rebuilt = self._rebuild(text, ["java"], java_build_tools=["maven"])
+        # gradle mount should be removed (no longer in maven set)
+        assert "gradle-" not in rebuilt
+
+    def test_gradle_rebuild_from_maven_to_gradle(self):
+        """Transition from maven to gradle replaces m2 with gradle mount."""
+        text = _render_compose(self.REPO, ["java"], java_build_tools=["maven"])
+        rebuilt = self._rebuild(text, ["java"], java_build_tools=["gradle"])
+        assert "m2-" not in rebuilt
+        assert "gradle-" in rebuilt
+
+    def test_gradle_rebuild_from_gradle_to_maven(self):
+        """Transition from gradle to maven replaces gradle with m2 mount."""
+        text = _render_compose(self.REPO, ["java"], java_build_tools=["gradle"])
+        rebuilt = self._rebuild(text, ["java"], java_build_tools=["maven"])
+        assert "gradle-" not in rebuilt
+        assert "m2-" in rebuilt
+
+    def test_gradle_rebuild_from_maven_to_both(self):
+        """Adding gradle to maven keeps both mounts."""
+        text = _render_compose(self.REPO, ["java"], java_build_tools=["maven"])
+        rebuilt = self._rebuild(text, ["java"], java_build_tools=["maven", "gradle"])
+        assert "m2-" in rebuilt
+        assert "gradle-" in rebuilt
+
+    def test_gradle_rebuild_from_gradle_to_both(self):
+        """Adding maven to gradle keeps both mounts."""
+        text = _render_compose(self.REPO, ["java"], java_build_tools=["gradle"])
+        rebuilt = self._rebuild(text, ["java"], java_build_tools=["maven", "gradle"])
+        assert "m2-" in rebuilt
+        assert "gradle-" in rebuilt
+
+    def test_rebuild_features_accepts_java_build_tools_kwarg(self):
+        """rebuild_features must accept java_build_tools as a keyword argument."""
+        text = _render_compose(self.REPO, ["java"])
+        rebuilt = ComposeGenerator.rebuild_features(
+            text, self.REPO, ["java"], java_build_tools=["gradle"]
+        )
+        assert "gradle-" in rebuilt
 
 
 class TestDetectPorts:
@@ -466,52 +581,6 @@ class TestRebuildPorts:
         )
         assert "MY_CUSTOM=keepme" in rebuilt
 
-    def test_gradle_mount_adds_gradle_volume_to_managed_lines(self):
-        """Gradle mount is added to managed_lines and thus stripped/re-added."""
-        # Render with gradle, then rebuild with maven only
-        text = _render_compose(self.REPO, ["java"], java_build_tools=["gradle"])
-        rebuilt = self._rebuild(text, ["java"], java_build_tools=["maven"])
-        # gradle mount should be removed (no longer in maven set)
-        assert "gradle-" not in rebuilt
-
-    def test_gradle_rebuild_from_maven_to_gradle(self):
-        """Transition from maven to gradle replaces m2 with gradle mount."""
-        text = _render_compose(self.REPO, ["java"], java_build_tools=["maven"])
-        rebuilt = self._rebuild(text, ["java"], java_build_tools=["gradle"])
-        assert "m2-" not in rebuilt
-        assert "gradle-" in rebuilt
-
-    def test_gradle_rebuild_from_gradle_to_maven(self):
-        """Transition from gradle to maven replaces gradle with m2 mount."""
-        text = _render_compose(self.REPO, ["java"], java_build_tools=["gradle"])
-        rebuilt = self._rebuild(text, ["java"], java_build_tools=["maven"])
-        assert "gradle-" not in rebuilt
-        assert "m2-" in rebuilt
-
-    def test_gradle_rebuild_from_maven_to_both(self):
-        """Adding gradle to maven keeps both mounts."""
-        text = _render_compose(self.REPO, ["java"], java_build_tools=["maven"])
-        rebuilt = self._rebuild(text, ["java"], java_build_tools=["maven", "gradle"])
-        assert "m2-" in rebuilt
-        assert "gradle-" in rebuilt
-
-    def test_gradle_rebuild_from_gradle_to_both(self):
-        """Adding maven to gradle keeps both mounts."""
-        text = _render_compose(self.REPO, ["java"], java_build_tools=["gradle"])
-        rebuilt = self._rebuild(text, ["java"], java_build_tools=["maven", "gradle"])
-        assert "m2-" in rebuilt
-        assert "gradle-" in rebuilt
-
-    def test_rebuild_features_accepts_java_build_tools_kwarg(self):
-        """rebuild_features must accept java_build_tools as a keyword argument."""
-        # This test documents the regression for Bug 1: missing java_build_tools param
-        text = _render_compose(self.REPO, [])
-        # Should not raise TypeError even though we pass java_build_tools as keyword
-        rebuilt = ComposeGenerator.rebuild_features(
-            text, self.REPO, [], java_build_tools=["gradle"]
-        )
-        assert "gradle-" in rebuilt
-
 
 class TestRenderComposeTemplateVolumeFix:
     """Regression tests for the java-without-python volumes: header bug."""
@@ -568,7 +637,10 @@ class TestUpdateFeatures:
     """Tests for the high-level features.update_features orchestrator."""
 
     def _seed_opencode(
-        self, tmp_path: Path, features_list: List[str], java_build_tools: List[str] = None
+        self,
+        tmp_path: Path,
+        features_list: List[str],
+        java_build_tools: List[str] = None,
     ) -> Path:
         """Create a minimal .opencode dir with devcontainer.json + compose.
 
@@ -591,7 +663,9 @@ class TestUpdateFeatures:
         )
         return opencode_dir
 
-    def test_non_interactive_returns_false_and_is_noop(self, tmp_path: Path, monkeypatch):
+    def test_non_interactive_returns_false_and_is_noop(
+        self, tmp_path: Path, monkeypatch
+    ):
         """Without a TTY, update_features must not prompt or write."""
         monkeypatch.setattr(features, "is_interactive", lambda: False)
         opencode_dir = self._seed_opencode(tmp_path, ["python"])
@@ -654,7 +728,9 @@ class TestUpdateFeatures:
         assert "docker-init.sh" in compose
         assert f"m2-{tmp_path.name}:/home" in compose
 
-    def test_change_without_compose_only_updates_devcontainer(self, tmp_path: Path, monkeypatch):
+    def test_change_without_compose_only_updates_devcontainer(
+        self, tmp_path: Path, monkeypatch
+    ):
         """If docker-compose.yaml is absent, only devcontainer.json is updated."""
         monkeypatch.setattr(features, "is_interactive", lambda: True)
         monkeypatch.setattr(
@@ -693,7 +769,9 @@ class TestUpdateFeatures:
         compose = (opencode_dir / "docker-compose.yaml").read_text()
         assert "      - 8080:8080" in compose
 
-    def test_update_features_java_build_tools_roundtrip(self, tmp_path: Path, monkeypatch):
+    def test_update_features_java_build_tools_roundtrip(
+        self, tmp_path: Path, monkeypatch
+    ):
         """Java→Gradle transition through update_features must work correctly."""
         monkeypatch.setattr(features, "is_interactive", lambda: True)
 
@@ -755,13 +833,16 @@ class TestPromptJavaBuildTools:
             def __call__(self, msg, default=False):
                 self.call_count += 1
                 self.answers.append((msg, default))
-                # Default to False for first call, then repeat previous answer
-                return False if self.call_count % 2 else default
+                return default
 
         self.typer_confirm = _FakeConfirm()
-        monkeypatch.setattr("opencode_framework.features.typer.confirm", self.typer_confirm)
+        monkeypatch.setattr(
+            "opencode_framework.features.typer.confirm", self.typer_confirm
+        )
 
-        monkeypatch.setattr("opencode_framework.features.typer.echo", lambda *args, **kwargs: None)
+        monkeypatch.setattr(
+            "opencode_framework.features.typer.echo", lambda *args, **kwargs: None
+        )
 
     def test_none_defaults_maven_true_gradle_false(self):
         """When current_tools is None, default to maven=True, gradle=False."""
@@ -786,12 +867,10 @@ class TestPromptJavaBuildTools:
         # Second call: repeats previous answer
         assert tools == ["gradle"]
 
-    def test_returns_both_when_both_confirmed(self):
+    def test_returns_both_when_both_confirmed(self, monkeypatch):
         """When both maven and gradle confirmed, return both."""
         # Need to mock typer.confirm to return True both times
         with monkeypatch.context() as m:
-            original_confirm = features.typer.confirm
-
             call_count = 0
 
             def mock_confirm(msg, default=False):
@@ -800,7 +879,9 @@ class TestPromptJavaBuildTools:
                 return True  # Always confirm both
 
             m.setattr("opencode_framework.features.typer.confirm", mock_confirm)
-            m.setattr("opencode_framework.features.typer.echo", lambda *args, **kwargs: None)
+            m.setattr(
+                "opencode_framework.features.typer.echo", lambda *args, **kwargs: None
+            )
 
             tools = features._prompt_java_build_tools([])
 
@@ -864,4 +945,3 @@ class TestParsePortMappings:
 
     def test_protocol_suffix_preserved(self):
         assert features.parse_port_mappings("8443:443/tcp") == ["8443:443/tcp"]
-

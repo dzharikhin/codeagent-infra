@@ -5,7 +5,6 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-import click
 import typer
 
 from opencode_framework.preflight import check_docker_rootless_context
@@ -89,6 +88,24 @@ def _prompt_java_build_tools(current_tools: Optional[List[str]] = None) -> List[
     return tools
 
 
+def _prompt_editor_choice(default: str) -> str:
+    """Prompt for editor choice with validation.
+
+    Args:
+        default: The default value to suggest
+
+    Returns:
+        The validated editor choice (lowercase)
+    """
+    typer.echo(f"\nEditor preference (one of: {', '.join(EDITOR_CHOICES)}):")
+    while True:
+        choice = typer.prompt("Editor", default=default)
+        choice_lower = choice.lower()
+        if choice_lower in EDITOR_CHOICES:
+            return choice_lower
+        typer.secho("Invalid choice. Please select one of: none, vi, or nano.", fg=typer.colors.RED)
+
+
 def prompt_feature_changes(
     current_features: List[str],
     current_editor: str,
@@ -122,11 +139,7 @@ def prompt_feature_changes(
         elif key == "java":
             java_build_tools = []
 
-    editor_choice = typer.prompt(
-        "\nEditor preference",
-        type=click.Choice(EDITOR_CHOICES),
-        default=current_editor,
-    )
+    editor_choice = _prompt_editor_choice(current_editor)
 
     return selected, editor_choice, java_build_tools
 
