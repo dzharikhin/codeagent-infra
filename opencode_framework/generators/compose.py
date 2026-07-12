@@ -87,15 +87,16 @@ class ComposeGenerator(FileGenerator):
         Returns:
             Updated compose file content
         """
-        venv_mount = f"      - venv-{repo_name}:/{repo_name}/.venv"
-        m2_mount = f"      - m2-{repo_name}:/home/${{REMOTE_USER}}/.m2"
-        managed_lines = {
-            venv_mount,
-            m2_mount,
-            f"  venv-{repo_name}:",
-            f"  m2-{repo_name}:",
-            "    privileged: true",
-        }
+    venv_mount = f"      - venv-{repo_name}:/{repo_name}/.venv"
+    m2_mount = f"      - m2-{repo_name}:/home/${{REMOTE_USER}}/.m2"
+    managed_lines = {
+        venv_mount,
+        m2_mount,
+        f"  venv-{repo_name}:",
+        f"  m2-{repo_name}:",
+        "    privileged: true",
+        "    init: true",
+    }
 
         has_docker = "docker" in optional_features
         desired_entrypoint = (
@@ -130,7 +131,7 @@ class ComposeGenerator(FileGenerator):
         # Pass 3: re-inject footprints for the desired feature set.
         if has_docker:
             lines = ComposeGenerator._insert_after_line(
-                lines, "    working_dir", "    privileged: true"
+                lines, "    working_dir", "    privileged: true\n    init: true"
             )
 
         mounts: List[str] = []

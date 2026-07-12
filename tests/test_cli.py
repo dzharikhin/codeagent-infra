@@ -349,3 +349,31 @@ class TestLaunchRebuildFeaturePrompt:
 
         assert result.exit_code == 0
 
+    def test_launch_handles_keyboard_interrupt(self, tmp_path: Path, monkeypatch):
+        """launch must clean up container on KeyboardInterrupt."""
+        self._setup_repo(tmp_path)
+        app_module = self._patch_launch_deps(monkeypatch, tmp_path)
+        monkeypatch.setattr(app_module, "load_image_id", lambda d: "sha256:cached")
+
+        # Track subprocess calls
+        subprocess_calls = []
+
+        def fake_run(*args, **kwargs):
+            subprocess_calls.append(("run", args, kwargs))
+            if "docker" in args[0]:
+                # Simulate docker compose run being interrupted
+                raise KeyboardInterrupt()
+            return type("R", (), {"returncode": 0})()
+
+        monkeypatch.setattr(app_module.subprocess, "run", fake_run)
+
+        from typer.testing import CliRunner
+        result = CliRunner().invoke(app_module.app, ["launch", "--serve", "--port", "33050", "--hostname", "0.0.0.0"])
+
+        assert result.exit_code == 130  # Standard SIGINT exit code
+        assert len(subprocess_calls) >= 2  # At least run and cleanup
+
+        # Verify cleanup was called
+        cleanup_cmds = [call for call in subprocess_calls if "rm -f" in str(call) or "down" in str(call)]
+        assert len(cleanup_cmds) > 0, "Cleanup commands should have been called"
+

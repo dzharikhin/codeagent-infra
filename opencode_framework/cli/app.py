@@ -449,9 +449,25 @@ def launch(
     
     run_cmd.append("opencode")
     run_cmd.extend(args)
-    
-    result = subprocess.run(run_cmd, env=subprocess_env, cwd=repo_root)
-    raise typer.Exit(result.returncode)
+
+    result = None
+    try:
+        result = subprocess.run(run_cmd, env=subprocess_env, cwd=repo_root)
+        raise typer.Exit(result.returncode)
+    except KeyboardInterrupt:
+        # Cleanup: stop the container if it's still running
+        typer.echo("\nInterrupted. Cleaning up container...", err=True)
+        if container_name:
+            cleanup_cmd = ["docker", "rm", "-f", container_name]
+            subprocess.run(cleanup_cmd, env=subprocess_env, capture_output=True)
+        # Also run docker compose down to clean up any remaining resources
+        down_cmd = ["docker", "compose", "-f", str(compose_path), "down", "--remove-orphans"]
+        subprocess.run(down_cmd, env=subprocess_env, capture_output=True)
+        typer.secho("Cleanup complete. Press Ctrl+C again to force exit.", fg=typer.colors.YELLOW, err=True)
+        raise typer.Exit(130)  # 130 is standard exit code for SIGINT
+    except Exception:
+        # Re-raise any other exception
+        raise
 
 
 if __name__ == "__main__":
