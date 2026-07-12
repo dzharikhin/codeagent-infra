@@ -341,22 +341,23 @@ def launch(
     ),
 ) -> None:
     """Launch the OpenCode agent in a container.
-    
+
     Builds the devcontainer image (if needed) and runs OpenCode using docker compose.
-    
+
     Environment variables are loaded with precedence (lowest to highest):
-    1. Base .opencode/.env file
-    2. Override file (--env-file)
-    3. Command-line variables (-e KEY=VALUE)
-    
+    1. Global env file (~/.config/opencode/.env, auto-loaded if present)
+    2. Base .opencode/.env file
+    3. Override file (--env-file)
+    4. Command-line variables (-e KEY=VALUE)
+
     Supports:
     - Variable interpolation: $VAR, ${VAR}, ${VAR:-default}
     - Export statements: export KEY=VALUE
     - Comments: # comment
     - Quoted values: KEY="value with spaces"
-    
+
     DOCKER_CONTEXT is set to 'rootless' by default. Use --docker-context to override.
-    
+
     Examples:
         ocframework launch
         ocframework launch --rebuild
@@ -376,12 +377,16 @@ def launch(
         raise typer.Exit(1)
     
     env_path = repo_root / ".opencode" / ".env"
-    
+    global_env_path = get_config_root() / "opencode" / ".env"
+    warnings: List[str] = []
+
     try:
         final_env = load_env_with_overrides(
             base_env_path=env_path,
             override_env_path=env_file,
             cli_env_vars=env_vars,
+            global_env_path=global_env_path,
+            warnings=warnings,
         )
     except EnvError as e:
         typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
@@ -392,6 +397,10 @@ def launch(
     except Exception as e:
         typer.secho(f"Error loading environment: {e}", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
+
+    # Print any warnings (e.g., global env file failed to parse)
+    for warning in warnings:
+        typer.secho(f"Warning: {warning}", fg=typer.colors.YELLOW)
     
     subprocess_env = build_docker_env(final_env, docker_context)
     

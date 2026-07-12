@@ -91,6 +91,8 @@ The backup is created at `.opencode.backup-<timestamp>` in the project root.
 
 The `init` command generates `.opencode/.env` with placeholder values. Edit this file to configure environment variables for your project.
 
+You can also use a global environment file at `~/.config/opencode/.env` (on Unix-like systems) or `%APPDATA%\opencode\.env` on Windows. This file is automatically loaded if present, with the lowest priority.
+
 At launch time, you can override environment variables:
 
 ```sh
@@ -102,9 +104,10 @@ ocframework launch -e API_KEY=secret123 -e DEBUG=true
 ```
 
 Environment precedence (lowest to highest):
-1. Base `.opencode/.env` file
-2. Override file (`--env-file`)
-3. Command-line variables (`-e KEY=VALUE`)
+1. Global env file (`~/.config/opencode/.env` or `%APPDATA%\opencode\.env`, auto-loaded)
+2. Base `.opencode/.env` file
+3. Override file (`--env-file`)
+4. Command-line variables (`-e KEY=VALUE`)
 
 The framework supports variable interpolation in `.env` files: `$VAR`, `${VAR}`, and `${VAR:-default}` syntax.
 

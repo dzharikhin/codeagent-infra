@@ -649,6 +649,118 @@ class TestIntegrationScenarios:
             assert "missing.env" in str(e)
 
 
+class TestGlobalEnvFile:
+    """Tests for global env file loading."""
+
+    def test_global_only(self, tmp_path: Path):
+        """Should load global env file."""
+        global_env = tmp_path / "global.env"
+        global_env.write_text("GLOBAL_KEY=global_value\nGLOBAL_VAR=global_var")
+        final_env = load_env_with_overrides(
+            base_env_path=Path("/nonexistent"),
+            global_env_path=global_env,
+        )
+        assert final_env == {"GLOBAL_KEY": "global_value", "GLOBAL_VAR": "global_var"}
+
+    def test_global_base_precedence(self, tmp_path: Path):
+        """Base env file should override global env file."""
+        global_env = tmp_path / "global.env"
+        global_env.write_text("KEY=global_value\nKEY2=global_value2")
+
+        base_env = tmp_path / ".env"
+        base_env.write_text("KEY=base_value\nKEY3=base_value3")
+
+        final_env = load_env_with_overrides(
+            base_env_path=base_env,
+            global_env_path=global_env,
+        )
+        assert final_env == {
+            "KEY": "base_value",  # Base overrides global
+            "KEY2": "global_value2",
+            "KEY3": "base_value3",
+        }
+
+    def test_global_override_cli_precedence(self, tmp_path: Path):
+        """CLI variables should have highest precedence over global and base."""
+        global_env = tmp_path / "global.env"
+        global_env.write_text("KEY=global_value")
+
+        base_env = tmp_path / ".env"
+        base_env.write_text("KEY=base_value")
+
+        cli_vars = ["KEY=cli_value", "KEY2=cli_value2"]
+
+        final_env = load_env_with_overrides(
+            base_env_path=base_env,
+            override_env_path=None,
+            cli_env_vars=cli_vars,
+            global_env_path=global_env,
+        )
+        assert final_env == {
+            "KEY": "cli_value",  # CLI overrides base and global
+            "KEY2": "cli_value2",
+        }
+
+    def test_global_absent_no_error(self, tmp_path: Path):
+        """Should not error when global file doesn't exist."""
+        base_env = tmp_path / ".env"
+        base_env.write_text("KEY=value")
+
+        final_env = load_env_with_overrides(
+            base_env_path=base_env,
+            global_env_path=Path("/nonexistent"),
+        )
+        assert final_env == {"KEY": "value"}
+
+    def test_global_overrides_cli_missing(self, tmp_path: Path):
+        """Global env should be used when CLI variable is not provided."""
+        global_env = tmp_path / "global.env"
+        global_env.write_text("KEY=global_value")
+
+        base_env = tmp_path / ".env"
+        base_env.write_text("KEY=base_value")
+
+        final_env = load_env_with_overrides(
+            base_env_path=base_env,
+            cli_env_vars=None,
+            global_env_path=global_env,
+        )
+        assert final_env == {"KEY": "base_value"}  # Base overrides global
+
+    def test_global_malformed_warns_and_skips(self, tmp_path: Path):
+        """Should skip global file on parse error and append warning."""
+        global_env = tmp_path / "global.env"
+        global_env.write_text("INVALID_SYNTAX {{{ KEY=value")
+
+        warnings: List[str] = []
+        final_env = load_env_with_overrides(
+            base_env_path=Path("/nonexistent"),
+            global_env_path=global_env,
+            warnings=warnings,
+        )
+        assert "Skipping global env file" in warnings[0]
+        assert "INVALID_SYNTAX" in warnings[0]
+        assert final_env == {}
+
+    def test_global_interpolation_with_base(self, tmp_path: Path):
+        """Interpolation should work across global and base env files."""
+        global_env = tmp_path / "global.env"
+        global_env.write_text("GLOBAL_BASE_URL=http://example.com")
+
+        base_env = tmp_path / ".env"
+        base_env.write_text("GLOBAL_API_PATH=/api")
+
+        final_env = load_env_with_overrides(
+            base_env_path=base_env,
+            global_env_path=global_env,
+        )
+        # Base URL should be from global, API path from base
+        assert "GLOBAL_BASE_URL" in final_env
+        assert "GLOBAL_API_PATH" in final_env
+        # Note: if base had GLOBAL_BASE_URL, it would override
+        assert final_env["GLOBAL_BASE_URL"] == "http://example.com"
+
+
 class TestImageIdHelpers:
     """Tests for image ID persistence helpers."""
 

@@ -108,39 +108,54 @@ def load_env_with_overrides(
     base_env_path: Path,
     override_env_path: Optional[Path] = None,
     cli_env_vars: Optional[List[str]] = None,
+    global_env_path: Optional[Path] = None,
+    warnings: Optional[List[str]] = None,
 ) -> Dict[str, str]:
     """Load environment with proper precedence and interpolation.
-    
+
     Uses python-dotenv for parsing, then applies recursive interpolation
     across all sources together.
-    
+
     Precedence (lowest to highest):
-    1. Base .env file
-    2. Override file (if provided)
-    3. CLI environment variables
-    
+    1. Global env file (if provided, e.g., ~/.config/opencode/.env)
+    2. Base .env file
+    3. Override file (if provided)
+    4. CLI environment variables
+
     Supports:
     - Comments (#)
     - Export statements (export KEY=VALUE)
     - Basic interpolation: $VAR and ${VAR}
     - Default values: ${VAR:-default}
     - Escaped characters and quoted values
-    
+
     Args:
         base_env_path: Path to base .env file
         override_env_path: Optional override env file
         cli_env_vars: Optional list of KEY=VALUE strings from CLI
-        
+        global_env_path: Optional path to global env file (lowest priority)
+        warnings: Optional list to collect warning messages
+
     Returns:
         Merged and interpolated environment dictionary
-        
+
     Raises:
         EnvError: For any loading or parsing errors
         CircularReferenceError: For circular references
         FileNotFoundError: If specified files don't exist
     """
     merged_env = {}
-    
+
+    # 0. Load global env (lowest priority, best-effort)
+    if global_env_path and global_env_path.exists():
+        try:
+            global_env = dotenv_values(global_env_path, interpolate=False)
+            global_env = {k: v if v is not None else "" for k, v in global_env.items()}
+            merged_env.update(global_env)
+        except Exception as e:
+            if warnings is not None:
+                warnings.append(f"Skipping global env file {global_env_path}: {e}")
+
     # 1. Load base environment using python-dotenv (without interpolation first)
     if base_env_path.exists():
         try:
@@ -151,7 +166,7 @@ def load_env_with_overrides(
             merged_env.update(base_env)
         except Exception as e:
             raise EnvError(f"Failed to parse env file: {e}", file_path=base_env_path)
-    
+
     # 2. Load override file if provided
     if override_env_path:
         if not override_env_path.exists():
@@ -162,7 +177,7 @@ def load_env_with_overrides(
             merged_env.update(override_env)
         except Exception as e:
             raise EnvError(f"Failed to parse env file: {e}", file_path=override_env_path)
-    
+
     # 3. Parse CLI variables
     if cli_env_vars:
         try:
@@ -170,7 +185,7 @@ def load_env_with_overrides(
             merged_env.update(cli_env)
         except ValueError as e:
             raise EnvError(f"Invalid CLI environment variable: {e}")
-    
+
     # 4. Apply recursive interpolation to merged environment
     # This handles both basic interpolation ($VAR, ${VAR}) and defaults (${VAR:-default})
     try:
@@ -179,7 +194,7 @@ def load_env_with_overrides(
         raise
     except Exception as e:
         raise InterpolationError(f"Interpolation failed: {e}")
-    
+
     return final_env
 
 
