@@ -1,7 +1,7 @@
 """Core business logic modules."""
 
-from .git import GitOperations
 from .config import ConfigManager
+from .git import GitOperations
 
 __all__ = [
     "GitOperations",

@@ -1,9 +1,9 @@
 """Generator package for creating .opencode/ directory contents."""
 
-from .orchestrator import GenerationOrchestrator
 from .base import FileGenerator, GenerationContext
-from .templates import TemplateHandler
 from .compose import ComposeGenerator
+from .orchestrator import GenerationOrchestrator
+from .templates import TemplateHandler
 
 __all__ = [
     "GenerationOrchestrator",

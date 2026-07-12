@@ -1,21 +1,21 @@
 """Preflight checks and repository validation."""
 
+import shutil
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
-import shutil
-import subprocess
 
 from opencode_framework.config import (
-    validate_framework_repo,
     get_framework_validation_error,
+    validate_framework_repo,
 )
 
 
 @dataclass
 class PreflightResult:
     """Result of preflight checks."""
-    
+
     success: bool
     error: Optional[str] = None
     remediation: Optional[str] = None
@@ -26,7 +26,7 @@ class PreflightResult:
     missing_tools: List[str] = field(default_factory=list)
     docker_rootless_available: bool = False
     framework_repo_path: Optional[Path] = None
-    
+
     def __post_init__(self):
         if self.missing_tools is None:
             self.missing_tools = []
@@ -37,7 +37,7 @@ REQUIRED_TOOLS = ["git", "docker", "devcontainer"]
 
 def check_required_tools() -> List[str]:
     """Check that all required tools are available.
-    
+
     Returns list of missing tool names.
     """
     missing = []
@@ -49,7 +49,7 @@ def check_required_tools() -> List[str]:
 
 def check_docker_rootless_context() -> bool:
     """Check if a rootless Docker context exists.
-    
+
     Returns True if rootless context is available.
     """
     try:
@@ -67,7 +67,9 @@ def check_docker_rootless_context() -> bool:
     return False
 
 
-def run_git_command(args: List[str], cwd: Optional[Path] = None) -> tuple[int, str, str]:
+def run_git_command(
+    args: List[str], cwd: Optional[Path] = None
+) -> tuple[int, str, str]:
     """Run a git command and return (returncode, stdout, stderr)."""
     try:
         result = subprocess.run(
@@ -90,7 +92,9 @@ def is_inside_git_tree(path: Path) -> bool:
 
 def is_bare_repository(path: Path) -> bool:
     """Check if the repository is bare."""
-    returncode, stdout, _ = run_git_command(["rev-parse", "--is-bare-repository"], cwd=path)
+    returncode, stdout, _ = run_git_command(
+        ["rev-parse", "--is-bare-repository"], cwd=path
+    )
     return returncode == 0 and stdout.lower() == "true"
 
 
@@ -115,7 +119,7 @@ def opencode_directory_exists(repo_root: Path) -> bool:
 
 def run_preflight_checks(cwd: Path, force: bool = False) -> PreflightResult:
     """Run all preflight checks.
-    
+
     Validates:
     - Required tools are present
     - Framework is installed as editable from a valid git clone
@@ -133,9 +137,9 @@ def run_preflight_checks(cwd: Path, force: bool = False) -> PreflightResult:
             remediation=f"Install missing tools: {' '.join(missing_tools)}",
             missing_tools=missing_tools,
         )
-    
+
     from opencode_framework.config import _detect_framework_repo_path
-    
+
     framework_repo_path_str = _detect_framework_repo_path()
     if not framework_repo_path_str:
         return PreflightResult(
@@ -147,18 +151,20 @@ def run_preflight_checks(cwd: Path, force: bool = False) -> PreflightResult:
                 "Clone the framework repository first, then install it with pipx."
             ),
         )
-    
+
     framework_repo_path = Path(framework_repo_path_str)
     valid, missing_paths = validate_framework_repo(framework_repo_path)
     if not valid:
-        error_msg = get_framework_validation_error(missing_paths, framework_repo_path_str)
+        error_msg = get_framework_validation_error(
+            missing_paths, framework_repo_path_str
+        )
         return PreflightResult(
             success=False,
             error=error_msg,
             remediation="Ensure the framework repository is a valid git clone with all required files.",
             framework_repo_path=framework_repo_path,
         )
-    
+
     if not is_inside_git_tree(cwd):
         return PreflightResult(
             success=False,
@@ -166,7 +172,7 @@ def run_preflight_checks(cwd: Path, force: bool = False) -> PreflightResult:
             remediation="Run this command from inside a Git repository",
             framework_repo_path=framework_repo_path,
         )
-    
+
     repo_root = get_repo_root(cwd)
     if repo_root is None:
         return PreflightResult(
@@ -175,7 +181,7 @@ def run_preflight_checks(cwd: Path, force: bool = False) -> PreflightResult:
             remediation="Ensure you are in a valid Git repository",
             framework_repo_path=framework_repo_path,
         )
-    
+
     if repo_root != cwd.resolve():
         return PreflightResult(
             success=False,
@@ -183,7 +189,7 @@ def run_preflight_checks(cwd: Path, force: bool = False) -> PreflightResult:
             remediation=f"Run this command from the repository root: {repo_root}",
             framework_repo_path=framework_repo_path,
         )
-    
+
     if is_bare_repository(cwd):
         return PreflightResult(
             success=False,
@@ -191,7 +197,7 @@ def run_preflight_checks(cwd: Path, force: bool = False) -> PreflightResult:
             remediation="Use a non-bare repository with a working tree",
             framework_repo_path=framework_repo_path,
         )
-    
+
     if has_staged_changes(cwd):
         return PreflightResult(
             success=False,
@@ -200,7 +206,7 @@ def run_preflight_checks(cwd: Path, force: bool = False) -> PreflightResult:
             has_staged_changes=True,
             framework_repo_path=framework_repo_path,
         )
-    
+
     if opencode_directory_exists(repo_root):
         if not force:
             return PreflightResult(
@@ -209,7 +215,7 @@ def run_preflight_checks(cwd: Path, force: bool = False) -> PreflightResult:
                 remediation="Use --force to backup and regenerate, or remove it manually",
                 framework_repo_path=framework_repo_path,
             )
-    
+
     return PreflightResult(
         success=True,
         repo_root=repo_root,

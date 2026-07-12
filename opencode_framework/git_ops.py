@@ -1,15 +1,15 @@
 """Git operations for worktree and branch management."""
 
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
-import subprocess
 
 
 @dataclass
 class GitBranchInfo:
     """Information about a Git branch."""
-    
+
     name: str
     exists: bool
     is_orphan: bool = False
@@ -18,7 +18,7 @@ class GitBranchInfo:
 @dataclass
 class WorktreeResult:
     """Result of worktree creation."""
-    
+
     success: bool
     path: Optional[Path] = None
     error: Optional[str] = None
@@ -81,7 +81,7 @@ def create_orphan_branch(
     cwd: Optional[Path] = None,
 ) -> bool:
     """Create an orphan branch with no commit history.
-    
+
     Returns True on success.
     """
     result = run_git_command(
@@ -90,7 +90,7 @@ def create_orphan_branch(
     )
     if result.returncode != 0:
         return False
-    
+
     result = run_git_command(
         ["reset", "--hard"],
         cwd=cwd,
@@ -104,7 +104,7 @@ def create_worktree(
     cwd: Optional[Path] = None,
 ) -> WorktreeResult:
     """Create a linked worktree.
-    
+
     If branch doesn't exist, creates it as an orphan branch.
     """
     if branch_exists(branch_name, cwd=cwd):
@@ -117,13 +117,13 @@ def create_worktree(
             ["worktree", "add", "--orphan", "-b", branch_name, str(worktree_path)],
             cwd=cwd,
         )
-    
+
     if result.returncode != 0:
         return WorktreeResult(
             success=False,
             error=result.stderr.strip() or "Failed to create worktree",
         )
-    
+
     return WorktreeResult(
         success=True,
         path=worktree_path,
@@ -145,14 +145,14 @@ def list_worktrees(cwd: Optional[Path] = None) -> List[Path]:
         ["worktree", "list", "--porcelain"],
         cwd=cwd,
     )
-    
+
     worktrees = []
     if result.returncode == 0:
         for line in result.stdout.splitlines():
             if line.startswith("worktree "):
                 worktree_path = Path(line.split(" ", 1)[1])
                 worktrees.append(worktree_path)
-    
+
     return worktrees
 
 
@@ -181,13 +181,13 @@ def make_initial_commit(
     allow_empty: bool = True,
 ) -> bool:
     """Create an initial commit.
-    
+
     Returns True on success.
     """
     args = ["commit", "-m", message]
     if allow_empty:
         args.append("--allow-empty")
-    
+
     result = run_git_command(args, cwd=cwd)
     return result.returncode == 0
 
@@ -204,21 +204,21 @@ def setup_opencode_worktree(
     opencode_dir: Path,
 ) -> WorktreeResult:
     """Set up the .opencode directory as a worktree.
-    
+
     This function:
     1. Creates the worktree at .opencode/
     2. Uses an orphan branch if it doesn't exist
     3. Creates an initial empty commit
-    
+
     Returns the result of the worktree creation.
     """
     existing_branch = branch_exists(branch_name, cwd=repo_root)
-    
+
     result = create_worktree(opencode_dir, branch_name, cwd=repo_root)
-    
+
     if not result.success:
         return result
-    
+
     if not existing_branch:
         success = make_initial_commit(
             message="Initial OpenCode framework configuration",
@@ -231,5 +231,5 @@ def setup_opencode_worktree(
                 success=False,
                 error="Failed to create initial commit",
             )
-    
+
     return result

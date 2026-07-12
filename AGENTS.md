@@ -39,11 +39,13 @@ opencode_framework/
 ## Build/Lint/Test Commands
 
 ```sh
+poetry run ruff check .                 # Lint
+poetry run ruff format .                # Format code
+poetry run mypy opencode_framework/     # Type checking
 poetry run pytest                              # Run all tests
 poetry run pytest --cov=opencode_framework     # Run with coverage
 poetry run pytest tests/test_preflight.py -v   # Run single test file
 poetry run pytest tests/ -k "git" -v           # Run tests matching pattern
-poetry run mypy opencode_framework/            # Type checking
 poetry build                                   # Build package
 ```
 
@@ -51,10 +53,7 @@ poetry build                                   # Build package
 
 ### Imports
 
-Group imports with blank lines between:
-1. Standard library (alphabetical)
-2. Third-party packages (alphabetical)
-3. Local imports (alphabetical)
+Import grouping and ordering are enforced by ruff's isort rule (I). Run `ruff check --fix` to auto-fix:
 
 ```python
 import os
@@ -252,6 +251,19 @@ class TestGitOperations:
         subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
         assert is_inside_git_tree(tmp_path) is True
 ```
+
+### Run after every change
+
+Before considering a task complete, the following commands must all pass:
+
+```sh
+poetry run ruff check .      # Check for linting issues
+poetry run ruff format .     # Format code
+poetry run mypy opencode_framework/   # Check type annotations
+poetry run pytest            # Run tests
+```
+
+**Note on imports:** Import grouping is now enforced by ruff's isort rule (I). The manual "Imports" section above is superseded — run `ruff check --fix` to auto-fix import order. The 88-char line limit will wrap some existing long lines; expect a moderate formatting diff after running `ruff format`.
 
 ## Architecture Essentials
 

@@ -1,9 +1,9 @@
 """Consolidated git operations."""
 
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
-import subprocess
 
 from opencode_framework.models import GitResult
 
@@ -11,7 +11,7 @@ from opencode_framework.models import GitResult
 @dataclass
 class GitBranchInfo:
     """Information about a Git branch."""
-    
+
     name: str
     exists: bool
     is_orphan: bool = False
@@ -20,7 +20,7 @@ class GitBranchInfo:
 @dataclass
 class WorktreeResult:
     """Result of worktree creation."""
-    
+
     success: bool
     path: Optional[Path] = None
     error: Optional[str] = None
@@ -28,7 +28,7 @@ class WorktreeResult:
 
 class GitOperations:
     """Unified interface for all git operations."""
-    
+
     @staticmethod
     def run_command(
         args: List[str],
@@ -36,15 +36,15 @@ class GitOperations:
         check: bool = False,
     ) -> GitResult:
         """Run a git command and return a structured result.
-        
+
         Args:
             args: Git command arguments
             cwd: Working directory for the command
             check: Whether to raise on non-zero exit code
-            
+
         Returns:
             GitResult with success status and output
-            
+
         Raises:
             GitError: If check=True and command fails
         """
@@ -57,16 +57,16 @@ class GitOperations:
                 timeout=60,
                 check=check,
             )
-            
+
             git_result = GitResult(
                 success=result.returncode == 0,
                 stdout=result.stdout.strip(),
                 stderr=result.stderr.strip(),
                 returncode=result.returncode,
             )
-            
+
             return git_result
-            
+
         except subprocess.CalledProcessError as e:
             return GitResult(
                 success=False,
@@ -88,18 +88,18 @@ class GitOperations:
                 stderr="git command not found",
                 returncode=-1,
             )
-    
+
     @staticmethod
     def branch_exists(
         branch_name: str,
         cwd: Optional[Path] = None,
     ) -> bool:
         """Check if a branch exists locally.
-        
+
         Args:
             branch_name: Name of the branch
             cwd: Working directory
-            
+
         Returns:
             True if branch exists
         """
@@ -108,14 +108,14 @@ class GitOperations:
             cwd=cwd,
         )
         return result.success
-    
+
     @staticmethod
     def get_current_branch(cwd: Optional[Path] = None) -> Optional[str]:
         """Get the current branch name.
-        
+
         Args:
             cwd: Working directory
-            
+
         Returns:
             Current branch name or None
         """
@@ -126,14 +126,14 @@ class GitOperations:
         if result.success and result.stdout:
             return result.stdout
         return None
-    
+
     @staticmethod
     def is_inside_git_tree(path: Path) -> bool:
         """Check if path is inside a Git working tree.
-        
+
         Args:
             path: Path to check
-            
+
         Returns:
             True if inside a git tree
         """
@@ -142,14 +142,14 @@ class GitOperations:
             cwd=path,
         )
         return result.success
-    
+
     @staticmethod
     def get_repo_root(path: Path) -> Optional[Path]:
         """Get the repository root for the given path.
-        
+
         Args:
             path: Path inside the repository
-            
+
         Returns:
             Repository root path or None if not in a repo
         """
@@ -160,14 +160,14 @@ class GitOperations:
         if result.success and result.stdout:
             return Path(result.stdout)
         return None
-    
+
     @staticmethod
     def is_bare_repository(path: Path) -> bool:
         """Check if repository is bare.
-        
+
         Args:
             path: Path to repository
-            
+
         Returns:
             True if bare repository
         """
@@ -176,14 +176,14 @@ class GitOperations:
             cwd=path,
         )
         return result.success and result.stdout.lower() == "true"
-    
+
     @staticmethod
     def has_staged_changes(path: Path) -> bool:
         """Check if there are staged changes.
-        
+
         Args:
             path: Working directory
-            
+
         Returns:
             True if there are staged changes
         """
@@ -192,18 +192,18 @@ class GitOperations:
             cwd=path,
         )
         return not result.success
-    
+
     @staticmethod
     def create_orphan_branch(
         branch_name: str,
         cwd: Optional[Path] = None,
     ) -> bool:
         """Create an orphan branch with no commit history.
-        
+
         Args:
             branch_name: Name of new branch
             cwd: Working directory
-            
+
         Returns:
             True on success
         """
@@ -213,13 +213,13 @@ class GitOperations:
         )
         if not result.success:
             return False
-        
+
         result = GitOperations.run_command(
             ["reset", "--hard"],
             cwd=cwd,
         )
         return result.success
-    
+
     @staticmethod
     def create_worktree(
         worktree_path: Path,
@@ -227,14 +227,14 @@ class GitOperations:
         cwd: Optional[Path] = None,
     ) -> WorktreeResult:
         """Create a linked worktree.
-        
+
         If branch doesn't exist, creates it as an orphan branch.
-        
+
         Args:
             worktree_path: Path where worktree will be created
             branch_name: Branch name (creates orphan if doesn't exist)
             cwd: Repository root
-            
+
         Returns:
             WorktreeResult with success status
         """
@@ -246,36 +246,38 @@ class GitOperations:
         else:
             result = GitOperations.run_command(
                 [
-                    "worktree", "add",
+                    "worktree",
+                    "add",
                     "--orphan",
-                    "-b", branch_name,
+                    "-b",
+                    branch_name,
                     str(worktree_path),
                 ],
                 cwd=cwd,
             )
-        
+
         if not result.success:
             return WorktreeResult(
                 success=False,
                 error=result.stderr or "Failed to create worktree",
             )
-        
+
         return WorktreeResult(
             success=True,
             path=worktree_path,
         )
-    
+
     @staticmethod
     def remove_worktree(
         worktree_path: Path,
         cwd: Optional[Path] = None,
     ) -> bool:
         """Remove a worktree.
-        
+
         Args:
             worktree_path: Path to worktree
             cwd: Repository root
-            
+
         Returns:
             True on success
         """
@@ -284,14 +286,14 @@ class GitOperations:
             cwd=cwd,
         )
         return result.success
-    
+
     @staticmethod
     def list_worktrees(cwd: Optional[Path] = None) -> List[Path]:
         """List all worktree paths.
-        
+
         Args:
             cwd: Repository root
-            
+
         Returns:
             List of worktree paths
         """
@@ -299,36 +301,36 @@ class GitOperations:
             ["worktree", "list", "--porcelain"],
             cwd=cwd,
         )
-        
+
         worktrees = []
         if result.success:
             for line in result.stdout.splitlines():
                 if line.startswith("worktree "):
                     worktree_path = Path(line.split(" ", 1)[1])
                     worktrees.append(worktree_path)
-        
+
         return worktrees
-    
+
     @staticmethod
     def is_worktree(path: Path) -> bool:
         """Check if the given path is a worktree.
-        
+
         Args:
             path: Path to check
-            
+
         Returns:
             True if path is a worktree
         """
         git_file = path / ".git"
         return git_file.is_file()
-    
+
     @staticmethod
     def get_worktree_gitdir(worktree_path: Path) -> Optional[Path]:
         """Get the .git directory for a worktree.
-        
+
         Args:
             worktree_path: Path to worktree
-            
+
         Returns:
             Path to .git directory or None
         """
@@ -339,7 +341,7 @@ class GitOperations:
                 gitdir = content[8:]
                 return worktree_path / gitdir
         return None
-    
+
     @staticmethod
     def make_initial_commit(
         message: str,
@@ -347,35 +349,35 @@ class GitOperations:
         allow_empty: bool = True,
     ) -> bool:
         """Create an initial commit.
-        
+
         Args:
             message: Commit message
             cwd: Working directory
             allow_empty: Whether to allow empty commit
-            
+
         Returns:
             True on success
         """
         args = ["commit", "-m", message]
         if allow_empty:
             args.append("--allow-empty")
-        
+
         result = GitOperations.run_command(args, cwd=cwd)
         return result.success
-    
+
     @staticmethod
     def add_all_files(cwd: Optional[Path] = None) -> bool:
         """Stage all files in the working directory.
-        
+
         Args:
             cwd: Working directory
-            
+
         Returns:
             True on success
         """
         result = GitOperations.run_command(["add", "."], cwd=cwd)
         return result.success
-    
+
     @staticmethod
     def setup_opencode_worktree(
         repo_root: Path,
@@ -383,31 +385,31 @@ class GitOperations:
         opencode_dir: Path,
     ) -> WorktreeResult:
         """Set up the .opencode directory as a worktree.
-        
+
         This function:
         1. Creates the worktree at .opencode/
         2. Uses an orphan branch if it doesn't exist
         3. Creates an initial empty commit
-        
+
         Args:
             repo_root: Repository root
             branch_name: Branch name for worktree
             opencode_dir: Path to .opencode directory
-            
+
         Returns:
             WorktreeResult with success status
         """
         existing_branch = GitOperations.branch_exists(branch_name, cwd=repo_root)
-        
+
         result = GitOperations.create_worktree(
             opencode_dir,
             branch_name,
             cwd=repo_root,
         )
-        
+
         if not result.success:
             return result
-        
+
         if not existing_branch:
             success = GitOperations.make_initial_commit(
                 message="Initial OpenCode framework configuration",
@@ -420,5 +422,5 @@ class GitOperations:
                     success=False,
                     error="Failed to create initial commit",
                 )
-        
+
         return result

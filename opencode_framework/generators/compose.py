@@ -115,7 +115,7 @@ class ComposeGenerator(FileGenerator):
         for line in lines:
             if line in managed_lines:
                 continue
-            match = re.match(r'^(\s*entrypoint:\s*)(.*)$', line)
+            match = re.match(r"^(\s*entrypoint:\s*)(.*)$", line)
             if match:
                 out.append(f"{match.group(1)}{desired_entrypoint}")
                 continue
@@ -196,9 +196,8 @@ class ComposeGenerator(FileGenerator):
                 j = i + 1
                 while j < len(lines) and lines[j].strip() == "":
                     j += 1
-                has_child = (
-                    j < len(lines)
-                    and (lines[j].startswith(" ") or lines[j].startswith("\t"))
+                has_child = j < len(lines) and (
+                    lines[j].startswith(" ") or lines[j].startswith("\t")
                 )
                 if not has_child:
                     i += 1
@@ -208,9 +207,7 @@ class ComposeGenerator(FileGenerator):
         return out
 
     @staticmethod
-    def _insert_after_line(
-        lines: List[str], prefix: str, content: str
-    ) -> List[str]:
+    def _insert_after_line(lines: List[str], prefix: str, content: str) -> List[str]:
         out: List[str] = []
         inserted = False
         for line in lines:
@@ -247,16 +244,14 @@ class ComposeGenerator(FileGenerator):
         return out
 
     @staticmethod
-    def _ensure_volumes_block_lines(
-        lines: List[str], vol_keys: List[str]
-    ) -> List[str]:
+    def _ensure_volumes_block_lines(lines: List[str], vol_keys: List[str]) -> List[str]:
         idx: int = -1
         for i, line in enumerate(lines):
             if ComposeGenerator._is_top_level_key(line, "volumes:"):
                 idx = i
                 break
         if idx >= 0:
-            return lines[: idx + 1] + vol_keys + lines[idx + 1:]
+            return lines[: idx + 1] + vol_keys + lines[idx + 1 :]
         return lines + ["", "volumes:"] + vol_keys
 
     @staticmethod

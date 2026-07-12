@@ -46,14 +46,20 @@ def _prompt_single_feature(
     """
     if not typer.confirm(f"  Enable {desc}?", default=currently_enabled):
         return False
-    if key == "docker" and not currently_enabled and not check_docker_rootless_context():
+    if (
+        key == "docker"
+        and not currently_enabled
+        and not check_docker_rootless_context()
+    ):
         typer.secho(
             "    Warning: No rootless Docker context found. "
             "Docker access requires a 'rootless' context.",
             fg=typer.colors.RED,
         )
         typer.echo(_DOCKER_ROOTLESS_HINT)
-        return typer.confirm("    Enable Docker anyway? (Not recommended)", default=False)
+        return typer.confirm(
+            "    Enable Docker anyway? (Not recommended)", default=False
+        )
     return True
 
 
@@ -171,8 +177,7 @@ def update_features(opencode_dir: Path, repo_name: str) -> bool:
         new_ports = []
 
     features_changed = (
-        set(new_features) != set(current_features)
-        or new_editor != current_editor
+        set(new_features) != set(current_features) or new_editor != current_editor
     )
     ports_changed = new_ports != current_ports
 
@@ -183,7 +188,9 @@ def update_features(opencode_dir: Path, repo_name: str) -> bool:
     if features_changed:
         add = [f for f in new_features if f not in current_features]
         remove = [f for f in current_features if f not in new_features]
-        DevcontainerGenerator.apply_delta(devcontainer, add=add, remove=remove, editor=new_editor)
+        DevcontainerGenerator.apply_delta(
+            devcontainer, add=add, remove=remove, editor=new_editor
+        )
         devcontainer_path.write_text(json.dumps(devcontainer, indent=2) + "\n")
         typer.secho("Updated .opencode/devcontainer.json", fg=typer.colors.GREEN)
 

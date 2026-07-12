@@ -1,9 +1,9 @@
 """Data models for the OpenCode Framework."""
 
 from .results import (
+    GeneratedFile,
     GitResult,
     ValidationResult,
-    GeneratedFile,
 )
 
 __all__ = [

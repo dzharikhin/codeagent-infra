@@ -1,9 +1,9 @@
 """Interactive wizard for setup decisions."""
 
+import getpass
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
-import getpass
 
 import typer
 
@@ -14,7 +14,7 @@ from opencode_framework.preflight import PreflightResult
 @dataclass
 class WizardResult:
     """Collected wizard decisions."""
-    
+
     branch_name: str
     optional_features: List[str]
     editor_choice: str  # "none", "vi", or "nano"
@@ -34,14 +34,14 @@ def check_gitignore_needs_opencode(repo_root: Path) -> bool:
     gitignore_path = repo_root / ".gitignore"
     if not gitignore_path.is_file():
         return True
-    
+
     content = gitignore_path.read_text()
     return ".opencode" not in content
 
 
 def run_wizard(repo_root: Path, preflight_result: PreflightResult) -> WizardResult:
     """Run the interactive setup wizard.
-    
+
     Asks only for meaningful structural choices:
     - Global config creation (if missing) - FIRST
     - Branch name with suggested default
@@ -50,10 +50,10 @@ def run_wizard(repo_root: Path, preflight_result: PreflightResult) -> WizardResu
     - Editor preference
     """
     from opencode_framework.config import discover_global_settings, get_config_root
-    
+
     settings = discover_global_settings()
     create_global_config = False
-    
+
     if not settings.global_config_found:
         config_root = get_config_root()
         config_path = config_root / "opencode"
@@ -62,25 +62,25 @@ def run_wizard(repo_root: Path, preflight_result: PreflightResult) -> WizardResu
             "Create global config directory?",
             default=True,
         )
-    
+
     suggested_branch = suggest_branch_name()
-    
+
     branch_name = typer.prompt(
         "\nConfig branch name",
         default=suggested_branch,
         type=str,
     )
-    
+
     optional_features, editor_choice = prompt_feature_changes([], "none")
-    
+
     port_mappings = prompt_port_mappings()
-    
+
     if check_gitignore_needs_opencode(repo_root):
         typer.secho(
             "\nNote: .opencode/ is not in .gitignore. Consider adding it to avoid committing framework files.",
             fg=typer.colors.YELLOW,
         )
-    
+
     return WizardResult(
         branch_name=branch_name,
         optional_features=optional_features,

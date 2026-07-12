@@ -6,42 +6,41 @@ import shutil
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List
+from typing import List, Optional
 
 import typer
 
 from opencode_framework import __version__
 from opencode_framework.config import (
     discover_global_settings,
-    validate_framework_repo,
-    get_framework_validation_error,
     get_config_root,
+    get_framework_validation_error,
     get_local_data_home,
+    validate_framework_repo,
 )
-from opencode_framework.preflight import (
-    run_preflight_checks,
-    opencode_directory_exists,
-    get_repo_root,
-)
-from opencode_framework.wizard import run_wizard
 from opencode_framework.features import update_features
 from opencode_framework.generators import GenerationOrchestrator
 from opencode_framework.generators.compose import ComposeGenerator
 from opencode_framework.generators.documentation import DocumentationGenerator
 from opencode_framework.git_ops import (
-    setup_opencode_worktree,
-    remove_worktree,
     is_worktree,
+    remove_worktree,
+    setup_opencode_worktree,
+)
+from opencode_framework.preflight import (
+    get_repo_root,
+    opencode_directory_exists,
+    run_preflight_checks,
 )
 from opencode_framework.runtime import (
-    validate_runtime_context,
-    load_env_with_overrides,
+    EnvError,
     build_docker_env,
+    load_env_with_overrides,
     load_image_id,
     save_image_id,
-    EnvError,
+    validate_runtime_context,
 )
-
+from opencode_framework.wizard import run_wizard
 
 app = typer.Typer(
     name="ocframework",
@@ -54,23 +53,25 @@ app = typer.Typer(
 def _print_version_info() -> None:
     """Print version information including global settings detection."""
     settings = discover_global_settings()
-    
+
     typer.echo(f"ocframework version: {__version__}")
-    
+
     framework_path = settings.framework_repo_path
     if framework_path:
         valid, missing = validate_framework_repo(Path(framework_path))
         if valid:
             typer.echo(f"framework repo path: {framework_path}")
         else:
-            typer.secho(f"framework repo path: {framework_path} (INVALID)", fg=typer.colors.RED)
+            typer.secho(
+                f"framework repo path: {framework_path} (INVALID)", fg=typer.colors.RED
+            )
             typer.secho(f"  Missing: {', '.join(missing)}", fg=typer.colors.RED)
     else:
         typer.secho("framework repo path: not found", fg=typer.colors.RED)
-    
+
     expected_global_config_path = get_config_root() / "opencode"
     expected_global_auth_path = get_local_data_home() / "opencode" / "auth.json"
-    
+
     typer.echo(f"global config found: {settings.global_config_found}")
     if settings.global_config_found:
         typer.echo(f"global config path: {settings.global_config_path}")
@@ -85,22 +86,22 @@ def _print_version_info() -> None:
 
 def _check_framework_repo() -> Optional[str]:
     """Check if framework repo is valid.
-    
+
     Returns None if valid, error message if invalid.
     """
     settings = discover_global_settings()
-    
+
     if not settings.framework_repo_path:
         return (
             "Framework repository not found.\n"
             "The framework must be installed as an editable package from a git clone:\n"
             "  pipx install -e <path-to-framework-git-clone>"
         )
-    
+
     valid, missing = validate_framework_repo(Path(settings.framework_repo_path))
     if not valid:
         return get_framework_validation_error(missing, settings.framework_repo_path)
-    
+
     return None
 
 
@@ -117,10 +118,12 @@ def main(
     """OpenCode Framework - AI coding agent attachment framework."""
     error = _check_framework_repo()
     if error:
-        typer.secho("Error: Framework repository is invalid.", fg=typer.colors.RED, err=True)
+        typer.secho(
+            "Error: Framework repository is invalid.", fg=typer.colors.RED, err=True
+        )
         typer.echo(error, err=True)
         raise typer.Exit(1)
-    
+
     if version or ctx.invoked_subcommand is None:
         _print_version_info()
         raise typer.Exit()
@@ -136,34 +139,34 @@ def init(
     ),
 ) -> None:
     """Initialize the framework in a Git repository.
-    
+
     Creates a .opencode/ directory with configuration for the AI coding agent.
     """
     repo_path = Path.cwd()
-    
+
     typer.echo("Running preflight checks...")
     result = run_preflight_checks(repo_path, force=force)
-    
+
     if not result.success:
         typer.secho(f"Preflight failed: {result.error}", fg=typer.colors.RED, err=True)
         if result.remediation:
             typer.secho(f"Remediation: {result.remediation}", fg=typer.colors.YELLOW)
         raise typer.Exit(1)
-    
+
     typer.secho("Preflight checks passed.", fg=typer.colors.GREEN)
-    
+
     opencode_dir = repo_path / ".opencode"
     backup_path = None
-    
+
     if force and opencode_directory_exists(repo_path):
         typer.echo("Backing up existing .opencode/...")
         if is_worktree(opencode_dir):
             timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
             backup_path = repo_path / f".opencode.backup-{timestamp}"
-            
+
             shutil.copytree(opencode_dir, backup_path, symlinks=True)
             typer.echo(f"Backup created at: {backup_path}")
-            
+
             if not remove_worktree(opencode_dir, cwd=repo_path):
                 typer.secho(
                     "Failed to remove existing worktree",
@@ -175,10 +178,10 @@ def init(
             backup_path = GenerationOrchestrator.backup_existing_opencode(repo_path)
             if backup_path:
                 typer.echo(f"Backup created at: {backup_path}")
-    
+
     typer.echo("Running setup wizard...")
     wizard_result = run_wizard(repo_path, result)
-    
+
     if wizard_result.create_global_config:
         config_root = get_config_root()
         global_config_dir = config_root / "opencode"
@@ -193,14 +196,14 @@ def init(
                 err=True,
             )
             raise typer.Exit(1)
-    
+
     typer.echo(f"Setting up worktree on branch '{wizard_result.branch_name}'...")
     worktree_result = setup_opencode_worktree(
         repo_root=repo_path,
         branch_name=wizard_result.branch_name,
         opencode_dir=opencode_dir,
     )
-    
+
     if not worktree_result.success:
         typer.secho(
             f"Failed to create worktree: {worktree_result.error}",
@@ -208,13 +211,13 @@ def init(
             err=True,
         )
         raise typer.Exit(1)
-    
+
     typer.echo("Generating .opencode/ directory...")
     orchestrator = GenerationOrchestrator()
     orchestrator.generate(repo_path, wizard_result)
-    
+
     commands = DocumentationGenerator._get_launch_commands()
-    
+
     typer.secho("Initialization complete!", fg=typer.colors.GREEN)
     typer.echo("\nCommands:")
     typer.echo(f"  Launch: {commands['launch']}")
@@ -224,7 +227,7 @@ def init(
 
 def _parse_image_id_from_build_output(output: str) -> Optional[str]:
     """Parse image ID from devcontainer build output.
-    
+
     Devcontainer build outputs JSON lines. We look for the image ID in the output.
     """
     for line in output.strip().split("\n"):
@@ -237,9 +240,14 @@ def _parse_image_id_from_build_output(output: str) -> Optional[str]:
                 container_id = data["containerId"]
                 try:
                     output = subprocess.run(
-                        ["docker", "inspect", "--format={{.Config.Image}}", container_id],
+                        [
+                            "docker",
+                            "inspect",
+                            "--format={{.Config.Image}}",
+                            container_id,
+                        ],
                         capture_output=True,
-                        text=True
+                        text=True,
                     )
                 finally:
                     subprocess.run(["docker", "rm", "-f", container_id])
@@ -247,26 +255,26 @@ def _parse_image_id_from_build_output(output: str) -> Optional[str]:
 
         except json.JSONDecodeError:
             continue
-    
-    sha256_pattern = re.compile(r'(sha256:[a-f0-9]{64}|[a-f0-9]{12,64})')
+
+    sha256_pattern = re.compile(r"(sha256:[a-f0-9]{64}|[a-f0-9]{12,64})")
     match = sha256_pattern.search(output)
     if match:
         return match.group(1)
-    
+
     return None
 
 
 def _extract_container_name(compose_path: Path) -> Optional[str]:
     """Extract container_name from docker-compose.yaml.
-    
+
     Args:
         compose_path: Path to docker-compose.yaml
-        
+
     Returns:
         Container name if found, None otherwise
     """
     content = compose_path.read_text()
-    match = re.search(r'^\s*container_name:\s*(.+)$', content, re.MULTILINE)
+    match = re.search(r"^\s*container_name:\s*(.+)$", content, re.MULTILINE)
     if match:
         return match.group(1).strip()
     return None
@@ -275,12 +283,15 @@ def _extract_container_name(compose_path: Path) -> Optional[str]:
 def _build_image(opencode_dir: Path, repo_root: Path, subprocess_env: dict) -> str:
     # devcontainer build does not call initializeCommand https://github.com/devcontainers/cli/issues/190
     build_cmd = [
-        "devcontainer", "up",
+        "devcontainer",
+        "up",
         "--remove-existing-container",
-        "--config", str(opencode_dir / "devcontainer.json"),
-        "--workspace-folder", str(repo_root),
+        "--config",
+        str(opencode_dir / "devcontainer.json"),
+        "--workspace-folder",
+        str(repo_root),
     ]
-    
+
     process = subprocess.Popen(
         build_cmd,
         env=subprocess_env,
@@ -289,30 +300,34 @@ def _build_image(opencode_dir: Path, repo_root: Path, subprocess_env: dict) -> s
         stderr=subprocess.STDOUT,
         text=True,
     )
-    
+
     output_lines = []
     for line in process.stdout:
         typer.echo(line, nl=False)
         output_lines.append(line)
-    
+
     process.wait()
     output = "".join(output_lines)
-    
+
     if process.returncode != 0:
         typer.secho("Failed to build devcontainer image", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
-    
+
     image_id = _parse_image_id_from_build_output(output)
-    
+
     if not image_id:
-        typer.secho("Could not parse image ID from build output", fg=typer.colors.RED, err=True)
+        typer.secho(
+            "Could not parse image ID from build output", fg=typer.colors.RED, err=True
+        )
         raise typer.Exit(1)
-    
+
     typer.echo(f"Built image: {image_id}")
     return image_id
 
 
-@app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+@app.command(
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True}
+)
 def launch(
     ctx: typer.Context,
     docker_context: str = typer.Option(
@@ -365,17 +380,19 @@ def launch(
         ocframework launch -e API_KEY=$HOME/.key -e DEBUG=true
     """
     cwd = Path.cwd()
-    
+
     valid, error = validate_runtime_context(cwd)
     if not valid:
         typer.secho(f"Error: {error}", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
-    
+
     repo_root = get_repo_root(cwd)
     if repo_root is None:
-        typer.secho("Error: Could not determine repository root", fg=typer.colors.RED, err=True)
+        typer.secho(
+            "Error: Could not determine repository root", fg=typer.colors.RED, err=True
+        )
         raise typer.Exit(1)
-    
+
     env_path = repo_root / ".opencode" / ".env"
     global_env_path = get_config_root() / "opencode" / ".env"
     warnings: List[str] = []
@@ -401,12 +418,12 @@ def launch(
     # Print any warnings (e.g., global env file failed to parse)
     for warning in warnings:
         typer.secho(f"Warning: {warning}", fg=typer.colors.YELLOW)
-    
+
     subprocess_env = build_docker_env(final_env, docker_context)
-    
+
     opencode_dir = repo_root / ".opencode"
     compose_path = opencode_dir / "docker-compose.yaml"
-    
+
     if not compose_path.exists():
         typer.secho(
             "Error: docker-compose.yaml not found. Run 'ocframework init' first.",
@@ -414,9 +431,9 @@ def launch(
             err=True,
         )
         raise typer.Exit(1)
-    
+
     image_id = None
-    
+
     if rebuild:
         if update_features(opencode_dir, repo_root.name):
             typer.echo("Feature configuration changed; rebuilding image...")
@@ -430,32 +447,36 @@ def launch(
         else:
             typer.echo("Building devcontainer image (no cached image ID found)...")
             image_id = _build_image(opencode_dir, repo_root, subprocess_env)
-    
+
     save_image_id(opencode_dir, image_id)
-    
+
     subprocess_env["OCF_IMAGE_ID"] = image_id
     subprocess_env["PWD"] = str(repo_root)
-    
+
     typer.echo("Launching OpenCode...")
-    
+
     args = ctx.args
-    
+
     container_name = _extract_container_name(compose_path)
-    
+
     run_cmd = [
-        "docker", "compose", "-f", str(compose_path),
-        "run", "--rm",
+        "docker",
+        "compose",
+        "-f",
+        str(compose_path),
+        "run",
+        "--rm",
     ]
-    
+
     if ComposeGenerator.detect_ports(compose_path.read_text()):
         run_cmd.append("--service-ports")
-    
+
     if container_name:
         run_cmd.extend(["--name", container_name])
-    
+
     for key, value in final_env.items():
         run_cmd.extend(["--env", f"{key}={value}"])
-    
+
     run_cmd.append("opencode")
     run_cmd.extend(args)
 
@@ -470,9 +491,20 @@ def launch(
             cleanup_cmd = ["docker", "rm", "-f", container_name]
             subprocess.run(cleanup_cmd, env=subprocess_env, capture_output=True)
         # Also run docker compose down to clean up any remaining resources
-        down_cmd = ["docker", "compose", "-f", str(compose_path), "down", "--remove-orphans"]
+        down_cmd = [
+            "docker",
+            "compose",
+            "-f",
+            str(compose_path),
+            "down",
+            "--remove-orphans",
+        ]
         subprocess.run(down_cmd, env=subprocess_env, capture_output=True)
-        typer.secho("Cleanup complete. Press Ctrl+C again to force exit.", fg=typer.colors.YELLOW, err=True)
+        typer.secho(
+            "Cleanup complete. Press Ctrl+C again to force exit.",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
         raise typer.Exit(130)  # 130 is standard exit code for SIGINT
     except Exception:
         # Re-raise any other exception

@@ -11,7 +11,7 @@ from opencode_framework.config import GlobalSettings
 @dataclass
 class GenerationContext:
     """Context for generating .opencode/ contents."""
-    
+
     repo_root: Path
     opencode_dir: Path
     branch_name: str
@@ -23,11 +23,11 @@ class GenerationContext:
 
 class FileGenerator(ABC):
     """Abstract base class for file generators."""
-    
+
     @abstractmethod
     def generate(self, ctx: GenerationContext) -> None:
         """Generate file(s) in the given context.
-        
+
         Args:
             ctx: Generation context with all necessary information
         """
