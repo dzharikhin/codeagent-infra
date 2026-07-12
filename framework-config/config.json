@@ -6,7 +6,8 @@
   "plugin": [
     "opencode-handoff@0.5.0",
     "@mohak34/opencode-notifier@latest",
-    "opencode-cost-guard@1.1.1"
+    "opencode-cost-guard@1.1.1",
+    "opencode-models-discovery@latest"
   ],
   "model": "{env:OCF_MAIN_MODEL}",
   "small_model": "{env:OCF_SMALL_MODEL}",

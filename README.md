@@ -161,6 +161,22 @@ docker exec -it <container_name> /bin/bash
 
 Find container name with: `docker ps | grep ocf-`
 
+### List Available Models
+
+With model autodiscovery enabled (via the `opencode-models-discovery` plugin),
+list every available model — including autodiscovered ones — with:
+
+```sh
+opencode models
+```
+
+Optionally filter by provider or show metadata:
+
+```sh
+opencode models <provider>
+opencode models <provider> --verbose
+```
+
 ### Version Information
 
 ```sh

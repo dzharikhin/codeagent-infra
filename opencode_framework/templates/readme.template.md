@@ -31,6 +31,15 @@ This directory contains the project-level configuration for the OpenCode Framewo
 
 Find container name with: `docker ps | grep ocf-`
 
+### Available Models
+
+To see available models (including any autodiscovered by the
+`opencode-models-discovery` plugin), run inside the container:
+
+```sh
+opencode models
+```
+
 ## How It Works
 
 ## Rebuilding

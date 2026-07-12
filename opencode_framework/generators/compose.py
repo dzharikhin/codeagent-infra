@@ -87,16 +87,16 @@ class ComposeGenerator(FileGenerator):
         Returns:
             Updated compose file content
         """
-    venv_mount = f"      - venv-{repo_name}:/{repo_name}/.venv"
-    m2_mount = f"      - m2-{repo_name}:/home/${{REMOTE_USER}}/.m2"
-    managed_lines = {
-        venv_mount,
-        m2_mount,
-        f"  venv-{repo_name}:",
-        f"  m2-{repo_name}:",
-        "    privileged: true",
-        "    init: true",
-    }
+        venv_mount = f"      - venv-{repo_name}:/{repo_name}/.venv"
+        m2_mount = f"      - m2-{repo_name}:/home/${{REMOTE_USER}}/.m2"
+        managed_lines = {
+            venv_mount,
+            m2_mount,
+            f"  venv-{repo_name}:",
+            f"  m2-{repo_name}:",
+            "    privileged: true",
+            "    init: true",
+        }
 
         has_docker = "docker" in optional_features
         desired_entrypoint = (
