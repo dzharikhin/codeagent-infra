@@ -143,13 +143,15 @@ class TemplateHandler:
         repo_root_name: str,
         optional_features: Optional[List[str]] = None,
         port_mappings: Optional[List[str]] = None,
+        java_build_tools: Optional[List[str]] = None,
     ) -> str:
         """Render docker-compose template with container name.
 
         Args:
             repo_root_name: Name of the repo
             optional_features: List of enabled optional features (e.g., ["python"])
-            port_mappings: List of Docker-style port mappings (e.g., ["8080:8080"])
+            port_mappings: List of Docker-style port mappings (e.g. ["8080:8080"])
+            java_build_tools: List of enabled Java build tools (e.g., ["maven"], ["gradle"])
 
         Returns:
             Rendered docker-compose content
@@ -165,10 +167,17 @@ class TemplateHandler:
                 f"\n      - venv-{repo_root_name}:/{repo_root_name}/.venv"
             )
 
+        # Java build tools: maven or gradle, or both
         if optional_features and "java" in optional_features:
-            additional_volume_mounts += (
-                f"\n      - m2-{repo_root_name}:/home/${{REMOTE_USER}}/.m2"
-            )
+            tools = java_build_tools or ["maven"]
+            if "maven" in tools:
+                additional_volume_mounts += (
+                    f"\n      - m2-{repo_root_name}:/home/${{REMOTE_USER}}/.m2"
+                )
+            if "gradle" in tools:
+                additional_volume_mounts += (
+                    f"\n      - gradle-{repo_root_name}:/home/${{REMOTE_USER}}/.gradle"
+                )
 
         if optional_features and "docker" in optional_features:
             docker_privileged = "    privileged: true\n"
@@ -178,7 +187,12 @@ class TemplateHandler:
         if optional_features and "python" in optional_features:
             volume_keys.append(f"  venv-{repo_root_name}:")
         if optional_features and "java" in optional_features:
-            volume_keys.append(f"  m2-{repo_root_name}:")
+            tools = java_build_tools or ["maven"]
+            if "maven" in tools:
+                volume_keys.append(f"  m2-{repo_root_name}:")
+            if "gradle" in tools:
+                volume_keys.append(f"  gradle-{repo_root_name}:")
+
         top_level_volumes_section = ""
         if volume_keys:
             top_level_volumes_section = "\nvolumes:\n" + "\n".join(volume_keys) + "\n"

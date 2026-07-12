@@ -51,10 +51,11 @@ To rebuild the image (e.g., after changing features):
 ```
 
 When run interactively, `--rebuild` first offers to add or remove devcontainer features
-(docker/python/nodejs/java) and change the editor preference. The current settings are
-shown as defaults, so you can toggle features on or off. Only the feature-dependent parts
-of `devcontainer.json` and `docker-compose.yaml` are updated; manual customizations are
-preserved. In a non-interactive context the prompt is skipped.
+(docker/python/nodejs/java) and change the editor preference. For Java, you can also choose
+Maven and/or Gradle as build tools. The current settings are shown as defaults, so you can
+toggle features on or off. Only the feature-dependent parts of `devcontainer.json` and
+`docker-compose.yaml` are updated; manual customizations are preserved. In a non-interactive
+context the prompt is skipped.
 
 ## Run a Headless Server
 

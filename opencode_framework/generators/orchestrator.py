@@ -45,6 +45,7 @@ class GenerationOrchestrator:
             editor_choice=wizard_result.editor_choice,
             global_settings=discover_global_settings(),
             port_mappings=wizard_result.port_mappings,
+            java_build_tools=wizard_result.java_build_tools,
         )
 
         # Generate all files in order

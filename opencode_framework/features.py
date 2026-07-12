@@ -16,8 +16,10 @@ AVAILABLE_FEATURES: List[Tuple[str, str]] = [
     ("docker", "Docker access (DinD with rootless context)"),
     ("python", "Python + Poetry + uv"),
     ("nodejs", "Node.js + npm"),
-    ("java", "Java + Maven"),
+    ("java", "Java (JDK)"),
 ]
+
+JAVA_BUILD_TOOLS = ["maven", "gradle"]
 
 EDITOR_CHOICES = ["none", "vi", "nano"]
 
@@ -63,18 +65,44 @@ def _prompt_single_feature(
     return True
 
 
+def _prompt_java_build_tools(current_tools: Optional[List[str]] = None) -> List[str]:
+    """Prompt user to select Java build tools (Maven and/or Gradle).
+
+    Args:
+        current_tools: Currently enabled build tools (for defaults). If None, defaults to maven only.
+
+    Returns:
+        List of enabled build tools (e.g. ["maven"], ["gradle"], ["maven","gradle"])
+    """
+    typer.echo("\nJava build tools:")
+
+    cur = current_tools or []
+    maven = typer.confirm("  Install Maven?", default=("maven" in cur) if cur else True)
+    gradle = typer.confirm("  Install Gradle?", default=("gradle" in cur))
+
+    tools: List[str] = []
+    if maven:
+        tools.append("maven")
+    if gradle:
+        tools.append("gradle")
+
+    return tools
+
+
 def prompt_feature_changes(
     current_features: List[str],
     current_editor: str,
-) -> Tuple[List[str], str]:
+    current_java_build_tools: Optional[List[str]] = None,
+) -> Tuple[List[str], str, List[str]]:
     """Show the feature selection menu, pre-filled with the current state.
 
     Args:
         current_features: Currently-enabled feature keys
         current_editor: Current editor choice ("none", "vi", "nano")
+        current_java_build_tools: Currently enabled Java build tools (for defaults)
 
     Returns:
-        Tuple of (selected_features, editor_choice)
+        Tuple of (selected_features, editor_choice, java_build_tools)
     """
     typer.echo("\nCurrent feature configuration:")
     typer.echo(
@@ -84,9 +112,15 @@ def prompt_feature_changes(
     typer.echo("\nSelect features:")
 
     selected: List[str] = []
+    java_build_tools: List[str] = list(current_java_build_tools or [])
+
     for key, desc in AVAILABLE_FEATURES:
         if _prompt_single_feature(key, desc, key in current_features):
             selected.append(key)
+            if key == "java":
+                java_build_tools = _prompt_java_build_tools(java_build_tools)
+        elif key == "java":
+            java_build_tools = []
 
     editor_choice = typer.prompt(
         "\nEditor preference",
@@ -94,7 +128,7 @@ def prompt_feature_changes(
         default=current_editor,
     )
 
-    return selected, editor_choice
+    return selected, editor_choice, java_build_tools
 
 
 def parse_port_mappings(raw: str) -> List[str]:
@@ -164,7 +198,10 @@ def update_features(opencode_dir: Path, repo_name: str) -> bool:
         return False
 
     current_features, current_editor = DevcontainerGenerator.detect(devcontainer)
-    new_features, new_editor = prompt_feature_changes(current_features, current_editor)
+    current_java_build_tools = DevcontainerGenerator.detect_build_tools(devcontainer)
+    new_features, new_editor, new_java_build_tools = prompt_feature_changes(
+        current_features, current_editor, current_java_build_tools
+    )
 
     compose_path = opencode_dir / "docker-compose.yaml"
     compose_text = ""
@@ -178,6 +215,7 @@ def update_features(opencode_dir: Path, repo_name: str) -> bool:
 
     features_changed = (
         set(new_features) != set(current_features) or new_editor != current_editor
+        or set(new_java_build_tools) != set(current_java_build_tools)
     )
     ports_changed = new_ports != current_ports
 
@@ -189,7 +227,11 @@ def update_features(opencode_dir: Path, repo_name: str) -> bool:
         add = [f for f in new_features if f not in current_features]
         remove = [f for f in current_features if f not in new_features]
         DevcontainerGenerator.apply_delta(
-            devcontainer, add=add, remove=remove, editor=new_editor
+            devcontainer,
+            add=add,
+            remove=remove,
+            editor=new_editor,
+            java_build_tools=new_java_build_tools,
         )
         devcontainer_path.write_text(json.dumps(devcontainer, indent=2) + "\n")
         typer.secho("Updated .opencode/devcontainer.json", fg=typer.colors.GREEN)
@@ -197,7 +239,11 @@ def update_features(opencode_dir: Path, repo_name: str) -> bool:
     if compose_path.exists() and (features_changed or ports_changed):
         compose_path.write_text(
             ComposeGenerator.rebuild_features(
-                compose_text, repo_name, new_features, port_mappings=new_ports
+                compose_text,
+                repo_name,
+                new_features,
+                port_mappings=new_ports,
+                java_build_tools=new_java_build_tools,
             )
         )
         typer.secho("Updated .opencode/docker-compose.yaml", fg=typer.colors.GREEN)

@@ -21,6 +21,7 @@ class WizardResult:
     should_add_to_gitignore: bool
     create_global_config: bool = False
     port_mappings: List[str] = field(default_factory=list)
+    java_build_tools: List[str] = field(default_factory=list)
 
 
 def suggest_branch_name() -> str:
@@ -50,6 +51,7 @@ def run_wizard(repo_root: Path, preflight_result: PreflightResult) -> WizardResu
     - Editor preference
     """
     from opencode_framework.config import discover_global_settings, get_config_root
+    from opencode_framework.features import _prompt_java_build_tools
 
     settings = discover_global_settings()
     create_global_config = False
@@ -71,7 +73,7 @@ def run_wizard(repo_root: Path, preflight_result: PreflightResult) -> WizardResu
         type=str,
     )
 
-    optional_features, editor_choice = prompt_feature_changes([], "none")
+    optional_features, editor_choice, java_build_tools = prompt_feature_changes([], "none", None)
 
     port_mappings = prompt_port_mappings()
 
@@ -88,4 +90,5 @@ def run_wizard(repo_root: Path, preflight_result: PreflightResult) -> WizardResu
         should_add_to_gitignore=True,
         create_global_config=create_global_config,
         port_mappings=port_mappings,
+        java_build_tools=java_build_tools,
     )

@@ -19,6 +19,7 @@ class GenerationContext:
     editor_choice: str
     global_settings: GlobalSettings
     port_mappings: List[str] = field(default_factory=list)
+    java_build_tools: List[str] = field(default_factory=list)
 
 
 class FileGenerator(ABC):

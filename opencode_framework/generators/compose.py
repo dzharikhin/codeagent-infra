@@ -25,6 +25,7 @@ class ComposeGenerator(FileGenerator):
             repo_root_name=ctx.repo_root.name,
             optional_features=ctx.optional_features,
             port_mappings=ctx.port_mappings,
+            java_build_tools=getattr(ctx, "java_build_tools", None),
         )
         compose_path.write_text(compose_content)
 
@@ -63,6 +64,7 @@ class ComposeGenerator(FileGenerator):
         repo_name: str,
         optional_features: List[str],
         port_mappings: Optional[List[str]] = None,
+        java_build_tools: Optional[List[str]] = None,
     ) -> str:
         """Surgically update feature-dependent parts of a compose file.
 
@@ -83,17 +85,21 @@ class ComposeGenerator(FileGenerator):
             repo_name: Repository name (used in managed volume names)
             optional_features: Final feature set to apply
             port_mappings: Desired port mappings, or None to leave ports as-is
+            java_build_tools: List of enabled Java build tools (e.g., ["maven"], ["gradle"])
 
         Returns:
             Updated compose file content
         """
         venv_mount = f"      - venv-{repo_name}:/{repo_name}/.venv"
         m2_mount = f"      - m2-{repo_name}:/home/${{REMOTE_USER}}/.m2"
+        gradle_mount = f"      - gradle-{repo_name}:/home/${{REMOTE_USER}}/.gradle"
         managed_lines = {
             venv_mount,
             m2_mount,
+            gradle_mount,
             f"  venv-{repo_name}:",
             f"  m2-{repo_name}:",
+            f"  gradle-{repo_name}:",
             "    privileged: true",
             "    init: true",
         }
@@ -104,6 +110,11 @@ class ComposeGenerator(FileGenerator):
             if has_docker
             else '["opencode"]'
         )
+
+        # Determine which Java build tools are enabled
+        tools = java_build_tools or ["maven"]
+        has_maven = "maven" in tools
+        has_gradle = "gradle" in tools
 
         lines = compose_text.split("\n")
 
@@ -138,7 +149,10 @@ class ComposeGenerator(FileGenerator):
         if "python" in optional_features:
             mounts.append(venv_mount)
         if "java" in optional_features:
-            mounts.append(m2_mount)
+            if has_maven:
+                mounts.append(m2_mount)
+            if has_gradle:
+                mounts.append(gradle_mount)
         if mounts:
             lines = ComposeGenerator._insert_before_line(
                 lines, "    entrypoint", mounts
@@ -148,7 +162,10 @@ class ComposeGenerator(FileGenerator):
         if "python" in optional_features:
             vol_keys.append(f"  venv-{repo_name}:")
         if "java" in optional_features:
-            vol_keys.append(f"  m2-{repo_name}:")
+            if has_maven:
+                vol_keys.append(f"  m2-{repo_name}:")
+            if has_gradle:
+                vol_keys.append(f"  gradle-{repo_name}:")
         if vol_keys:
             lines = ComposeGenerator._ensure_volumes_block_lines(lines, vol_keys)
 
