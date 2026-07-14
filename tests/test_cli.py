@@ -501,3 +501,45 @@ class TestLaunchAttachRemoveFeature:
         result = CliRunner().invoke(app_module.app, ["launch"])
 
         assert result.exit_code == 0
+
+    def test_launch_force_removes_image_id(self, tmp_path: Path, monkeypatch):
+        """--force must delete .image_id and trigger a rebuild."""
+        self._setup_repo(tmp_path)
+        image_id_path = tmp_path / ".opencode" / "runtime_data" / ".image_id"
+        image_id_path.parent.mkdir(parents=True, exist_ok=True)
+        image_id_path.write_text("sha256:stale")
+
+        build_calls = []
+        app_module = self._patch_launch_deps(monkeypatch, tmp_path, attach_rc=0, inspect_status=None)
+        monkeypatch.setattr(
+            app_module,
+            "_build_image",
+            lambda *a, **kw: build_calls.append(True) or "sha256:new",
+        )
+        # real load_image_id so it reflects the deleted file
+        import opencode_framework.runtime as rt_module
+        monkeypatch.setattr(app_module, "load_image_id", rt_module.load_image_id)
+
+        from typer.testing import CliRunner
+        result = CliRunner().invoke(app_module.app, ["launch", "--force"])
+
+        assert result.exit_code == 0
+        assert not image_id_path.exists()
+        assert "Removed cached image ID" in result.output
+        assert "Building devcontainer image" in result.output
+        assert len(build_calls) == 1
+
+    def test_launch_force_skips_update_features(self, tmp_path: Path, monkeypatch):
+        """--force must not invoke the interactive feature reselection prompt."""
+        self._setup_repo(tmp_path)
+        app_module = self._patch_launch_deps(monkeypatch, tmp_path, attach_rc=0, inspect_status=None)
+        monkeypatch.setattr(
+            app_module,
+            "update_features",
+            lambda *a, **kw: (_ for _ in ()).throw(AssertionError("update_features must not be called with --force")),
+        )
+
+        from typer.testing import CliRunner
+        result = CliRunner().invoke(app_module.app, ["launch", "--force"])
+
+        assert result.exit_code == 0

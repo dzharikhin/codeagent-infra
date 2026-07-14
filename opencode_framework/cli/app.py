@@ -37,6 +37,7 @@ from opencode_framework.runtime import (
     build_docker_env,
     load_env_with_overrides,
     load_image_id,
+    remove_image_id,
     save_image_id,
     validate_runtime_context,
 )
@@ -408,7 +409,7 @@ def launch(
         False,
         "--force",
         "-f",
-        help="Remove any existing container with the same name and start a new session",
+        help="Remove any existing container and cached image ID, forcing a fresh build",
     ),
 ) -> None:
     """Launch the OpenCode agent in a container.
@@ -489,6 +490,9 @@ def launch(
         raise typer.Exit(1)
 
     image_id = None
+
+    if force and remove_image_id(opencode_dir):
+        typer.echo("Removed cached image ID; image will be rebuilt.")
 
     if rebuild:
         if update_features(opencode_dir, repo_root.name):

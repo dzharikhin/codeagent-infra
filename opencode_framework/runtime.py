@@ -433,3 +433,16 @@ def save_image_id(opencode_dir: Path, image_id: str) -> None:
     image_id_path = get_image_id_path(opencode_dir)
     image_id_path.parent.mkdir(parents=True, exist_ok=True)
     image_id_path.write_text(image_id)
+
+
+def remove_image_id(opencode_dir: Path) -> bool:
+    """Delete the persisted image ID file if it exists.
+
+    Returns:
+        True if the file existed and was removed, False if it was already absent.
+    """
+    image_id_path = get_image_id_path(opencode_dir)
+    if image_id_path.exists():
+        image_id_path.unlink()
+        return True
+    return False

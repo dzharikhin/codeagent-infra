@@ -13,6 +13,7 @@ from opencode_framework.runtime import (
     apply_combined_interpolation,
     get_image_id_path,
     load_image_id,
+    remove_image_id,
     save_image_id,
 )
 
@@ -790,3 +791,13 @@ class TestImageIdHelpers:
         save_image_id(tmp_path, "sha256:old")
         save_image_id(tmp_path, "sha256:new")
         assert load_image_id(tmp_path) == "sha256:new"
+
+    def test_remove_image_id_when_exists(self, tmp_path: Path):
+        """Should delete the file and return True when it existed."""
+        save_image_id(tmp_path, "sha256:abc123")
+        assert remove_image_id(tmp_path) is True
+        assert load_image_id(tmp_path) is None
+
+    def test_remove_image_id_when_missing(self, tmp_path: Path):
+        """Should return False without error when file is already absent."""
+        assert remove_image_id(tmp_path) is False
