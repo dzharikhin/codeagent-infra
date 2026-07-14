@@ -1,5 +1,5 @@
 {
-  "maxCostUsd": {env:OCF_SESSION_COST_LIMIT},
+  "maxCostUsd": 20.0,
   "warnAtPercent": 80,
   "mode": "block"
 }
