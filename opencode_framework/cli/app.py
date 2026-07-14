@@ -239,7 +239,7 @@ def _parse_image_id_from_build_output(output: str) -> Optional[str]:
             if "outcome" in data and "containerId" in data:
                 container_id = data["containerId"]
                 try:
-                    output = subprocess.run(
+                    inspect_result = subprocess.run(
                         [
                             "docker",
                             "inspect",
@@ -251,7 +251,7 @@ def _parse_image_id_from_build_output(output: str) -> Optional[str]:
                     )
                 finally:
                     subprocess.run(["docker", "rm", "-f", container_id])
-                return output.stdout.strip()
+                return inspect_result.stdout.strip()
 
         except json.JSONDecodeError:
             continue
@@ -280,6 +280,56 @@ def _extract_container_name(compose_path: Path) -> Optional[str]:
     return None
 
 
+def _get_container_status(container_name: str, subprocess_env: dict) -> Optional[str]:
+    """Get the status of a container.
+
+    Args:
+        container_name: Name of the container
+        subprocess_env: Environment variables for subprocess
+
+    Returns:
+        Container status (e.g., 'running', 'exited', 'created') if exists,
+        None otherwise
+    """
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "--format", "{{.State.Status}}", container_name],
+            env=subprocess_env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            status = result.stdout.strip()
+            return status if status else None
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    return None
+
+
+def _remove_container(container_name: str, subprocess_env: dict) -> bool:
+    """Force-remove a container.
+
+    Args:
+        container_name: Name of the container
+        subprocess_env: Environment variables for subprocess
+
+    Returns:
+        True if removal succeeded, False otherwise
+    """
+    try:
+        result = subprocess.run(
+            ["docker", "rm", "-f", container_name],
+            env=subprocess_env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
 def _build_image(opencode_dir: Path, repo_root: Path, subprocess_env: dict) -> str:
     # devcontainer build does not call initializeCommand https://github.com/devcontainers/cli/issues/190
     build_cmd = [
@@ -302,7 +352,7 @@ def _build_image(opencode_dir: Path, repo_root: Path, subprocess_env: dict) -> s
     )
 
     output_lines = []
-    for line in process.stdout:
+    for line in process.stdout:  # type: ignore[union-attr]
         typer.echo(line, nl=False)
         output_lines.append(line)
 
@@ -353,6 +403,12 @@ def launch(
         False,
         "--rebuild",
         help="Force rebuild of the devcontainer image",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Remove any existing container with the same name and start a new session",
     ),
 ) -> None:
     """Launch the OpenCode agent in a container.
@@ -453,11 +509,56 @@ def launch(
     subprocess_env["OCF_IMAGE_ID"] = image_id
     subprocess_env["PWD"] = str(repo_root)
 
+    container_name = _extract_container_name(compose_path)
+
+    # Handle existing container: attach if running, otherwise remove
+    if container_name:
+        status = _get_container_status(container_name, subprocess_env)
+        if status == "running" and not force:
+            typer.echo(f"Container '{container_name}' is already running. Attaching...")
+            attach_result = subprocess.run(
+                ["docker", "attach", container_name],
+                env=subprocess_env,
+                cwd=repo_root,
+            )
+            attach_rc = attach_result.returncode
+            if attach_rc < 128 and attach_rc != 0:
+                # Attach failure (not a signal). 128+N = killed by signal N (e.g. 130 = SIGINT/Ctrl+C),
+                # which is an intentional interrupt, not a failure.
+                typer.secho(
+                    f"Failed to attach to container '{container_name}' "
+                    f"(exit code {attach_rc}).",
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+                typer.secho(
+                    "Run 'ocframework launch --force' to remove the running container "
+                    "and start a new one.",
+                    fg=typer.colors.YELLOW,
+                    err=True,
+                )
+            raise typer.Exit(attach_rc)
+        elif status is not None:
+            # Stopped container (can't attach) or --force on any existing
+            prefix = "Force-removing" if force else "Found stopped"
+            typer.secho(
+                f"{prefix} container '{container_name}' (status: {status}). Removing...",
+                fg=typer.colors.YELLOW,
+            )
+            if _remove_container(container_name, subprocess_env):
+                typer.secho(
+                    f"Removed container '{container_name}'.", fg=typer.colors.GREEN
+                )
+            else:
+                typer.secho(
+                    f"Failed to remove container '{container_name}'; continuing.",
+                    fg=typer.colors.YELLOW,
+                    err=True,
+                )
+
     typer.echo("Launching OpenCode...")
 
     args = ctx.args
-
-    container_name = _extract_container_name(compose_path)
 
     run_cmd = [
         "docker",

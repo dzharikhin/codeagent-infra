@@ -274,10 +274,21 @@ class TestLaunchRebuildFeaturePrompt:
         )
         return opencode
 
-    def _patch_launch_deps(self, monkeypatch, tmp_path: Path):
+    def _patch_launch_deps(self, monkeypatch, tmp_path: Path, attach_rc=0):
         import importlib
 
         app_module = importlib.import_module("opencode_framework.cli.app")
+
+        def mock_run(*args, **kw):
+            cmd = list(args[0]) if args else args[1].get("args", [])
+            result = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            if cmd[:2] == ["docker", "attach"]:
+                result.returncode = attach_rc
+            elif cmd[:2] == ["docker", "compose"]:
+                result.returncode = 0
+
+            return result
 
         monkeypatch.setattr(app_module, "validate_runtime_context", lambda cwd: (True, ""))
         monkeypatch.setattr(app_module, "get_repo_root", lambda cwd: tmp_path.resolve())
@@ -286,10 +297,7 @@ class TestLaunchRebuildFeaturePrompt:
         monkeypatch.setattr(app_module, "load_image_id", lambda d: None)
         monkeypatch.setattr(app_module, "_build_image", lambda *a, **kw: "sha256:fake")
         monkeypatch.setattr(app_module, "save_image_id", lambda *a, **kw: None)
-        monkeypatch.setattr(
-            app_module.subprocess, "run",
-            lambda *a, **kw: type("R", (), {"returncode": 0})(),
-        )
+        monkeypatch.setattr(app_module.subprocess, "run", mock_run)
         return app_module
 
     def test_rebuild_invokes_update_features(self, tmp_path: Path, monkeypatch):
@@ -349,31 +357,147 @@ class TestLaunchRebuildFeaturePrompt:
 
         assert result.exit_code == 0
 
-    def test_launch_handles_keyboard_interrupt(self, tmp_path: Path, monkeypatch):
-        """launch must clean up container on KeyboardInterrupt."""
+    def test_launch_handles_keyboard_interrupt_in_attach(self, tmp_path: Path, monkeypatch):
+        """launch must exit silently with code 130 when attach is interrupted with SIGINT."""
         self._setup_repo(tmp_path)
-        app_module = self._patch_launch_deps(monkeypatch, tmp_path)
+        attach_rc = 130
+        app_module = self._patch_launch_deps(monkeypatch, tmp_path, attach_rc=attach_rc)
         monkeypatch.setattr(app_module, "load_image_id", lambda d: "sha256:cached")
+        monkeypatch.setattr(app_module, "get_repo_root", lambda cwd: tmp_path.resolve())
 
         # Track subprocess calls
         subprocess_calls = []
 
         def fake_run(*args, **kwargs):
             subprocess_calls.append(("run", args, kwargs))
-            if "docker" in args[0]:
-                # Simulate docker compose run being interrupted
-                raise KeyboardInterrupt()
-            return type("R", (), {"returncode": 0})()
+            cmd = list(args[0]) if args else args[1].get("args", [])
+            result = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
-        monkeypatch.setattr(app_module.subprocess, "run", fake_run)
+            if cmd[:2] == ["docker", "attach"]:
+                result.returncode = attach_rc
+            elif cmd[:2] == ["docker", "inspect"] and "--format" in cmd:
+                result.stdout = "running"
+            elif cmd[:2] == ["docker", "compose"]:
+                result.returncode = 0
+
+            return result
+
+        monkeypatch.setattr("subprocess.run", fake_run)
 
         from typer.testing import CliRunner
         result = CliRunner().invoke(app_module.app, ["launch", "--serve", "--port", "33050", "--hostname", "0.0.0.0"])
 
         assert result.exit_code == 130  # Standard SIGINT exit code
-        assert len(subprocess_calls) >= 2  # At least run and cleanup
+        assert len(subprocess_calls) == 2  # docker inspect and docker attach
 
-        # Verify cleanup was called
-        cleanup_cmds = [call for call in subprocess_calls if "rm -f" in str(call) or "down" in str(call)]
-        assert len(cleanup_cmds) > 0, "Cleanup commands should have been called"
+        # Verify attach was called (not docker compose run or cleanup)
+        attach_call = subprocess_calls[1]
+        assert "attach" in attach_call[1][0]  # args[0] is the command list
 
+
+
+class TestLaunchAttachRemoveFeature:
+    """Tests for attach/remove behavior when container already exists."""
+
+    def _setup_repo(self, tmp_path: Path) -> Path:
+        opencode = tmp_path / ".opencode"
+        opencode.mkdir()
+        (opencode / "docker-compose.yaml").write_text(
+            "services:\n  opencode:\n    container_name: ocf_repo\n"
+        )
+        return opencode
+
+    def _patch_launch_deps(self, monkeypatch, tmp_path: Path, attach_rc=0, inspect_status="running"):
+        import importlib
+
+        app_module = importlib.import_module("opencode_framework.cli.app")
+
+        def mock_run(*args, **kw):
+            cmd = list(args[0]) if args else args[1].get("args", [])
+            result = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            if cmd[:2] == ["docker", "inspect"] and "--format" in cmd:
+                result.stdout = inspect_status if inspect_status else "running"
+            elif cmd[:2] == ["docker", "attach"]:
+                result.returncode = attach_rc
+            elif cmd[:2] == ["docker", "rm"] and "-f" in cmd:
+                result.returncode = 0
+            elif cmd[:2] == ["docker", "compose"]:
+                result.returncode = 0
+
+            return result
+
+        monkeypatch.setattr(app_module, "validate_runtime_context", lambda cwd: (True, ""))
+        monkeypatch.setattr(app_module, "get_repo_root", lambda cwd: tmp_path.resolve())
+        monkeypatch.setattr(app_module, "load_env_with_overrides", lambda **kw: {})
+        monkeypatch.setattr(app_module, "build_docker_env", lambda env, ctx: {})
+        monkeypatch.setattr(app_module, "load_image_id", lambda d: None)
+        monkeypatch.setattr(app_module, "_build_image", lambda *a, **kw: "sha256:fake")
+        monkeypatch.setattr(app_module, "save_image_id", lambda *a, **kw: None)
+        monkeypatch.setattr(app_module.subprocess, "run", mock_run)
+        return app_module
+
+    def test_launch_attaches_when_running(self, tmp_path: Path, monkeypatch):
+        """launch must attach to running container instead of starting new one."""
+        self._setup_repo(tmp_path)
+        app_module = self._patch_launch_deps(monkeypatch, tmp_path, attach_rc=0, inspect_status="running")
+
+        from typer.testing import CliRunner
+        result = CliRunner().invoke(app_module.app, ["launch"])
+
+        assert result.exit_code == 0
+        assert "attaching" in result.output.lower()
+
+    def test_launch_attach_failure_prints_force_hint(self, tmp_path: Path, monkeypatch):
+        """When attach fails, print error and --force hint."""
+        self._setup_repo(tmp_path)
+        app_module = self._patch_launch_deps(monkeypatch, tmp_path, attach_rc=1, inspect_status="running")
+
+        from typer.testing import CliRunner
+        result = CliRunner().invoke(app_module.app, ["launch"])
+
+        assert result.exit_code == 1
+        assert "Failed to attach" in result.output
+        assert "--force" in result.output
+
+    def test_launch_attach_interrupted_silent(self, tmp_path: Path, monkeypatch):
+        """When attach exits with SIGINT (130), exit silently with code 130."""
+        self._setup_repo(tmp_path)
+        app_module = self._patch_launch_deps(monkeypatch, tmp_path, attach_rc=130, inspect_status="running")
+
+        from typer.testing import CliRunner
+        result = CliRunner().invoke(app_module.app, ["launch"])
+
+        assert result.exit_code == 130
+        assert "Failed to attach" not in result.output
+        assert "--force" not in result.output
+
+    def test_launch_removes_stopped_container(self, tmp_path: Path, monkeypatch):
+        """Stopped container must be removed before starting new one."""
+        self._setup_repo(tmp_path)
+        app_module = self._patch_launch_deps(monkeypatch, tmp_path, attach_rc=125, inspect_status="exited")
+
+        from typer.testing import CliRunner
+        result = CliRunner().invoke(app_module.app, ["launch"])
+
+        assert result.exit_code == 0
+
+    def test_launch_force_removes_running_container(self, tmp_path: Path, monkeypatch):
+        """--force must remove running container before starting new one."""
+        self._setup_repo(tmp_path)
+        app_module = self._patch_launch_deps(monkeypatch, tmp_path, attach_rc=0, inspect_status="running")
+
+        from typer.testing import CliRunner
+        result = CliRunner().invoke(app_module.app, ["launch", "--force"])
+
+        assert result.exit_code == 0
+
+    def test_launch_no_container_runs_normally(self, tmp_path: Path, monkeypatch):
+        """When no container exists, launch runs normally."""
+        self._setup_repo(tmp_path)
+        app_module = self._patch_launch_deps(monkeypatch, tmp_path, attach_rc=0, inspect_status=None)
+
+        from typer.testing import CliRunner
+        result = CliRunner().invoke(app_module.app, ["launch"])
+
+        assert result.exit_code == 0
