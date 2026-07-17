@@ -326,7 +326,8 @@ Read-write mounts:
 When the `docker` optional feature is selected during `ocframework init`:
 
 - The generated `docker-compose.yaml` includes `privileged: true` on the service and an entrypoint of `["/usr/local/share/docker-init.sh", "opencode"]`
-- The container image includes `/etc/docker/daemon.json` with `{"storage-driver": "vfs"}` (baked in unconditionally — harmless without Docker installed)
+- The container image includes `/etc/docker/daemon.json` with `{"firewall-backend": "nftables"}` (baked in unconditionally — harmless without Docker installed)
 - The `docker-in-docker:2` devcontainer feature installs Docker CE and `/usr/local/share/docker-init.sh`
 - Docker daemon **starts automatically** on container launch. The container entrypoint runs `/usr/local/share/docker-init.sh` before `opencode`, which starts dockerd with readiness checks.
-- The `vfs` storage driver is used instead of `overlay2` because sandboxed/containerized environments often lack kernel overlayfs support
+- Docker autodetects the storage driver: prefers `overlay2` where supported, falls back to `vfs` in sandboxed environments without overlayfs support.
+- A named volume `docker-<repo>` is mounted at `/var/lib/docker` to persist Docker data across container restarts. If you upgrade the daemon to a version incompatible with this volume, you may need to run `docker volume rm docker-<repo>` to recreate it.

@@ -93,13 +93,16 @@ class ComposeGenerator(FileGenerator):
         venv_mount = f"      - venv-{repo_name}:/{repo_name}/.venv"
         m2_mount = f"      - m2-{repo_name}:/home/${{REMOTE_USER}}/.m2"
         gradle_mount = f"      - gradle-{repo_name}:/home/${{REMOTE_USER}}/.gradle"
+        docker_mount = f"      - docker-{repo_name}:/var/lib/docker"
         managed_lines = {
             venv_mount,
             m2_mount,
             gradle_mount,
+            docker_mount,
             f"  venv-{repo_name}:",
             f"  m2-{repo_name}:",
             f"  gradle-{repo_name}:",
+            f"  docker-{repo_name}:",
             "    privileged: true",
         }
 
@@ -147,6 +150,8 @@ class ComposeGenerator(FileGenerator):
         mounts: List[str] = []
         if "python" in optional_features:
             mounts.append(venv_mount)
+        if has_docker:
+            mounts.append(docker_mount)
         if "java" in optional_features:
             if has_maven:
                 mounts.append(m2_mount)
@@ -160,6 +165,8 @@ class ComposeGenerator(FileGenerator):
         vol_keys: List[str] = []
         if "python" in optional_features:
             vol_keys.append(f"  venv-{repo_name}:")
+        if has_docker:
+            vol_keys.append(f"  docker-{repo_name}:")
         if "java" in optional_features:
             if has_maven:
                 vol_keys.append(f"  m2-{repo_name}:")

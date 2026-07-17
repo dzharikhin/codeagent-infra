@@ -232,10 +232,7 @@ def update_features(opencode_dir: Path, repo_name: str) -> bool:
     )
     ports_changed = new_ports != current_ports
 
-    if not features_changed and not ports_changed:
-        typer.echo("No changes; rebuilding with current configuration.")
-        return False
-
+    # Always rewrite devcontainer.json when features/editor/build-tools changed.
     if features_changed:
         add = [f for f in new_features if f not in current_features]
         remove = [f for f in current_features if f not in new_features]
@@ -249,16 +246,25 @@ def update_features(opencode_dir: Path, repo_name: str) -> bool:
         devcontainer_path.write_text(json.dumps(devcontainer, indent=2) + "\n")
         typer.secho("Updated .opencode/devcontainer.json", fg=typer.colors.GREEN)
 
-    if compose_path.exists() and (features_changed or ports_changed):
-        compose_path.write_text(
-            ComposeGenerator.rebuild_features(
-                compose_text,
-                repo_name,
-                new_features,
-                port_mappings=new_ports,
-                java_build_tools=new_java_build_tools,
-            )
+    # Always reconcile the compose file to match the declared feature set,
+    # even when the user made no selection change. This restores any managed
+    # footprints (e.g. the docker named volume, privileged line, entrypoint)
+    # that may be missing from a stale or hand-edited compose.
+    changed = features_changed
+    if compose_path.exists():
+        reconciled = ComposeGenerator.rebuild_features(
+            compose_text,
+            repo_name,
+            new_features,
+            port_mappings=new_ports,
+            java_build_tools=new_java_build_tools,
         )
-        typer.secho("Updated .opencode/docker-compose.yaml", fg=typer.colors.GREEN)
+        if reconciled != compose_text:
+            compose_path.write_text(reconciled)
+            typer.secho("Updated .opencode/docker-compose.yaml", fg=typer.colors.GREEN)
+            changed = True
 
-    return True
+    if not changed:
+        typer.echo("No changes; rebuilding with current configuration.")
+
+    return changed

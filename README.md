@@ -139,7 +139,7 @@ In a non-interactive context (e.g. CI, piped stdin) the prompt is skipped and th
 
 ### Docker-in-Docker
 
-If you selected the `docker` optional feature during `ocframework init`, the container includes Docker CE and runs with `privileged: true`. The image is pre-configured with the `vfs` storage driver for compatibility with sandboxed environments.
+If you selected the `docker` optional feature during `ocframework init`, the container includes Docker CE and runs with `privileged: true`. The image is pre-configured with autodetectable storage driver (prefers `overlay2`, falls back to `vfs` in sandboxed environments).
 
 The Docker daemon **starts automatically** on container launch. The container entrypoint runs `/usr/local/share/docker-init.sh` before `opencode`, which starts dockerd with readiness checks.
 
@@ -147,8 +147,10 @@ Verify it's running:
 
 ```sh
 docker info | grep "Storage Driver"
-# Should output: Storage Driver: vfs
+# Should output: Storage Driver: overlay2 (or vfs in sandboxed environments)
 ```
+
+A named volume `docker-<repo>` is mounted at `/var/lib/docker` to persist Docker data across container restarts.
 
 ### Debug Configuration
 

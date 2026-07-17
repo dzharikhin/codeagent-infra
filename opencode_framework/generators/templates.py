@@ -182,10 +182,13 @@ class TemplateHandler:
         if optional_features and "docker" in optional_features:
             docker_privileged = "    privileged: true\n"
             entrypoint = '["/usr/local/share/docker-init.sh", "opencode"]'
+            additional_volume_mounts += f"\n      - docker-{repo_root_name}:/var/lib/docker"
 
         volume_keys = []
         if optional_features and "python" in optional_features:
             volume_keys.append(f"  venv-{repo_root_name}:")
+        if optional_features and "docker" in optional_features:
+            volume_keys.append(f"  docker-{repo_root_name}:")
         if optional_features and "java" in optional_features:
             tools = java_build_tools or ["maven"]
             if "maven" in tools:

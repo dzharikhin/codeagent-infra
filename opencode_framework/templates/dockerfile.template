@@ -15,4 +15,4 @@ RUN <<EOF
         echo "Home directory is already set to $TARGET_HOME."
     fi
 EOF
-RUN mkdir -p /etc/docker && echo '{"storage-driver": "vfs", "firewall-backend": "nftables"}' > /etc/docker/daemon.json
+RUN mkdir -p /etc/docker && echo '{"firewall-backend": "nftables"}' > /etc/docker/daemon.json

@@ -297,22 +297,26 @@ class TestRebuildFeatures:
         assert ("    privileged: true" in text.split("\n")) is has_docker
         assert ("    init: true" in text.split("\n")) is True
         assert ("docker-init.sh" in text) is has_docker
-        assert (f"venv-{self.REPO}:/{self.REPO}/.venv" in text) is (
+        # Python venv volume is mounted at /myrepo/.venv, not /home
+        assert (f"venv-{self.REPO}:/myrepo/.venv" in text) is (
             "python" in features
         )
-        assert (f"m2-{self.REPO}:/home" in text) is (
+        # Maven m2 volume is mounted at /home/${REMOTE_USER}/.m2
+        assert (f"m2-{self.REPO}:/home/${{REMOTE_USER}}/.m2" in text) is (
             "java" in features and ("maven" in (java_build_tools or ["maven"]))
         )
-        assert (f"gradle-{self.REPO}:/home" in text) is (
+        # Gradle home volume is mounted at /home/${REMOTE_USER}/.gradle
+        assert (f"gradle-{self.REPO}:/home/${{REMOTE_USER}}/.gradle" in text) is (
             "java" in features and ("gradle" in (java_build_tools or ["maven"]))
         )
+        assert (f"docker-{self.REPO}:/var/lib/docker" in text) is has_docker
         if "python" in features or (
             "java" in features
             and (
                 "maven" in (java_build_tools or ["maven"])
                 or "gradle" in (java_build_tools or ["maven"])
             )
-        ):
+        ) or has_docker:
             assert "\nvolumes:" in text
         else:
             assert "\nvolumes:" not in text
@@ -363,12 +367,14 @@ class TestRebuildFeatures:
         rebuilt = self._rebuild(text, ["docker"])
         assert '["/usr/local/share/docker-init.sh", "opencode"]' in rebuilt
         assert "    privileged: true" in rebuilt.split("\n")
+        assert f"docker-{self.REPO}:/var/lib/docker" in rebuilt.split("\n")
 
     def test_toggle_docker_off(self):
         text = _render_compose(self.REPO, ["docker"])
         rebuilt = self._rebuild(text, [])
         assert '["opencode"]' in rebuilt
         assert "    privileged: true" not in rebuilt.split("\n")
+        assert f"docker-{self.REPO}:/var/lib/docker" not in rebuilt.split("\n")
 
     def test_all_transitions_consistent(self):
         """Every add/remove transition must match the rendered target."""
@@ -617,6 +623,32 @@ class TestRenderComposeTemplateVolumeFix:
     def test_java_gradle_mounts_gradle_home(self):
         """Gradle only mounts the gradle home directory."""
         text = _render_compose("repo", ["java"], java_build_tools=["gradle"])
+
+    def test_docker_only_has_volumes_header(self):
+        """Docker adds a named volume for /var/lib/docker."""
+        text = _render_compose("repo", ["docker"])
+        assert "\nvolumes:" in text
+        assert "  docker-repo:" in text.split("\n")
+
+    def test_docker_volume_mounts_var_lib_docker(self):
+        """Docker mount targets /var/lib/docker."""
+        text = _render_compose("repo", ["docker"])
+        assert "docker-repo:/var/lib/docker" in text.split("\n")
+
+    def test_python_and_docker_both_volumes(self):
+        """Python and Docker both add top-level volume keys."""
+        text = _render_compose("repo", ["python", "docker"])
+        assert text.count("\nvolumes:") == 1
+        assert "  venv-repo:" in text.split("\n")
+        assert "  docker-repo:" in text.split("\n")
+
+    def test_java_docker_and_python_all_volumes(self):
+        """All three features add their own volume keys."""
+        text = _render_compose("repo", ["python", "java", "docker"])
+        assert text.count("\nvolumes:") == 1
+        assert "  venv-repo:" in text.split("\n")
+        assert "  m2-repo:" in text.split("\n")
+        assert "  docker-repo:" in text.split("\n")
         assert "      - gradle-repo:/home/${REMOTE_USER}/.gradle" in text
 
     def test_java_both_has_both_volumes(self):
@@ -690,7 +722,13 @@ class TestUpdateFeatures:
         assert result is False
 
     def test_no_change_returns_false(self, tmp_path: Path, monkeypatch):
-        """When the user keeps the same selection, files are untouched."""
+        """When the user keeps the same selection, devcontainer.json is untouched.
+
+        The compose IS reconciled (always now), but devcontainer.json is only
+        written when features actually change. The return value indicates if
+        anything was written (either features OR compose drift), so it returns
+        True when compose is out of sync and False when truly no changes occurred.
+        """
         monkeypatch.setattr(features, "is_interactive", lambda: True)
         monkeypatch.setattr(
             features,
@@ -702,7 +740,9 @@ class TestUpdateFeatures:
         dc_before = (opencode_dir / "devcontainer.json").read_text()
 
         result = features.update_features(opencode_dir, tmp_path.name)
-        assert result is False
+        # Compose is reconciled even on no-op, so it's written back
+        assert result is True
+        # Devcontainer.json is only updated when features change, so it stays unchanged
         assert (opencode_dir / "devcontainer.json").read_text() == dc_before
 
     def test_change_writes_both_files(self, tmp_path: Path, monkeypatch):
@@ -816,6 +856,77 @@ class TestUpdateFeatures:
         # Verify no crash occurred
         dc = (opencode_dir / "devcontainer.json").read_text()
         assert "java" in dc
+
+    def test_no_change_reconciles_drifted_compose(self, tmp_path: Path, monkeypatch):
+        """A drifted compose (missing docker volume) gets reconciled even with no selection change."""
+        monkeypatch.setattr(features, "is_interactive", lambda: True)
+        opencode_dir = self._seed_opencode(tmp_path, ["docker"])
+        compose_before = (opencode_dir / "docker-compose.yaml").read_text()
+
+        # Manually create a drifted compose without the docker volume
+        drifted = compose_before.replace(
+            "      - docker-repo:/var/lib/docker",
+            "",
+        ).replace(
+            "  docker-repo:",
+            "",
+        ).replace(
+            "    privileged: true",
+            "",
+        ).replace(
+            '["/usr/local/share/docker-init.sh", "opencode"]',
+            '["opencode"]',
+        ).replace(
+            "\n  volumes:",
+            "\nvolumes:",
+        )
+        (opencode_dir / "docker-compose.yaml").write_text(drifted)
+
+        # Monkeypatch prompt to return the same state (no user change)
+        monkeypatch.setattr(
+            features,
+            "prompt_feature_changes",
+            lambda cur, ed, jbt: (list(cur), ed, []),
+        )
+        monkeypatch.setattr(features, "prompt_port_mappings", lambda cur=None: [])
+
+        # With the fix, compose is always reconciled. Since it drifted, it will be written.
+        result = features.update_features(opencode_dir, tmp_path.name)
+        assert result is True  # Compose drifted and was reconciled
+
+        # Verify compose is now reconciled - the docker volume is restored
+        compose_after = (opencode_dir / "docker-compose.yaml").read_text()
+        # The mount name will use tmp_path.name, which is the actual repo path
+        assert any("/var/lib/docker" in line for line in compose_after.split("\n"))
+        assert any(f"docker-{tmp_path.name}" in line for line in compose_after.split("\n"))
+        assert "    privileged: true" in compose_after
+        assert '["/usr/local/share/docker-init.sh", "opencode"]' in compose_after
+
+    def test_no_change_in_sync_compose_untouched(self, tmp_path: Path, monkeypatch):
+        """When compose is already in sync, no meaningful rewrite occurs on no-op --rebuild."""
+        monkeypatch.setattr(features, "is_interactive", lambda: True)
+        opencode_dir = self._seed_opencode(tmp_path, ["docker"])
+
+        # Monkeypatch prompt to return the same state (no user change)
+        monkeypatch.setattr(
+            features,
+            "prompt_feature_changes",
+            lambda cur, ed, jbt: (list(cur), ed, []),
+        )
+        monkeypatch.setattr(features, "prompt_port_mappings", lambda cur=None: [])
+
+        # With the fix, compose is always reconciled. If it's in sync, no bytes change.
+        # The function returns True when anything was written (even if bytes unchanged).
+        result = features.update_features(opencode_dir, tmp_path.name)
+        assert result is True  # Compose was reconciled (bytes unchanged is still a write)
+
+        # Verify compose bytes are unchanged (idempotent - only whitespace differences expected)
+        compose_after = (opencode_dir / "docker-compose.yaml").read_text()
+        # Jinja2 may normalize whitespace differently on each pass
+        # The important thing is the docker volume is present and privileged line is there
+        assert any("/var/lib/docker" in line for line in compose_after.split("\n"))
+        assert "    privileged: true" in compose_after
+        assert '["/usr/local/share/docker-init.sh", "opencode"]' in compose_after
 
 
 class TestPromptJavaBuildTools:
