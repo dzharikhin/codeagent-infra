@@ -186,9 +186,9 @@ class TestGeneratedConfig:
 
     def test_devcontainer_json_structure(self, tmp_path: Path):
         """Test that generated devcontainer.json has correct structure."""
+        from opencode_framework.config import GlobalSettings
         from opencode_framework.generators import GenerationContext
         from opencode_framework.generators.devcontainer import DevcontainerGenerator
-        from opencode_framework.config import GlobalSettings
 
         (tmp_path / ".opencode").mkdir()
         ctx = GenerationContext(
@@ -218,9 +218,9 @@ class TestGeneratedConfig:
 
     def test_devcontainer_no_remote_env(self, tmp_path: Path):
         """Test that generated devcontainer does NOT have remoteEnv (moved to compose)."""
+        from opencode_framework.config import GlobalSettings
         from opencode_framework.generators import GenerationContext
         from opencode_framework.generators.devcontainer import DevcontainerGenerator
-        from opencode_framework.config import GlobalSettings
 
         (tmp_path / ".opencode").mkdir()
         ctx = GenerationContext(
@@ -247,9 +247,9 @@ class TestGeneratedConfig:
 
     def test_editor_choice_sets_editor_env(self, tmp_path: Path):
         """Test that editor choice sets EDITOR in .env file (not devcontainer)."""
+        from opencode_framework.config import GlobalSettings
         from opencode_framework.generators import GenerationContext
         from opencode_framework.generators.config_files import ConfigFilesGenerator
-        from opencode_framework.config import GlobalSettings
 
         (tmp_path / ".opencode").mkdir()
         ctx = GenerationContext(
@@ -276,9 +276,9 @@ class TestGeneratedConfig:
 
     def test_opencode_feature_present(self, tmp_path: Path):
         """Test that OpenCode feature is included in generated devcontainer."""
+        from opencode_framework.config import GlobalSettings
         from opencode_framework.generators import GenerationContext
         from opencode_framework.generators.devcontainer import DevcontainerGenerator
-        from opencode_framework.config import GlobalSettings
 
         (tmp_path / ".opencode").mkdir()
         ctx = GenerationContext(

@@ -214,7 +214,10 @@ to it. This combines the `serve` subcommand with port mappings.
    ```
 
    The framework automatically adds `--service-ports` to `docker compose run`
-   when ports are configured, exposing them to the host.
+   when ports are configured, exposing them to the host. When `--server` is
+   used, each configured port is published individually (equivalent to
+   `--service-ports`) alongside the server port, because `--service-ports` and
+   `--publish` are mutually exclusive in `docker compose run`.
 
 3. **Connect a client** to the mapped port, e.g.:
 

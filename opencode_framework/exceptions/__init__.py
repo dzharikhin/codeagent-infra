@@ -6,6 +6,7 @@ from .base import (
     FrameworkError,
     GenerationError,
     GitError,
+    PortAllocationError,
     PreflighjError,
     RuntimeError,
     ValidationError,
@@ -37,6 +38,7 @@ __all__ = [
     "RuntimeError",
     "GenerationError",
     "EnvError",
+    "PortAllocationError",
     "PreflighjError",
     "WizardError",
     # Validation exceptions

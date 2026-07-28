@@ -68,8 +68,11 @@ mappings:
 ```
 
 Add a matching port mapping (e.g. `4096:4096`) via `--rebuild` first; the
-framework auto-adds `--service-ports` when ports are configured. Set
-`OPENCODE_SERVER_PASSWORD` in `.env` to enable basic auth.
+framework auto-adds `--service-ports` when ports are configured. When
+`--server` is used alongside configured ports, each port is published
+individually instead (because `--service-ports` and `--publish` are mutually
+exclusive in `docker compose run`). Set `OPENCODE_SERVER_PASSWORD` in `.env`
+to enable basic auth.
 
 ## Version Control
 

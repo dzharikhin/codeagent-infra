@@ -63,6 +63,10 @@ class GenerationError(FrameworkError):
     """File generation errors."""
 
 
+class PortAllocationError(RuntimeError):
+    """Failed to allocate a free host port."""
+
+
 class EnvError(RuntimeError):
     """Environment variable and .env file errors."""
 

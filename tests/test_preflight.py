@@ -5,21 +5,21 @@ from pathlib import Path
 
 import pytest
 
-from opencode_framework.preflight import (
-    check_required_tools,
-    check_docker_rootless_context,
-    is_inside_git_tree,
-    get_repo_root,
-    opencode_directory_exists,
-    run_preflight_checks,
-    PreflightResult,
-)
 from opencode_framework.config import (
-    validate_framework_repo,
+    discover_global_settings,
     get_config_root,
     get_local_config_root,
     get_local_home,
-    discover_global_settings,
+    validate_framework_repo,
+)
+from opencode_framework.preflight import (
+    PreflightResult,
+    check_docker_rootless_context,
+    check_required_tools,
+    get_repo_root,
+    is_inside_git_tree,
+    opencode_directory_exists,
+    run_preflight_checks,
 )
 
 
@@ -94,7 +94,7 @@ class TestValidateFrameworkRepo:
         (tmp_path / "framework-nuts-and-bolts").mkdir()
         (tmp_path / "framework-nuts-and-bolts" / "stub-auth.json").write_text("{}")
         (tmp_path / "framework-config").mkdir()
-        
+
         valid, missing = validate_framework_repo(tmp_path)
         assert valid is True
         assert missing == []
@@ -104,7 +104,7 @@ class TestValidateFrameworkRepo:
         (tmp_path / "framework-nuts-and-bolts").mkdir()
         (tmp_path / "framework-nuts-and-bolts" / "stub-auth.json").write_text("{}")
         (tmp_path / "framework-config").mkdir()
-        
+
         valid, missing = validate_framework_repo(tmp_path)
         assert valid is False
         assert ".git" in missing
@@ -113,7 +113,7 @@ class TestValidateFrameworkRepo:
         """Should return False when framework-nuts-and-bolts is missing."""
         (tmp_path / ".git").mkdir()
         (tmp_path / "framework-config").mkdir()
-        
+
         valid, missing = validate_framework_repo(tmp_path)
         assert valid is False
         assert "framework-nuts-and-bolts" in missing
@@ -123,7 +123,7 @@ class TestValidateFrameworkRepo:
         (tmp_path / ".git").mkdir()
         (tmp_path / "framework-nuts-and-bolts").mkdir()
         (tmp_path / "framework-config").mkdir()
-        
+
         valid, missing = validate_framework_repo(tmp_path)
         assert valid is False
         assert "framework-nuts-and-bolts/stub-auth.json" in missing
@@ -133,7 +133,7 @@ class TestValidateFrameworkRepo:
         (tmp_path / ".git").mkdir()
         (tmp_path / "framework-nuts-and-bolts").mkdir()
         (tmp_path / "framework-nuts-and-bolts" / "stub-auth.json").write_text("{}")
-        
+
         valid, missing = validate_framework_repo(tmp_path)
         assert valid is False
         assert "framework-config" in missing
@@ -167,7 +167,7 @@ class TestRunPreflightChecks:
     def test_fails_with_existing_opencode_in_git_repo(self, tmp_path: Path):
         """Should fail when .opencode/ exists in a git repo without --force."""
         import subprocess
-        
+
         # Initialize git repo
         subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
         subprocess.run(
@@ -188,7 +188,7 @@ class TestRunPreflightChecks:
             check=True,
             capture_output=True,
         )
-        
+
         (tmp_path / ".opencode").mkdir()
         result = run_preflight_checks(tmp_path, force=False)
         if result.missing_tools:
@@ -226,7 +226,7 @@ class TestGetLocalHome:
     def test_uses_sudo_user_when_set(self, monkeypatch, tmp_path: Path):
         """Should use SUDO_USER's home when running under sudo."""
         import pwd
-        
+
         monkeypatch.setenv("SUDO_USER", "root")
         result = get_local_home()
         assert result == Path(pwd.getpwnam("root").pw_dir)
@@ -305,9 +305,9 @@ class TestDiscoverGlobalSettings:
         xdg_config.mkdir()
         opencode_config = xdg_config / "opencode"
         opencode_config.mkdir()
-        
+
         monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg_config))
-        
+
         settings = discover_global_settings()
         assert settings.global_config_found is True
         assert settings.global_config_path == str(opencode_config)
@@ -316,9 +316,9 @@ class TestDiscoverGlobalSettings:
         """Should return not found when opencode config dir doesn't exist."""
         xdg_config = tmp_path / "config"
         xdg_config.mkdir()
-        
+
         monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg_config))
-        
+
         settings = discover_global_settings()
         assert settings.global_config_found is False
         assert settings.global_config_path is None

@@ -3,14 +3,13 @@
 import json
 from pathlib import Path
 
-
-from opencode_framework.generators import GenerationOrchestrator, GenerationContext
-from opencode_framework.generators.devcontainer import DevcontainerGenerator
-from opencode_framework.generators.config_files import ConfigFilesGenerator
-from opencode_framework.generators.documentation import DocumentationGenerator
-from opencode_framework.generators.compose import ComposeGenerator
-from opencode_framework.wizard import WizardResult
 from opencode_framework.config import GlobalSettings
+from opencode_framework.generators import GenerationContext, GenerationOrchestrator
+from opencode_framework.generators.compose import ComposeGenerator
+from opencode_framework.generators.config_files import ConfigFilesGenerator
+from opencode_framework.generators.devcontainer import DevcontainerGenerator
+from opencode_framework.generators.documentation import DocumentationGenerator
+from opencode_framework.wizard import WizardResult
 
 
 def _make_global_settings(**kwargs):
@@ -147,10 +146,10 @@ class TestDevcontainerGenerator:
         """Scratch devcontainer should have features."""
         (tmp_path / ".opencode").mkdir()
         ctx = _make_generation_context(tmp_path)
-        
+
         gen = DevcontainerGenerator()
         gen.generate(ctx)
-        
+
         dc_content = json.loads((tmp_path / ".opencode" / "devcontainer.json").read_text())
         assert "features" in dc_content
         assert "ghcr.io/devcontainers/features/git:1" in dc_content["features"]
@@ -186,13 +185,13 @@ class TestOpenCodeFeature:
         """Scratch devcontainer should include OpenCode feature."""
         (tmp_path / ".opencode").mkdir()
         ctx = _make_generation_context(tmp_path)
-        
+
         gen = DevcontainerGenerator()
         gen.generate(ctx)
-        
+
         dc_content = json.loads((tmp_path / ".opencode" / "devcontainer.json").read_text())
         assert "ghcr.io/jsburckhardt/devcontainer-features/opencode:1.1.1" in dc_content["features"]
-        
+
         feature = dc_content["features"]["ghcr.io/jsburckhardt/devcontainer-features/opencode:1.1.1"]
         assert "version" in feature
         assert "OPENCODE_VERSION" in feature["version"]
@@ -205,10 +204,10 @@ class TestEnvFileGeneration:
         """Generated .env should contain REMOTE_USER."""
         (tmp_path / ".opencode").mkdir()
         ctx = _make_generation_context(tmp_path)
-        
+
         gen = ConfigFilesGenerator()
         gen.generate(ctx)
-        
+
         env_content = (tmp_path / ".opencode" / ".env").read_text()
         assert "REMOTE_USER=root" in env_content
 
@@ -216,10 +215,10 @@ class TestEnvFileGeneration:
         """Generated .env should contain XDG variables."""
         (tmp_path / ".opencode").mkdir()
         ctx = _make_generation_context(tmp_path)
-        
+
         gen = ConfigFilesGenerator()
         gen.generate(ctx)
-        
+
         env_content = (tmp_path / ".opencode" / ".env").read_text()
         assert "XDG_CONFIG_HOME" in env_content
         assert "XDG_DATA_HOME" in env_content
@@ -230,10 +229,10 @@ class TestEnvFileGeneration:
         """Generated .env should contain model configuration vars."""
         (tmp_path / ".opencode").mkdir()
         ctx = _make_generation_context(tmp_path)
-        
+
         gen = ConfigFilesGenerator()
         gen.generate(ctx)
-        
+
         env_content = (tmp_path / ".opencode" / ".env").read_text()
         assert "OCF_MAIN_MODEL" in env_content
         assert "OCF_BUILD_MODEL" in env_content
@@ -243,10 +242,10 @@ class TestEnvFileGeneration:
         """Generated .env should contain EDITOR when editor_choice is not 'none'."""
         (tmp_path / ".opencode").mkdir()
         ctx = _make_generation_context(tmp_path, editor_choice="vi")
-        
+
         gen = ConfigFilesGenerator()
         gen.generate(ctx)
-        
+
         env_content = (tmp_path / ".opencode" / ".env").read_text()
         assert "EDITOR=vi" in env_content
 
@@ -254,10 +253,10 @@ class TestEnvFileGeneration:
         """Generated .env should not contain EDITOR when editor_choice is 'none'."""
         (tmp_path / ".opencode").mkdir()
         ctx = _make_generation_context(tmp_path, editor_choice="none")
-        
+
         gen = ConfigFilesGenerator()
         gen.generate(ctx)
-        
+
         env_content = (tmp_path / ".opencode" / ".env").read_text()
         assert "EDITOR=" not in env_content
 
@@ -288,10 +287,10 @@ class TestReadmeLaunchCommand:
         """README should show CLI launch command."""
         (tmp_path / ".opencode").mkdir()
         ctx = _make_generation_context(tmp_path)
-        
+
         gen = DocumentationGenerator()
         gen.generate(ctx)
-        
+
         readme_content = (tmp_path / ".opencode" / "README.md").read_text()
         assert "ocframework launch" in readme_content
 
@@ -299,10 +298,10 @@ class TestReadmeLaunchCommand:
         """README should show debug command."""
         (tmp_path / ".opencode").mkdir()
         ctx = _make_generation_context(tmp_path)
-        
+
         gen = DocumentationGenerator()
         gen.generate(ctx)
-        
+
         readme_content = (tmp_path / ".opencode" / "README.md").read_text()
         assert "launch -- debug config" in readme_content
 
@@ -310,10 +309,10 @@ class TestReadmeLaunchCommand:
         """README should show shell command."""
         (tmp_path / ".opencode").mkdir()
         ctx = _make_generation_context(tmp_path)
-        
+
         gen = DocumentationGenerator()
         gen.generate(ctx)
-        
+
         readme_content = (tmp_path / ".opencode" / "README.md").read_text()
         assert "### Shell" in readme_content
 
@@ -340,7 +339,7 @@ class TestRuntimeDataStructure:
 
         runtime_data = opencode_dir / "runtime_data"
         assert runtime_data.is_dir()
-        
+
         assert (runtime_data / ".cache").is_dir()
         assert (runtime_data / ".local" / "share").is_dir()
         assert (runtime_data / ".local" / "state").is_dir()
@@ -363,7 +362,7 @@ class TestRuntimeDataStructure:
         orchestrator.generate(repo_root, wizard_result)
 
         runtime_data = opencode_dir / "runtime_data"
-        
+
         assert not (runtime_data / "logs").exists()
         assert not (runtime_data / "tools").exists()
         assert not (runtime_data / "temp").exists()
@@ -386,7 +385,7 @@ class TestRuntimeDataStructure:
         orchestrator.generate(repo_root, wizard_result)
 
         gitignore_content = (opencode_dir / ".gitignore").read_text()
-        
+
         assert "runtime_data/" in gitignore_content
 
 
@@ -397,10 +396,10 @@ class TestReadmeFrameworkUrl:
         """README should have framework docs URL."""
         (tmp_path / ".opencode").mkdir()
         ctx = _make_generation_context(tmp_path)
-        
+
         gen = DocumentationGenerator()
         gen.generate(ctx)
-        
+
         readme_content = (tmp_path / ".opencode" / "README.md").read_text()
         assert "https://github.com/dzharikhin/codeagent-infra" in readme_content
 
@@ -414,15 +413,15 @@ class TestComposeGenerator:
         repo_root.mkdir()
         opencode_dir = repo_root / ".opencode"
         opencode_dir.mkdir()
-        
+
         ctx = _make_generation_context(
             repo_root,
             optional_features=["python"],
         )
-        
+
         gen = ComposeGenerator()
         gen.generate(ctx)
-        
+
         compose_content = (opencode_dir / "docker-compose.yaml").read_text()
         assert "venv-myproject" in compose_content
         assert "volumes:" in compose_content
@@ -434,15 +433,15 @@ class TestComposeGenerator:
         repo_root.mkdir()
         opencode_dir = repo_root / ".opencode"
         opencode_dir.mkdir()
-        
+
         ctx = _make_generation_context(
             repo_root,
             optional_features=["nodejs"],
         )
-        
+
         gen = ComposeGenerator()
         gen.generate(ctx)
-        
+
         compose_content = (opencode_dir / "docker-compose.yaml").read_text()
         assert "venv-" not in compose_content
 
@@ -452,12 +451,12 @@ class TestComposeGenerator:
         repo_root.mkdir()
         opencode_dir = repo_root / ".opencode"
         opencode_dir.mkdir()
-        
+
         ctx = _make_generation_context(repo_root)
-        
+
         gen = ComposeGenerator()
         gen.generate(ctx)
-        
+
         compose_content = (opencode_dir / "docker-compose.yaml").read_text()
         assert "runtime_data" in compose_content
         assert "framework-config" in compose_content

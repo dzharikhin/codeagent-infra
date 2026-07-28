@@ -9,8 +9,8 @@ import pytest
 from opencode_framework import features
 from opencode_framework.generators.compose import ComposeGenerator
 from opencode_framework.generators.devcontainer import (
-    DevcontainerGenerator,
     COMMON_UTILS_URL,
+    DevcontainerGenerator,
 )
 from opencode_framework.generators.templates import TemplateHandler
 

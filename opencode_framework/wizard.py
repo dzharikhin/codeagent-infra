@@ -51,7 +51,6 @@ def run_wizard(repo_root: Path, preflight_result: PreflightResult) -> WizardResu
     - Editor preference
     """
     from opencode_framework.config import discover_global_settings, get_config_root
-    from opencode_framework.features import _prompt_java_build_tools
 
     settings = discover_global_settings()
     create_global_config = False

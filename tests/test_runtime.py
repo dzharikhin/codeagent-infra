@@ -6,15 +6,15 @@ from pathlib import Path
 import pytest
 
 from opencode_framework.runtime import (
-    validate_runtime_context,
-    load_env_with_overrides,
-    build_docker_env,
-    parse_cli_env_vars,
     apply_combined_interpolation,
+    build_docker_env,
     get_image_id_path,
+    load_env_with_overrides,
     load_image_id,
+    parse_cli_env_vars,
     remove_image_id,
     save_image_id,
+    validate_runtime_context,
 )
 
 
@@ -30,7 +30,7 @@ class TestValidateRuntimeContext:
     def test_fails_not_at_repo_root(self, tmp_path: Path):
         """Should fail when not at repo root."""
         import subprocess
-        
+
         subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
         subprocess.run(
             ["git", "config", "user.email", "test@example.com"],
@@ -50,10 +50,10 @@ class TestValidateRuntimeContext:
             check=True,
             capture_output=True,
         )
-        
+
         subdir = tmp_path / "subdir"
         subdir.mkdir()
-        
+
         valid, error = validate_runtime_context(subdir)
         assert valid is False
         assert "not the repository root" in error
@@ -61,7 +61,7 @@ class TestValidateRuntimeContext:
     def test_fails_missing_opencode_dir(self, tmp_path: Path):
         """Should fail when .opencode/ does not exist."""
         import subprocess
-        
+
         subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
         subprocess.run(
             ["git", "config", "user.email", "test@example.com"],
@@ -81,7 +81,7 @@ class TestValidateRuntimeContext:
             check=True,
             capture_output=True,
         )
-        
+
         valid, error = validate_runtime_context(tmp_path)
         assert valid is False
         assert ".opencode/" in error
@@ -89,7 +89,7 @@ class TestValidateRuntimeContext:
     def test_fails_missing_devcontainer_json(self, tmp_path: Path):
         """Should fail when devcontainer.json does not exist."""
         import subprocess
-        
+
         subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
         subprocess.run(
             ["git", "config", "user.email", "test@example.com"],
@@ -109,9 +109,9 @@ class TestValidateRuntimeContext:
             check=True,
             capture_output=True,
         )
-        
+
         (tmp_path / ".opencode").mkdir()
-        
+
         valid, error = validate_runtime_context(tmp_path)
         assert valid is False
         assert "devcontainer.json" in error
@@ -119,7 +119,7 @@ class TestValidateRuntimeContext:
     def test_fails_missing_env_file(self, tmp_path: Path):
         """Should fail when .env does not exist."""
         import subprocess
-        
+
         subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
         subprocess.run(
             ["git", "config", "user.email", "test@example.com"],
@@ -139,11 +139,11 @@ class TestValidateRuntimeContext:
             check=True,
             capture_output=True,
         )
-        
+
         opencode_dir = tmp_path / ".opencode"
         opencode_dir.mkdir()
         (opencode_dir / "devcontainer.json").write_text("{}")
-        
+
         valid, error = validate_runtime_context(tmp_path)
         assert valid is False
         assert ".env" in error
@@ -151,7 +151,7 @@ class TestValidateRuntimeContext:
     def test_fails_missing_framework_path_in_env(self, tmp_path: Path):
         """Should fail when OCF_LOCAL_FRAMEWORK_PATH is not set in .env."""
         import subprocess
-        
+
         subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
         subprocess.run(
             ["git", "config", "user.email", "test@example.com"],
@@ -171,12 +171,12 @@ class TestValidateRuntimeContext:
             check=True,
             capture_output=True,
         )
-        
+
         opencode_dir = tmp_path / ".opencode"
         opencode_dir.mkdir()
         (opencode_dir / "devcontainer.json").write_text("{}")
         (opencode_dir / ".env").write_text("REMOTE_USER=root\n")
-        
+
         valid, error = validate_runtime_context(tmp_path)
         assert valid is False
         assert "OCF_LOCAL_FRAMEWORK_PATH" in error
@@ -184,7 +184,7 @@ class TestValidateRuntimeContext:
     def test_fails_framework_path_not_exists(self, tmp_path: Path):
         """Should fail when framework path in .env does not exist."""
         import subprocess
-        
+
         subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
         subprocess.run(
             ["git", "config", "user.email", "test@example.com"],
@@ -204,7 +204,7 @@ class TestValidateRuntimeContext:
             check=True,
             capture_output=True,
         )
-        
+
         opencode_dir = tmp_path / ".opencode"
         opencode_dir.mkdir()
         (opencode_dir / "devcontainer.json").write_text("{}")
@@ -212,7 +212,7 @@ class TestValidateRuntimeContext:
             "REMOTE_USER=root\n"
             "OCF_LOCAL_FRAMEWORK_PATH=/nonexistent/path/to/framework\n"
         )
-        
+
         valid, error = validate_runtime_context(tmp_path)
         assert valid is False
         assert "Framework repository no longer exists" in error
@@ -220,7 +220,7 @@ class TestValidateRuntimeContext:
     def test_fails_framework_path_invalid(self, tmp_path: Path):
         """Should fail when framework path exists but is not a valid framework repo."""
         import subprocess
-        
+
         subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
         subprocess.run(
             ["git", "config", "user.email", "test@example.com"],
@@ -240,11 +240,11 @@ class TestValidateRuntimeContext:
             check=True,
             capture_output=True,
         )
-        
+
         invalid_framework = tmp_path / "invalid-framework"
         invalid_framework.mkdir()
         (invalid_framework / ".git").mkdir()
-        
+
         opencode_dir = tmp_path / ".opencode"
         opencode_dir.mkdir()
         (opencode_dir / "devcontainer.json").write_text("{}")
@@ -252,7 +252,7 @@ class TestValidateRuntimeContext:
             f"REMOTE_USER=root\n"
             f"OCF_LOCAL_FRAMEWORK_PATH={invalid_framework}\n"
         )
-        
+
         valid, error = validate_runtime_context(tmp_path)
         assert valid is False
         assert "Framework repository is invalid" in error
@@ -260,7 +260,7 @@ class TestValidateRuntimeContext:
     def test_succeeds_with_valid_framework_repo(self, tmp_path: Path):
         """Should succeed when all requirements are met including valid framework repo."""
         import subprocess
-        
+
         subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
         subprocess.run(
             ["git", "config", "user.email", "test@example.com"],
@@ -280,14 +280,14 @@ class TestValidateRuntimeContext:
             check=True,
             capture_output=True,
         )
-        
+
         framework_repo = tmp_path / "framework"
         framework_repo.mkdir()
         (framework_repo / ".git").mkdir()
         (framework_repo / "framework-nuts-and-bolts").mkdir()
         (framework_repo / "framework-nuts-and-bolts" / "stub-auth.json").write_text("{}")
         (framework_repo / "framework-config").mkdir()
-        
+
         opencode_dir = tmp_path / ".opencode"
         opencode_dir.mkdir()
         (opencode_dir / "devcontainer.json").write_text("{}")
@@ -295,7 +295,7 @@ class TestValidateRuntimeContext:
             f"REMOTE_USER=root\n"
             f"OCF_LOCAL_FRAMEWORK_PATH={framework_repo}\n"
         )
-        
+
         valid, error = validate_runtime_context(tmp_path)
         assert valid is True
         assert error == ""
@@ -308,30 +308,30 @@ class TestLoadEnvWithOverrides:
         """Should load base env file."""
         env_path = tmp_path / ".env"
         env_path.write_text("KEY1=value1\nKEY2=value2")
-        
+
         result = load_env_with_overrides(env_path)
-        
+
         assert result == {"KEY1": "value1", "KEY2": "value2"}
 
     def test_ignores_comments_and_blanks(self, tmp_path: Path):
         """Should ignore comments and blank lines."""
         env_path = tmp_path / ".env"
         env_path.write_text("# Comment\n\nKEY1=value1\n# Another comment\n")
-        
+
         result = load_env_with_overrides(env_path)
-        
+
         assert result == {"KEY1": "value1"}
 
     def test_override_file_precedence(self, tmp_path: Path):
         """Override file should override base file."""
         base_env = tmp_path / ".env"
         base_env.write_text("KEY1=base1\nKEY2=base2")
-        
+
         override_env = tmp_path / "override.env"
         override_env.write_text("KEY2=override2\nKEY3=override3")
-        
+
         result = load_env_with_overrides(base_env, override_env)
-        
+
         assert result == {
             "KEY1": "base1",
             "KEY2": "override2",  # Overridden
@@ -342,14 +342,14 @@ class TestLoadEnvWithOverrides:
         """CLI variables should have highest precedence."""
         base_env = tmp_path / ".env"
         base_env.write_text("KEY1=base1\nKEY2=base2")
-        
+
         override_env = tmp_path / "override.env"
         override_env.write_text("KEY2=override2\nKEY3=override3")
-        
+
         cli_vars = ["KEY3=cli3", "KEY4=cli4"]
-        
+
         result = load_env_with_overrides(base_env, override_env, cli_vars)
-        
+
         assert result == {
             "KEY1": "base1",
             "KEY2": "override2",
@@ -360,18 +360,18 @@ class TestLoadEnvWithOverrides:
     def test_returns_empty_dict_for_missing_file(self, tmp_path: Path):
         """Should return empty dict if base file doesn't exist."""
         env_path = tmp_path / ".nonexistent"
-        
+
         result = load_env_with_overrides(env_path)
-        
+
         assert result == {}
 
     def test_nonexistent_override_file_raises(self, tmp_path: Path):
         """Should raise error if override file doesn't exist."""
         base_env = tmp_path / ".env"
         base_env.write_text("KEY=value")
-        
+
         override_env = tmp_path / "nonexistent.env"
-        
+
         with pytest.raises(FileNotFoundError):
             load_env_with_overrides(base_env, override_env)
 
@@ -379,9 +379,9 @@ class TestLoadEnvWithOverrides:
         """Should handle export statements."""
         env_path = tmp_path / ".env"
         env_path.write_text("export KEY1=value1\nKEY2=value2")
-        
+
         result = load_env_with_overrides(env_path)
-        
+
         assert result["KEY1"] == "value1"
         assert result["KEY2"] == "value2"
 
@@ -389,9 +389,9 @@ class TestLoadEnvWithOverrides:
         """Should handle quoted values."""
         env_path = tmp_path / ".env"
         env_path.write_text('KEY1="value with spaces"\nKEY2=\'single quoted\'')
-        
+
         result = load_env_with_overrides(env_path)
-        
+
         assert result["KEY1"] == "value with spaces"
         assert result["KEY2"] == "single quoted"
 
@@ -399,14 +399,14 @@ class TestLoadEnvWithOverrides:
         """Interpolation should work across different sources."""
         base_env = tmp_path / ".env"
         base_env.write_text("BASE_URL=http://localhost")
-        
+
         override_env = tmp_path / "override.env"
         override_env.write_text("API_PATH=/api/v1")
-        
+
         cli_vars = ["FULL_URL=${BASE_URL}${API_PATH}"]
-        
+
         result = load_env_with_overrides(base_env, override_env, cli_vars)
-        
+
         assert result["FULL_URL"] == "http://localhost/api/v1"
 
 
@@ -530,9 +530,9 @@ class TestBuildDockerEnv:
     def test_merges_base_env(self):
         """Should merge base env with current environment."""
         base_env = {"REMOTE_USER": "root", "XDG_CONFIG_HOME": "/home/root/.config"}
-        
+
         result = build_docker_env(base_env, "rootless")
-        
+
         assert result["REMOTE_USER"] == "root"
         assert result["XDG_CONFIG_HOME"] == "/home/root/.config"
 
@@ -581,7 +581,7 @@ class TestIntegrationScenarios:
             "DB_PORT=5432\n"
             "DB_NAME=dev_db\n"
         )
-        
+
         prod_env = tmp_path / "prod.env"
         prod_env.write_text(
             "ENV=production\n"
@@ -589,11 +589,11 @@ class TestIntegrationScenarios:
             "DB_HOST=prod-db.example.com\n"
             "DB_NAME=prod_db\n"
         )
-        
+
         cli_vars = ["DB_PASSWORD=secret123", "ENABLE_DEBUG=false"]
-        
+
         result = load_env_with_overrides(base_env, prod_env, cli_vars)
-        
+
         assert result == {
             "ENV": "production",
             "API_URL": "https://api.example.com",
@@ -612,20 +612,20 @@ class TestIntegrationScenarios:
             "BASE_DIR=/opt/${APP_NAME}\n"
             "CONFIG_DIR=${BASE_DIR}/config\n"
         )
-        
+
         override_env = tmp_path / "custom.env"
         override_env.write_text(
             "LOG_DIR=${BASE_DIR}/logs\n"
             "TEMP_DIR=${BASE_DIR}/tmp\n"
         )
-        
+
         cli_vars = [
             "FULL_CONFIG_PATH=${CONFIG_DIR}/app.conf",
             "BACKUP_DIR=${BASE_DIR}/backups",
         ]
-        
+
         result = load_env_with_overrides(base_env, override_env, cli_vars)
-        
+
         assert result == {
             "APP_NAME": "myapp",
             "BASE_DIR": "/opt/myapp",
@@ -640,9 +640,9 @@ class TestIntegrationScenarios:
         """Test that EnvError includes file path context."""
         base_env = tmp_path / ".env"
         base_env.write_text("KEY=value")
-        
+
         override_env = tmp_path / "missing.env"
-        
+
         try:
             load_env_with_overrides(base_env, override_env)
             assert False, "Should have raised FileNotFoundError"
