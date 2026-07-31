@@ -19,7 +19,7 @@ services:
     stdin_open: true
     environment:
       - OPENCODE_CONFIG=${OCF_REMOTE_FRAMEWORK_CONFIG_PATH}/config.json
-      - OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT=true
+      - OPENCODE_TUI_CONFIG=${OCF_REMOTE_FRAMEWORK_CONFIG_PATH}/tui.json
       - XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-/home/${REMOTE_USER}/.config}
       - XDG_DATA_HOME=${XDG_DATA_HOME:-/home/${REMOTE_USER}/.local/share}
       - XDG_STATE_HOME=${XDG_STATE_HOME:-/${REMOTE_USER}/.local/state}
