@@ -22,13 +22,31 @@ The framework does not:
 
 ## Architecture
 
-The agent environment is built from multiple layers:
+The framework consists of three parts with explicit borders. Borders are expressed as module names in code, variable prefixes in `.env`, and directory structure for content.
 
-### 1. Global User Level
+### Part 1: Sandbox
 
-Global settings are discovered automatically at fixed paths:
-- `~/.config/opencode` - configuration directory
-- `~/.local/share/opencode/auth.json` - authentication file
+Tool-agnostic isolation around the project: devcontainer image build, Docker Compose runtime, mounts, networks, ports, and the environment variables belonging to this layer. Barely linked to the agent tool — valuable on its own, it creates a restricted, easily reusable sandbox around a project, better than plain devcontainers.
+
+- Code: `opencode_framework/sandbox/`
+- Env: `OCF_IMAGE_ID`, `OCF_LOCAL_FRAMEWORK_PATH`, `OCF_REMOTE_FRAMEWORK_CONFIG_PATH`; shared unprefixed: `REMOTE_USER`, `XDG_*`
+- Border rule: sandbox code never imports tool-specific knowledge. Tool installation details arrive only as slot values (`{{AGENT_FEATURE}}`, `{{AGENT_INSTALL}}`, build args, service/entrypoint names, `{{AGENT_ENV}}`, `{{AGENT_MOUNTS}}`) provided by Part 2. Not every tool has a devcontainer feature — installation may fall back to Dockerfile-based install; this remains a sandbox concern fed with tool-specific knowledge.
+
+### Part 2: Agent Tool Integration
+
+Integration of one agent tool (opencode or qwen) and its layered configuration. This part absorbs the tool's configuration complexity:
+
+effective config = global < framework < project (optional) < env < CLI args
+
+- Code: `opencode_framework/agent/` — `registry.py` (one ToolSpec per tool: binary, install, env/mount fragments, serve, version pin), `layers.py` (env sections, project stubs, stub fallbacks, migrations)
+- Payloads: `framework-config/<tool>/` — the framework layer, mounted read-only
+- Env: `OCF_AGENT_*` (tool selection and version), `OCF_GLOBAL_*` (global layer source), agent defaults as env (`OCF_MAIN/BUILD/SMALL_MODEL`, `OCF_PLAN_/OCF_BUILD_MAX_BEFORE_RESPONSE_STEPS`). Tool-native variables (`OPENCODE_*`, `QWEN_*`) are the agent's own contract — used unprefixed, only for the active tool.
+
+#### Layer 1: Global User Level
+
+Global settings are discovered automatically at fixed per-tool paths:
+- opencode: `~/.config/opencode` (configuration directory), `~/.local/share/opencode/auth.json` (authentication)
+- qwen: `~/.qwen/settings.json`
 
 This level contains elements reused across projects:
 - provider blacklists/whitelists
@@ -36,12 +54,12 @@ This level contains elements reused across projects:
 
 Configuration at this level:
 - is optional if the user wants to fully configure each of his projects
-- cannot be modified by the agent
+- cannot be modified by the agent (mounted read-only)
 - is controlled by the developer outside of project work
 - may or may not be version-controlled
 - changes affect all configured projects
 
-### 2. Framework Level
+#### Layer 2: Framework Level
 
 This level defines the standard usage pattern for AI coding agents:
 - isolation settings (containerization, OS versions, tools)
@@ -51,11 +69,11 @@ This level defines the standard usage pattern for AI coding agents:
 - customization points for project-specific configuration
 
 Configuration at this level:
-- cannot be modified by the agent
+- cannot be modified by the agent (mounted read-only)
 - is version-controlled independently of development projects
 - changes affect all configured projects
 
-### 3. Project Level
+#### Layer 3: Project Level (optional)
 
 Individual settings for each project:
 - environment customization for the specific project
@@ -64,7 +82,16 @@ Individual settings for each project:
 Configuration at this level:
 - is part of the project thus can be modified by the agent
 - is controlled by the developer outside agent sessions
-- must be version-controlled within the project
+- is version-controlled within the project: on the per-developer agent branch (opencode) or, for tool-native project paths (`.qwen/`), deliberately committed as team config (gitignored by default otherwise)
+- the framework generates the initial project layer only if missing; existing content is never overwritten
+
+### Part 3: Nuts-and-bolts
+
+A snippet library showing how to configure a tool properly. Split into:
+- common - tool-agnostic concepts: agents, commands, skills, MCP examples
+- tool-specific - how to make something work in the specific tool
+
+Content lives at `framework-nuts-and-bolts/{common,opencode,qwen}/`. Delivery is tool-conditional: `common/` plus the active tool's folder are mounted read-only into `.opencode/framework-nuts-and-bolts/`. The library is a reference, not a native discovery path — contents are copied or adapted into the project layer.
 
 ## Usage Concept
 
@@ -76,7 +103,7 @@ Configuration at this level:
 ### Initial Project Setup
 
 1. Navigate to the project where you want to attach an AI agent
-2. Run the setup script to prepare the project: version control setup, configuration layers, containers, environments
+2. Run the setup script to prepare the project: agent tool selection, version control setup, configuration layers, containers, environments
 3. Launch the configured AI agent
 
 ### Framework Updates
@@ -86,23 +113,26 @@ Configuration at this level:
 
 ## Non-Goals for V1
 
-- multiple agent backends
+- multiple agent tools in one project (exactly one active tool, chosen at init)
 - automatic install of missing required dependencies
 - automatic repair of broken environments
 
 ## Main Decisions
 
-- Only `opencode` is supported in v1
+- The agent tool is configurable via a ToolSpec registry (opencode, qwen); one tool per project, chosen at `init`, persisted as `OCF_AGENT_TOOL`; switching tools requires re-init
+- The sandbox (Part 1) is tool-agnostic and usable without an agent
+- Config precedence: global < framework < project < env < CLI args; the framework only wires configuration layers, the agent tool computes the effective configuration
 - Project-local root is `.opencode/`
-- `.opencode/` is both the per-developer configuration worktree and the standard project-level `opencode` config root
+- `.opencode/` is both the per-developer configuration worktree and the standard framework entry point; project-level agent config lands in the worktree (opencode) or the tool-native project path (`.qwen/`, gitignored by default or committed as team config)
 - Main project branch stays free of framework-specific committed artifacts
 - Per-developer project config is versioned on a separate branch, local by default
-- Framework only wires config layers; `opencode` computes effective configuration
+- Framework never auto-commits; developer controls commits
 
 ## Success Criteria
 
-- `init` works in a supported Git repo and produces `.opencode/`
-- Generated config is sufficient to launch the container with opencode on board
-- `opencode` starts automatically from the generated setup
-- Project config can be versioned independently from the main project branch
+- `init` works in a supported Git repo for both tools (`--tool opencode|qwen`) and produces `.opencode/` (plus `.qwen/` for qwen)
+- Generated config is sufficient to launch the container with the selected agent on board
+- The agent starts automatically from the generated setup
+- Project config can be versioned independently from the main project branch, or deliberately committed as team-shared config
 - Missing prerequisites and incompatible states fail with concrete remediation guidance
+- Existing opencode projects keep working unchanged after the framework update
