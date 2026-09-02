@@ -2,6 +2,10 @@
 
 Technical details and code conventions for the OpenCode Framework.
 
+**Active plan:** [tool-adoption.md](tool-adoption.md) — configurable agent tool
+(`opencode` | `qwen`), 3-part restructure, env-var taxonomy, and migration.
+The layout and conventions on this page describe the target state of that plan.
+
 ## Setup
 
 ```sh
@@ -16,6 +20,15 @@ poetry run ocframework            # Run CLI
 opencode_framework/
 ├── __init__.py          # Package init, version
 ├── __main__.py          # Entry point for python -m
+├── agent/               # PART 2: agent tool integration
+│   ├── registry.py      # ToolSpec registry (opencode | qwen)
+│   └── layers.py        # .env tool sections, project stubs, stub fallbacks, env migration
+├── sandbox/             # PART 1: tool-agnostic sandbox
+│   ├── devcontainer.py  # devcontainer.json + Dockerfile image build
+│   ├── compose.py       # docker-compose generation + reconciliation
+│   ├── runtime.py       # Launch environment handling
+│   ├── net.py           # Port management
+│   └── features.py      # Feature set reconciliation on rebuild
 ├── cli/
 │   ├── __init__.py
 │   ├── app.py           # Typer CLI commands (init, launch)
@@ -25,16 +38,19 @@ opencode_framework/
 │   ├── config.py        # Configuration discovery
 │   └── git.py           # Git operations
 ├── exceptions/          # Custom exception hierarchy
-├── generators/          # File generators for .opencode/
+├── generators/          # Shared generators/assemblers for .opencode/ (ctx, templates, env, docs)
 ├── models/              # Data models (results, etc.)
 ├── services/            # Validation services
 ├── config.py            # Global settings, framework validation
 ├── preflight.py         # Preflight checks
 ├── git_ops.py           # Worktree management
-├── runtime.py           # Launch environment handling
 ├── wizard.py            # Interactive setup wizard
 └── templates/           # Jinja2 templates
 ```
+
+Moves from the pre-restructure layout (`generators/devcontainer.py`,
+`generators/compose.py`, top-level `runtime.py`/`net.py`/`features.py`/
+`devcontainer.py`) are tracked in [tool-adoption.md](tool-adoption.md).
 
 ## Build/Lint/Test Commands
 
@@ -269,8 +285,8 @@ poetry run pytest            # Run tests
 
 ### CLI Contract
 
-- `ocframework init` - Initialize framework in a Git repository
-- `ocframework launch` - Launch container with OpenCode agent
+- `ocframework init [--tool opencode|qwen]` - Initialize framework in a Git repository
+- `ocframework launch` - Launch container with the configured agent
 - `ocframework --version` - Print version and configuration status
 
 All commands require a valid framework repository (installed via `pipx install -e <path>`).
@@ -303,6 +319,29 @@ This hybrid approach enables:
 - Fast container starts without rebuilding
 - Persistent dependency caches via named volumes
 
+### Three-Part Architecture
+
+The framework splits into three parts with explicit borders (module names in code, variable prefixes in `.env`, directory structure for content) — see [vision.md](vision.md) and [tool-adoption.md](tool-adoption.md):
+
+1. **Sandbox** (`opencode_framework/sandbox/`) — tool-agnostic isolation: devcontainer image build, compose runtime, mounts, ports. Never imports tool knowledge; renders agent slots only (`{{AGENT_FEATURE}}`, `{{AGENT_INSTALL}}`, `{{AGENT_ENV}}`, `{{AGENT_MOUNTS}}`, `{{SERVICE_NAME}}`/`{{ENTRYPOINT}}`, build args).
+2. **Agent integration** (`opencode_framework/agent/`) — `registry.py` holds one ToolSpec per tool (opencode, qwen); `layers.py` wires the config layers global < framework < project (+ env, CLI args) and migrates env names.
+3. **Nuts-and-bolts** (repo content `framework-nuts-and-bolts/{common,opencode,qwen}/`) — snippet library; `common/` + the active tool's folder are mounted read-only into `.opencode/framework-nuts-and-bolts/`.
+
+### Environment Variable Taxonomy
+
+Rule: variables shared across parts/tools may be unprefixed; part- or tool-specific ones must be prefixed.
+
+| Family | Variables |
+|---|---|
+| shared (no prefix) | `REMOTE_USER`, `XDG_*` |
+| sandbox | `OCF_IMAGE_ID`, `OCF_LOCAL_FRAMEWORK_PATH`, `OCF_REMOTE_FRAMEWORK_CONFIG_PATH` |
+| agent tool | `OCF_AGENT_TOOL`, `OCF_AGENT_VERSION` |
+| agent layers | `OCF_GLOBAL_CONFIG_PATH` (dir for opencode, file for qwen), `OCF_GLOBAL_AUTH_PATH` (opencode only) |
+| agent defaults via env | `OCF_MAIN_MODEL`, `OCF_BUILD_MODEL`, `OCF_SMALL_MODEL`, `OCF_PLAN_MAX_BEFORE_RESPONSE_STEPS`, `OCF_BUILD_MAX_BEFORE_RESPONSE_STEPS` |
+| tool-native (agent's own contract, never OCF-prefixed) | `OPENCODE_*`, `QWEN_*` |
+
+Renamed keys migrate automatically during `.opencode/` reconciliation (values and user-added keys preserved).
+
 ### Git Worktree Model
 
 - `.opencode/` is a nested linked Git worktree on a separate branch
@@ -313,21 +352,23 @@ This hybrid approach enables:
 ### Security Model
 
 Read-only mounts:
-- Global config directory (host: `~/.config/opencode`)
-- Framework repository and config
-- Auth file: global auth if present, else framework stub auth
+- Framework repository, `framework-config/`, and `framework-nuts-and-bolts/{common,<tool>}/`
+- Global layer, per tool: opencode — global config directory (host: `~/.config/opencode`) + auth file (global auth if present, else framework stub); qwen — `~/.qwen/settings.json` (global if present, else framework stub)
+- qwen framework settings at `/home/$REMOTE_USER/.qwen/settings.json`
 
 Read-write mounts:
 - `.opencode/runtime_data/`
-- Project source repository
+- Project source repository (including `.qwen/` for qwen)
+
+qwen has no auth file: API keys (`DASHSCOPE_API_KEY`, `OPENAI_API_KEY` + `OPENAI_BASE_URL`) are injected via the env layer.
 
 ### Docker-in-Docker Support
 
 When the `docker` optional feature is selected during `ocframework init`:
 
-- The generated `docker-compose.yaml` includes `privileged: true` on the service and an entrypoint of `["/usr/local/share/docker-init.sh", "opencode"]`
+- The generated `docker-compose.yaml` includes `privileged: true` on the service and an entrypoint of `["/usr/local/share/docker-init.sh", "<agent-binary>"]`
 - The container image includes `/etc/docker/daemon.json` with `{"firewall-backend": "nftables"}` (baked in unconditionally — harmless without Docker installed)
 - The `docker-in-docker:2` devcontainer feature installs Docker CE and `/usr/local/share/docker-init.sh`
-- Docker daemon **starts automatically** on container launch. The container entrypoint runs `/usr/local/share/docker-init.sh` before `opencode`, which starts dockerd with readiness checks.
+- Docker daemon **starts automatically** on container launch. The container entrypoint runs `/usr/local/share/docker-init.sh` before the agent binary, which starts dockerd with readiness checks.
 - Docker autodetects the storage driver: prefers `overlay2` where supported, falls back to `vfs` in sandboxed environments without overlayfs support.
 - A named volume `docker-<repo>` is mounted at `/var/lib/docker` to persist Docker data across container restarts. If you upgrade the daemon to a version incompatible with this volume, you may need to run `docker volume rm docker-<repo>` to recreate it.

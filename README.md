@@ -12,6 +12,10 @@ Framework for attaching AI coding agents to existing projects safely.
 
 See [vision.md](vision.md) for project goals, scope, and architecture.
 
+> **Roadmap:** the agent tool is becoming configurable (`opencode` | `qwen`) as
+> part of a 3-part restructure (sandbox / agent integration / nuts-and-bolts).
+> Design and implementation plan: [tool-adoption.md](tool-adoption.md).
+
 ## Requirements
 
 - Python 3.12+
