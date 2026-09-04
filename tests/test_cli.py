@@ -416,10 +416,10 @@ class TestLaunchRebuildFeaturePrompt:
         )
 
         assert result.exit_code == 130  # Standard SIGINT exit code
-        assert len(subprocess_calls) == 2  # docker inspect and docker attach
+        assert len(subprocess_calls) == 3  # docker inspect, docker port, docker attach
 
         # Verify attach was called (not docker compose run or cleanup)
-        attach_call = subprocess_calls[1]
+        attach_call = subprocess_calls[2]
         assert "attach" in attach_call[1][0]  # args[0] is the command list
 
 
@@ -435,7 +435,12 @@ class TestLaunchAttachRemoveFeature:
         return opencode
 
     def _patch_launch_deps(
-        self, monkeypatch, tmp_path: Path, attach_rc=0, inspect_status="running"
+        self,
+        monkeypatch,
+        tmp_path: Path,
+        attach_rc=0,
+        inspect_status="running",
+        port_output="",
     ):
         import importlib
 
@@ -447,6 +452,8 @@ class TestLaunchAttachRemoveFeature:
 
             if cmd[:2] == ["docker", "inspect"] and "--format" in cmd:
                 result.stdout = inspect_status if inspect_status else "running"
+            elif cmd[:2] == ["docker", "port"]:
+                result.stdout = port_output
             elif cmd[:2] == ["docker", "attach"]:
                 result.returncode = attach_rc
             elif cmd[:2] == ["docker", "rm"] and "-f" in cmd:
@@ -602,6 +609,48 @@ class TestLaunchAttachRemoveFeature:
 
         assert result.exit_code == 0
 
+    def test_launch_attach_prints_port_mappings(self, tmp_path: Path, monkeypatch):
+        """Port mappings must be shown when attaching to an already-running container."""
+        self._setup_repo(tmp_path)
+        port_output = "4096/tcp -> 0.0.0.0:4096\n8080/tcp -> 0.0.0.0:8080"
+        app_module = self._patch_launch_deps(
+            monkeypatch,
+            tmp_path,
+            attach_rc=0,
+            inspect_status="running",
+            port_output=port_output,
+        )
+
+        from typer.testing import CliRunner
+
+        result = CliRunner().invoke(app_module.app, ["launch"])
+
+        assert result.exit_code == 0
+        assert "Port mappings:" in result.output
+        assert "4096/tcp -> 0.0.0.0:4096" in result.output
+        assert "8080/tcp -> 0.0.0.0:8080" in result.output
+
+    def test_launch_attach_no_ports_skips_mapping_section(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """No port mapping section when the running container has no published ports."""
+        self._setup_repo(tmp_path)
+        app_module = self._patch_launch_deps(
+            monkeypatch,
+            tmp_path,
+            attach_rc=0,
+            inspect_status="running",
+            port_output="",
+        )
+
+        from typer.testing import CliRunner
+
+        result = CliRunner().invoke(app_module.app, ["launch"])
+
+        assert result.exit_code == 0
+        assert "Port mappings:" not in result.output
+        assert "attaching" in result.output.lower()
+
 
 class TestLaunchServer:
     """Tests for the --server option of ``ocframework launch``."""
@@ -661,7 +710,9 @@ class TestLaunchServer:
         """Bare --server picks the first free port and runs opencode serve."""
         self._setup_repo(tmp_path)
         app_module, captured = self._patch_launch_deps(monkeypatch, tmp_path)
-        monkeypatch.setattr(app_module, "find_free_port", lambda s, e, reserved=None: 4096)
+        monkeypatch.setattr(
+            app_module, "find_free_port", lambda s, e, reserved=None: 4096
+        )
 
         from typer.testing import CliRunner
 
@@ -763,9 +814,7 @@ class TestLaunchServer:
         assert result.exit_code == 1
         assert "conflicts with 'serve'" in result.output
 
-    def test_launch_server_republishes_wizard_ports(
-        self, tmp_path: Path, monkeypatch
-    ):
+    def test_launch_server_republishes_wizard_ports(self, tmp_path: Path, monkeypatch):
         """--server republishes wizard ports individually instead of --service-ports."""
         self._setup_repo(tmp_path, ports_block="    ports:\n      - 8080:8080\n")
         app_module, captured = self._patch_launch_deps(monkeypatch, tmp_path)
@@ -920,7 +969,9 @@ class TestLaunchServer:
         """--server followed by a non-numeric flag treats --server as bare."""
         self._setup_repo(tmp_path)
         app_module, captured = self._patch_launch_deps(monkeypatch, tmp_path)
-        monkeypatch.setattr(app_module, "find_free_port", lambda s, e, reserved=None: 4096)
+        monkeypatch.setattr(
+            app_module, "find_free_port", lambda s, e, reserved=None: 4096
+        )
 
         from typer.testing import CliRunner
 

@@ -460,6 +460,33 @@ def _get_container_status(container_name: str, subprocess_env: dict) -> Optional
     return None
 
 
+def _get_container_ports(container_name: str, subprocess_env: dict) -> Optional[str]:
+    """Return the port mapping lines for a running container.
+
+    Args:
+        container_name: Name of the container
+        subprocess_env: Environment variables for subprocess
+
+    Returns:
+        Raw ``docker port`` output (e.g. ``"4096/tcp -> 0.0.0.0:4096"``),
+        or None when the container has no published ports or the command fails.
+    """
+    try:
+        result = subprocess.run(
+            ["docker", "port", container_name],
+            env=subprocess_env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            output = result.stdout.strip()
+            return output if output else None
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    return None
+
+
 def _remove_container(container_name: str, subprocess_env: dict) -> bool:
     """Force-remove a container.
 
@@ -686,6 +713,11 @@ def launch(
         status = _get_container_status(container_name, subprocess_env)
         if status == "running" and not force:
             typer.echo(f"Container '{container_name}' is already running. Attaching...")
+            ports = _get_container_ports(container_name, subprocess_env)
+            if ports:
+                typer.echo("Port mappings:")
+                for line in ports.splitlines():
+                    typer.echo(f"  {line}")
             attach_result = subprocess.run(
                 ["docker", "attach", container_name],
                 env=subprocess_env,
