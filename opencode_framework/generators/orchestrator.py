@@ -9,9 +9,7 @@ from opencode_framework.config import discover_global_settings
 from opencode_framework.wizard import WizardResult
 
 from .base import GenerationContext
-from .compose import ComposeGenerator
 from .config_files import ConfigFilesGenerator
-from .devcontainer import DevcontainerGenerator
 from .documentation import DocumentationGenerator
 
 
@@ -20,6 +18,11 @@ class GenerationOrchestrator:
 
     def __init__(self):
         """Initialize the orchestrator with all generators."""
+        # Lazy: the sandbox generators import generators.base, so importing
+        # them at module level would create a circular import.
+        from opencode_framework.sandbox.compose import ComposeGenerator
+        from opencode_framework.sandbox.devcontainer import DevcontainerGenerator
+
         self.devcontainer_gen = DevcontainerGenerator()
         self.config_gen = ConfigFilesGenerator()
         self.docs_gen = DocumentationGenerator()

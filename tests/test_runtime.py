@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from opencode_framework.runtime import (
+from opencode_framework.sandbox.runtime import (
     apply_combined_interpolation,
     build_docker_env,
     get_image_id_path,
@@ -477,7 +477,7 @@ class TestApplyCustomInterpolation:
 
     def test_resolves_within_depth_limit(self):
         """Should resolve deep chains within max depth."""
-        from opencode_framework.runtime import apply_combined_interpolation
+        from opencode_framework.sandbox.runtime import apply_combined_interpolation
         env = {
             "A": "hello",
             "B": "$A",
@@ -496,7 +496,7 @@ class TestApplyCustomInterpolation:
 
     def test_undefined_vars_resolve_to_empty(self):
         """Undefined variables should resolve to empty string."""
-        from opencode_framework.runtime import apply_combined_interpolation
+        from opencode_framework.sandbox.runtime import apply_combined_interpolation
         env = {
             "A": "$UNDEFINED",
             "B": "$C",
@@ -506,7 +506,7 @@ class TestApplyCustomInterpolation:
 
     def test_partial_resolution_leaves_pattern(self):
         """Unresolvable patterns should stay in result (not raise error)."""
-        from opencode_framework.runtime import apply_combined_interpolation
+        from opencode_framework.sandbox.runtime import apply_combined_interpolation
         env = {
             "A": "$B",
             "B": "$C",

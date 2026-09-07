@@ -6,13 +6,13 @@ from typing import List
 
 import pytest
 
-from opencode_framework import features
-from opencode_framework.generators.compose import ComposeGenerator
-from opencode_framework.generators.devcontainer import (
+from opencode_framework.generators.templates import TemplateHandler
+from opencode_framework.sandbox import features
+from opencode_framework.sandbox.compose import ComposeGenerator
+from opencode_framework.sandbox.devcontainer import (
     COMMON_UTILS_URL,
     DevcontainerGenerator,
 )
-from opencode_framework.generators.templates import TemplateHandler
 
 
 def _dc_with_features(*features: str, editor: str = "none") -> dict:
@@ -948,11 +948,12 @@ class TestPromptJavaBuildTools:
 
         self.typer_confirm = _FakeConfirm()
         monkeypatch.setattr(
-            "opencode_framework.features.typer.confirm", self.typer_confirm
+            "opencode_framework.sandbox.features.typer.confirm", self.typer_confirm
         )
 
         monkeypatch.setattr(
-            "opencode_framework.features.typer.echo", lambda *args, **kwargs: None
+            "opencode_framework.sandbox.features.typer.echo",
+            lambda *args, **kwargs: None,
         )
 
     def test_none_defaults_maven_true_gradle_false(self):
@@ -989,9 +990,10 @@ class TestPromptJavaBuildTools:
                 call_count += 1
                 return True  # Always confirm both
 
-            m.setattr("opencode_framework.features.typer.confirm", mock_confirm)
+            m.setattr("opencode_framework.sandbox.features.typer.confirm", mock_confirm)
             m.setattr(
-                "opencode_framework.features.typer.echo", lambda *args, **kwargs: None
+                "opencode_framework.sandbox.features.typer.echo",
+                lambda *args, **kwargs: None,
             )
 
             tools = features._prompt_java_build_tools([])

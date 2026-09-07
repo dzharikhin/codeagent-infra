@@ -575,7 +575,7 @@ class TestLaunchAttachRemoveFeature:
             lambda *a, **kw: build_calls.append(True) or "sha256:new",
         )
         # real load_image_id so it reflects the deleted file
-        import opencode_framework.runtime as rt_module
+        import opencode_framework.sandbox.runtime as rt_module
 
         monkeypatch.setattr(app_module, "load_image_id", rt_module.load_image_id)
 

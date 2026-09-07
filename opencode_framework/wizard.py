@@ -7,8 +7,11 @@ from typing import List
 
 import typer
 
-from opencode_framework.features import prompt_feature_changes, prompt_port_mappings
 from opencode_framework.preflight import PreflightResult
+from opencode_framework.sandbox.features import (
+    prompt_feature_changes,
+    prompt_port_mappings,
+)
 
 
 @dataclass

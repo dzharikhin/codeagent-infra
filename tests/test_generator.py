@@ -5,10 +5,10 @@ from pathlib import Path
 
 from opencode_framework.config import GlobalSettings
 from opencode_framework.generators import GenerationContext, GenerationOrchestrator
-from opencode_framework.generators.compose import ComposeGenerator
 from opencode_framework.generators.config_files import ConfigFilesGenerator
-from opencode_framework.generators.devcontainer import DevcontainerGenerator
 from opencode_framework.generators.documentation import DocumentationGenerator
+from opencode_framework.sandbox.compose import ComposeGenerator
+from opencode_framework.sandbox.devcontainer import DevcontainerGenerator
 from opencode_framework.wizard import WizardResult
 
 

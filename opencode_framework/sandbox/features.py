@@ -193,8 +193,8 @@ def update_features(opencode_dir: Path, repo_name: str) -> bool:
     Returns:
         True if feature configuration was changed, False otherwise.
     """
-    from opencode_framework.generators.compose import ComposeGenerator
-    from opencode_framework.generators.devcontainer import DevcontainerGenerator
+    from opencode_framework.sandbox.compose import ComposeGenerator
+    from opencode_framework.sandbox.devcontainer import DevcontainerGenerator
 
     if not is_interactive():
         return False

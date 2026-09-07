@@ -19,22 +19,22 @@ from opencode_framework.config import (
     validate_framework_repo,
 )
 from opencode_framework.exceptions import PortAllocationError
-from opencode_framework.features import update_features
 from opencode_framework.generators import GenerationOrchestrator
-from opencode_framework.generators.compose import ComposeGenerator
 from opencode_framework.generators.documentation import DocumentationGenerator
 from opencode_framework.git_ops import (
     is_worktree,
     remove_worktree,
     setup_opencode_worktree,
 )
-from opencode_framework.net import find_free_port
 from opencode_framework.preflight import (
     get_repo_root,
     opencode_directory_exists,
     run_preflight_checks,
 )
-from opencode_framework.runtime import (
+from opencode_framework.sandbox.compose import ComposeGenerator
+from opencode_framework.sandbox.features import update_features
+from opencode_framework.sandbox.net import find_free_port
+from opencode_framework.sandbox.runtime import (
     EnvError,
     build_docker_env,
     load_env_with_overrides,

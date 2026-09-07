@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from opencode_framework.devcontainer import (
+from opencode_framework.sandbox.devcontainer import (
     detect_devcontainer,
     evaluate_compatibility,
 )

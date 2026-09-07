@@ -3,8 +3,8 @@
 import re
 from typing import List, Optional
 
-from .base import FileGenerator, GenerationContext
-from .templates import TemplateHandler
+from opencode_framework.generators.base import FileGenerator, GenerationContext
+from opencode_framework.generators.templates import TemplateHandler
 
 
 class ComposeGenerator(FileGenerator):
