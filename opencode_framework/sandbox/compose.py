@@ -3,6 +3,7 @@
 import re
 from typing import List, Optional
 
+from opencode_framework.agent.registry import DEFAULT_TOOL, get_tool_spec
 from opencode_framework.generators.base import FileGenerator, GenerationContext
 from opencode_framework.generators.templates import TemplateHandler
 
@@ -26,6 +27,7 @@ class ComposeGenerator(FileGenerator):
             optional_features=ctx.optional_features,
             port_mappings=ctx.port_mappings,
             java_build_tools=getattr(ctx, "java_build_tools", None),
+            agent_tool=ctx.agent_tool,
         )
         compose_path.write_text(compose_content)
 
@@ -65,6 +67,7 @@ class ComposeGenerator(FileGenerator):
         optional_features: List[str],
         port_mappings: Optional[List[str]] = None,
         java_build_tools: Optional[List[str]] = None,
+        agent_tool: str = DEFAULT_TOOL,
     ) -> str:
         """Surgically update feature-dependent parts of a compose file.
 
@@ -86,10 +89,12 @@ class ComposeGenerator(FileGenerator):
             optional_features: Final feature set to apply
             port_mappings: Desired port mappings, or None to leave ports as-is
             java_build_tools: List of enabled Java build tools (e.g., ["maven"], ["gradle"])
+            agent_tool: Agent tool name ("opencode" | "qwen")
 
         Returns:
             Updated compose file content
         """
+        spec = get_tool_spec(agent_tool)
         venv_mount = f"      - venv-{repo_name}:/{repo_name}/.venv"
         m2_mount = f"      - m2-{repo_name}:/home/${{REMOTE_USER}}/.m2"
         gradle_mount = f"      - gradle-{repo_name}:/home/${{REMOTE_USER}}/.gradle"
@@ -108,9 +113,9 @@ class ComposeGenerator(FileGenerator):
 
         has_docker = "docker" in optional_features
         desired_entrypoint = (
-            '["/usr/local/share/docker-init.sh", "opencode"]'
+            f'["/usr/local/share/docker-init.sh", "{spec.binary}"]'
             if has_docker
-            else '["opencode"]'
+            else f'["{spec.binary}"]'
         )
 
         # Determine which Java build tools are enabled

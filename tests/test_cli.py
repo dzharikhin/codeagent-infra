@@ -986,3 +986,180 @@ class TestLaunchServer:
         assert cmd[idx + 1] == "4096:4096"
         # --other-flag leaks through as pass-through arg
         assert "--other-flag" in cmd
+
+
+class TestInitToolOption:
+    """Tests for the init --tool option."""
+
+    def test_init_rejects_unknown_tool(self):
+        """init --tool bogus exits 1 with remediation before preflight."""
+        import importlib
+
+        from typer.testing import CliRunner
+
+        app_module = importlib.import_module("opencode_framework.cli.app")
+        result = CliRunner().invoke(app_module.app, ["init", "--tool", "bogus"])
+
+        assert result.exit_code == 1
+        assert "Unsupported agent tool" in result.output
+        assert "opencode, qwen" in result.output
+        assert "Preflight" not in result.output
+
+
+class TestLaunchToolSpec:
+    """Tests for per-tool launch behavior driven by OCF_AGENT_TOOL."""
+
+    def _setup_repo(self, tmp_path: Path, service: str = "opencode") -> Path:
+        opencode = tmp_path / ".opencode"
+        opencode.mkdir()
+        (opencode / "docker-compose.yaml").write_text(
+            f"services:\n  {service}:\n    container_name: ocf_repo\n"
+        )
+        return opencode
+
+    def _patch_launch_deps(self, monkeypatch, tmp_path: Path, tool_env=None):
+        import importlib
+
+        app_module = importlib.import_module("opencode_framework.cli.app")
+        captured: list = []
+
+        def mock_run(*args, **kw):
+            cmd = list(args[0]) if args else args[1].get("args", [])
+            result = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            if cmd[:2] == ["docker", "inspect"] and "--format" in cmd:
+                result.stdout = ""  # no container
+            elif cmd[:2] == ["docker", "compose"] and "run" in cmd:
+                captured.append(cmd)
+                result.returncode = 0
+            return result
+
+        monkeypatch.setattr(
+            app_module, "validate_runtime_context", lambda cwd: (True, "")
+        )
+        monkeypatch.setattr(app_module, "get_repo_root", lambda cwd: tmp_path.resolve())
+        monkeypatch.setattr(
+            app_module,
+            "load_env_with_overrides",
+            lambda **kw: dict(tool_env or {}),
+        )
+        monkeypatch.setattr(app_module, "build_docker_env", lambda env, ctx: {})
+        monkeypatch.setattr(app_module, "load_image_id", lambda d: "sha256:cached")
+        monkeypatch.setattr(app_module, "_build_image", lambda *a, **kw: "sha256:fake")
+        monkeypatch.setattr(app_module, "save_image_id", lambda *a, **kw: None)
+        monkeypatch.setattr(app_module.subprocess, "run", mock_run)
+        return app_module, captured
+
+    @staticmethod
+    def _env_pairs(cmd: list) -> list:
+        return [cmd[i + 1] for i, t in enumerate(cmd) if t == "--env"]
+
+    def _invoke(self, app_module, args: list):
+        from typer.testing import CliRunner
+
+        return CliRunner().invoke(app_module.app, args)
+
+    def test_qwen_tui_uses_qwen_binary(self, tmp_path: Path, monkeypatch):
+        """OCF_AGENT_TOOL=qwen runs the qwen binary."""
+        self._setup_repo(tmp_path, service="qwen")
+        app_module, captured = self._patch_launch_deps(
+            monkeypatch, tmp_path, {"OCF_AGENT_TOOL": "qwen"}
+        )
+
+        result = self._invoke(app_module, ["launch"])
+
+        assert result.exit_code == 0
+        assert len(captured) == 1
+        assert captured[0][-1] == "qwen"
+        assert "--publish" not in captured[0]
+
+    def test_qwen_server_command_and_port(self, tmp_path: Path, monkeypatch):
+        """--server with qwen publishes to 4170 and runs 'qwen serve'."""
+        self._setup_repo(tmp_path, service="qwen")
+        app_module, captured = self._patch_launch_deps(
+            monkeypatch, tmp_path, {"OCF_AGENT_TOOL": "qwen"}
+        )
+
+        result = self._invoke(app_module, ["launch", "--server=5000"])
+
+        assert result.exit_code == 0
+        cmd = captured[0]
+        publish_pairs = [cmd[i + 1] for i, t in enumerate(cmd) if t == "--publish"]
+        assert "5000:4170" in publish_pairs
+        tail = cmd[-6:]
+        assert tail == ["qwen", "serve", "--hostname", "0.0.0.0", "--port", "4170"]
+
+    def test_qwen_server_generates_and_injects_token(self, tmp_path: Path, monkeypatch):
+        """qwen --server generates a 64-hex token, injects and echoes it."""
+        self._setup_repo(tmp_path, service="qwen")
+        app_module, captured = self._patch_launch_deps(
+            monkeypatch, tmp_path, {"OCF_AGENT_TOOL": "qwen"}
+        )
+
+        result = self._invoke(app_module, ["launch", "--server=5000"])
+
+        assert result.exit_code == 0
+        cmd = captured[0]
+        token_pairs = [
+            p for p in self._env_pairs(cmd) if p.startswith("QWEN_SERVER_TOKEN=")
+        ]
+        assert len(token_pairs) == 1
+        token = token_pairs[0].split("=", 1)[1]
+        assert len(token) == 64
+        assert all(c in "0123456789abcdef" for c in token)
+        assert "Web Shell token (QWEN_SERVER_TOKEN)" in result.output
+        # The token must not leak into the container command tail
+        container_cmd = cmd[cmd.index("qwen") :]
+        assert token not in container_cmd
+
+    def test_opencode_server_generates_no_token(self, tmp_path: Path, monkeypatch):
+        """opencode (no token_required) gets no auto-generated password."""
+        self._setup_repo(tmp_path)
+        app_module, captured = self._patch_launch_deps(monkeypatch, tmp_path)
+
+        result = self._invoke(app_module, ["launch", "--server=5000"])
+
+        assert result.exit_code == 0
+        assert not any(
+            p.startswith("OPENCODE_SERVER_PASSWORD=")
+            for p in self._env_pairs(captured[0])
+        )
+
+    def test_user_supplied_token_preserved(self, tmp_path: Path, monkeypatch):
+        """A user-provided QWEN_SERVER_TOKEN is used verbatim, not regenerated."""
+        self._setup_repo(tmp_path, service="qwen")
+        app_module, captured = self._patch_launch_deps(
+            monkeypatch,
+            tmp_path,
+            {"OCF_AGENT_TOOL": "qwen", "QWEN_SERVER_TOKEN": "user-token"},
+        )
+
+        result = self._invoke(app_module, ["launch", "--server=5000"])
+
+        assert result.exit_code == 0
+        assert "QWEN_SERVER_TOKEN=user-token" in self._env_pairs(captured[0])
+        assert "Web Shell token" not in result.output
+
+    def test_invalid_agent_tool_env_exits(self, tmp_path: Path, monkeypatch):
+        """An unsupported OCF_AGENT_TOOL value exits 1 with remediation."""
+        self._setup_repo(tmp_path)
+        app_module, captured = self._patch_launch_deps(
+            monkeypatch, tmp_path, {"OCF_AGENT_TOOL": "nope"}
+        )
+
+        result = self._invoke(app_module, ["launch"])
+
+        assert result.exit_code == 1
+        assert "Unsupported agent tool" in result.output
+        assert captured == []
+
+    def test_qwen_server_url_wording(self, tmp_path: Path, monkeypatch):
+        """--server with qwen echoes the qwen serve URL."""
+        self._setup_repo(tmp_path, service="qwen")
+        app_module, captured = self._patch_launch_deps(
+            monkeypatch, tmp_path, {"OCF_AGENT_TOOL": "qwen"}
+        )
+
+        result = self._invoke(app_module, ["launch", "--server=5000"])
+
+        assert result.exit_code == 0
+        assert "qwen serve will be available at http://127.0.0.1:5000" in result.output

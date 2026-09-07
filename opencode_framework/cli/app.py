@@ -2,15 +2,23 @@
 
 import json
 import re
+import secrets
 import shutil
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import typer
 
 from opencode_framework import __version__
+from opencode_framework.agent.layers import discover_global_layer, expected_global_path
+from opencode_framework.agent.registry import (
+    DEFAULT_TOOL,
+    QWEN_TOOL_SPEC,
+    ToolSpec,
+    get_tool_spec,
+)
 from opencode_framework.config import (
     discover_global_settings,
     get_config_root,
@@ -18,7 +26,7 @@ from opencode_framework.config import (
     get_local_data_home,
     validate_framework_repo,
 )
-from opencode_framework.exceptions import PortAllocationError
+from opencode_framework.exceptions import PortAllocationError, ValidationError
 from opencode_framework.generators import GenerationOrchestrator
 from opencode_framework.generators.documentation import DocumentationGenerator
 from opencode_framework.git_ops import (
@@ -43,9 +51,8 @@ from opencode_framework.sandbox.runtime import (
     save_image_id,
     validate_runtime_context,
 )
-from opencode_framework.wizard import run_wizard
+from opencode_framework.wizard import resolve_tool_or_exit, run_wizard
 
-SERVER_CONTAINER_PORT = 4096
 SERVER_HOST_PORT_MIN = 4096
 SERVER_HOST_PORT_MAX = 4196
 
@@ -89,6 +96,44 @@ def _print_version_info() -> None:
         typer.echo(f"global auth.json path: {settings.global_auth_path}")
     else:
         typer.echo(f"expected global auth.json path: {expected_global_auth_path}")
+
+    qwen_layer = discover_global_layer(QWEN_TOOL_SPEC)
+    typer.echo(f"qwen global settings found: {qwen_layer.global_found}")
+    if qwen_layer.global_found:
+        typer.echo(f"qwen global settings path: {qwen_layer.global_path}")
+    else:
+        expected_qwen_path = expected_global_path(QWEN_TOOL_SPEC)
+        typer.echo(f"expected qwen global settings path: {expected_qwen_path}")
+
+
+def _resolve_agent_tool(final_env: Dict[str, str]) -> ToolSpec:
+    """Resolve the agent ToolSpec from OCF_AGENT_TOOL in the merged env.
+
+    Absent or empty OCF_AGENT_TOOL falls back to the default tool
+    (opencode), keeping projects initialized before the variable
+    existed working unchanged.
+
+    Args:
+        final_env: Merged environment (global < project < override < CLI).
+
+    Returns:
+        The resolved ToolSpec.
+
+    Raises:
+        typer.Exit: When OCF_AGENT_TOOL names an unsupported tool.
+    """
+    name = (final_env.get("OCF_AGENT_TOOL") or DEFAULT_TOOL).strip()
+    try:
+        return get_tool_spec(name)
+    except ValidationError as e:
+        typer.secho(f"Error: {e.message}", fg=typer.colors.RED, err=True)
+        typer.secho(f"Remediation: {e.remediation}", fg=typer.colors.YELLOW, err=True)
+        typer.secho(
+            "Fix OCF_AGENT_TOOL in .opencode/.env or re-run 'ocframework init'.",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+        raise typer.Exit(1) from None
 
 
 def _check_framework_repo() -> Optional[str]:
@@ -144,12 +189,21 @@ def init(
         "-f",
         help="Force regeneration by backing up existing .opencode/",
     ),
+    tool: Optional[str] = typer.Option(
+        None,
+        "--tool",
+        help="Agent CLI tool to configure (opencode | qwen); prompted when omitted",
+    ),
 ) -> None:
     """Initialize the framework in a Git repository.
 
-    Creates a .opencode/ directory with configuration for the AI coding agent.
+    Creates a .opencode/ directory with configuration for the selected
+    agent CLI tool (opencode or qwen).
     """
     repo_path = Path.cwd()
+
+    if tool is not None:
+        resolve_tool_or_exit(tool)
 
     typer.echo("Running preflight checks...")
     result = run_preflight_checks(repo_path, force=force)
@@ -190,8 +244,8 @@ def init(
     wizard_result = run_wizard(repo_path, result)
 
     if wizard_result.create_global_config:
-        config_root = get_config_root()
-        global_config_dir = config_root / "opencode"
+        spec = resolve_tool_or_exit(wizard_result.agent_tool)
+        global_config_dir = expected_global_path(spec)
         typer.echo(f"Creating global config directory: {global_config_dir}")
         try:
             global_config_dir.mkdir(parents=True, exist_ok=True)
@@ -344,6 +398,7 @@ def _extract_host_ports(port_mappings: List[str]) -> List[int]:
 def _resolve_server_port(
     server: str,
     extra_args: List[str],
+    spec: ToolSpec,
     reserved_host_ports: Optional[List[int]] = None,
 ) -> int:
     """Resolve the host port for ``--server``.
@@ -351,8 +406,9 @@ def _resolve_server_port(
     Args:
         server: Raw value of the ``--server`` option (empty string for bare
             ``--server``, otherwise a numeric port string).
-        extra_args: Pass-through args destined for ``opencode`` inside the
+        extra_args: Pass-through args destined for the agent inside the
             container. Used to detect a conflicting explicit ``serve``.
+        spec: ToolSpec of the configured agent (for port and wording).
         reserved_host_ports: Host ports already claimed by wizard-configured
             compose mappings. Bare ``--server`` skips these when auto-picking;
             explicit ``--server=N`` fails fast if N is in the list.
@@ -413,8 +469,28 @@ def _resolve_server_port(
             )
             raise typer.Exit(1) from None
 
-    typer.echo(f"opencode serve will be available at http://127.0.0.1:{host_port}")
+    typer.echo(f"{spec.name} serve will be available at http://127.0.0.1:{host_port}")
     return host_port
+
+
+def _ensure_server_token(final_env: Dict[str, str], spec: ToolSpec) -> None:
+    """Auto-generate the serve token when the tool requires one.
+
+    The token is injected into the container environment via
+    ``docker compose run --env`` and never written to disk; a
+    user-provided value (env file or ``-e``) always wins.
+
+    Args:
+        final_env: Merged environment; updated in place.
+        spec: ToolSpec of the configured agent.
+    """
+    if not spec.serve.token_required:
+        return
+    if final_env.get(spec.serve.token_env):
+        return
+    token = secrets.token_hex(32)
+    final_env[spec.serve.token_env] = token
+    typer.echo(f"Web Shell token ({spec.serve.token_env}): {token}")
 
 
 def _extract_container_name(compose_path: Path) -> Optional[str]:
@@ -591,9 +667,11 @@ def launch(
         help="Remove any existing container and cached image ID, forcing a fresh build",
     ),
 ) -> None:
-    """Launch the OpenCode agent in a container.
+    """Launch the configured agent (opencode or qwen) in a container.
 
-    Builds the devcontainer image (if needed) and runs OpenCode using docker compose.
+    Builds the devcontainer image (if needed) and runs the agent using
+    docker compose. The agent tool is read from OCF_AGENT_TOOL in the
+    environment (default: opencode).
 
     Environment variables are loaded with precedence (lowest to highest):
     1. Global env file (~/.config/opencode/.env, auto-loaded if present)
@@ -657,6 +735,8 @@ def launch(
     for warning in warnings:
         typer.secho(f"Warning: {warning}", fg=typer.colors.YELLOW)
 
+    spec = _resolve_agent_tool(final_env)
+
     subprocess_env = build_docker_env(final_env, docker_context)
 
     opencode_dir = repo_root / ".opencode"
@@ -703,8 +783,9 @@ def launch(
     server_host_port: Optional[int] = None
     if server is not None:
         server_host_port = _resolve_server_port(
-            server, ctx.args, reserved_host_ports=reserved_host_ports
+            server, ctx.args, spec, reserved_host_ports=reserved_host_ports
         )
+        _ensure_server_token(final_env, spec)
 
     container_name = _extract_container_name(compose_path)
 
@@ -758,7 +839,7 @@ def launch(
                     err=True,
                 )
 
-    typer.echo("Launching OpenCode...")
+    typer.echo(f"Launching {spec.name}...")
 
     args = ctx.args
 
@@ -777,7 +858,7 @@ def launch(
         # republish every wizard-declared port instead.
         for mapping in detected_ports:
             run_cmd.extend(["--publish", mapping])
-        run_cmd.extend(["--publish", f"{server_host_port}:{SERVER_CONTAINER_PORT}"])
+        run_cmd.extend(["--publish", f"{server_host_port}:{spec.serve.port}"])
     elif detected_ports:
         run_cmd.append("--service-ports")
 
@@ -787,19 +868,9 @@ def launch(
     for key, value in final_env.items():
         run_cmd.extend(["--env", f"{key}={value}"])
 
+    run_cmd.append(spec.binary)
     if server_host_port is not None:
-        run_cmd.extend(
-            [
-                "opencode",
-                "serve",
-                "--hostname",
-                "0.0.0.0",
-                "--port",
-                str(SERVER_CONTAINER_PORT),
-            ]
-        )
-    else:
-        run_cmd.append("opencode")
+        run_cmd.extend(spec.serve.serve_args)
     run_cmd.extend(args)
 
     result = None

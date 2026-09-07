@@ -194,7 +194,7 @@ class TestOpenCodeFeature:
 
         feature = dc_content["features"]["ghcr.io/jsburckhardt/devcontainer-features/opencode:1.1.1"]
         assert "version" in feature
-        assert "OPENCODE_VERSION" in feature["version"]
+        assert "OCF_AGENT_VERSION" in feature["version"]
 
 
 class TestEnvFileGeneration:

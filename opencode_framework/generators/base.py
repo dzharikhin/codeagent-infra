@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
 
+from opencode_framework.agent.registry import DEFAULT_TOOL
 from opencode_framework.config import GlobalSettings
 
 
@@ -20,6 +21,7 @@ class GenerationContext:
     global_settings: GlobalSettings
     port_mappings: List[str] = field(default_factory=list)
     java_build_tools: List[str] = field(default_factory=list)
+    agent_tool: str = DEFAULT_TOOL
 
 
 class FileGenerator(ABC):

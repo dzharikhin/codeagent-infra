@@ -740,8 +740,8 @@ class TestUpdateFeatures:
         dc_before = (opencode_dir / "devcontainer.json").read_text()
 
         result = features.update_features(opencode_dir, tmp_path.name)
-        # Compose is reconciled even on no-op, so it's written back
-        assert result is True
+        # Freshly rendered compose is reconcile-clean, so nothing is written
+        assert result is False
         # Devcontainer.json is only updated when features change, so it stays unchanged
         assert (opencode_dir / "devcontainer.json").read_text() == dc_before
 

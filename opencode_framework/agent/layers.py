@@ -86,6 +86,23 @@ def migrate_env_file(path: Path) -> List[str]:
     return migrated
 
 
+def expected_global_path(
+    spec: ToolSpec,
+    config_root: Optional[Path] = None,
+    home: Optional[Path] = None,
+) -> Path:
+    """Expected host path of a tool's global config (dir or file).
+
+    Follows the spec's base/relpath fields; injectable roots override
+    the host defaults (XDG-aware) for testing.
+    """
+    if spec.global_config_base == "config_root":
+        base = config_root if config_root is not None else get_local_config_root()
+    else:
+        base = home if home is not None else get_local_home()
+    return base.joinpath(*spec.global_config_relpath)
+
+
 def discover_global_layer(
     spec: ToolSpec,
     config_root: Optional[Path] = None,
@@ -114,11 +131,7 @@ def discover_global_layer(
     Returns:
         Resolved GlobalLayer with found flags and paths.
     """
-    if spec.global_config_base == "config_root":
-        base = config_root if config_root is not None else get_local_config_root()
-    else:
-        base = home if home is not None else get_local_home()
-    global_path = base.joinpath(*spec.global_config_relpath)
+    global_path = expected_global_path(spec, config_root=config_root, home=home)
     if spec.global_config_is_dir:
         global_found = global_path.is_dir()
     else:
@@ -146,6 +159,26 @@ def discover_global_layer(
         auth_path=str(auth_path) if auth_path else None,
         stub_path=stub_path,
     )
+
+
+def ensure_project_layer(spec: ToolSpec, repo_root: Path) -> Optional[Path]:
+    """Create the tool's project layer at the repo root, if it has one.
+
+    Only-if-missing by design: existing files are never overwritten, so
+    ``init --force`` preserves user edits. Tools without a generated
+    project layer (opencode uses the .opencode/ worktree) are no-ops.
+
+    Args:
+        spec: tool spec identifying the tool.
+        repo_root: project repository root.
+
+    Returns:
+        Path to the created settings file, or None when it already
+        existed or the tool has no project layer.
+    """
+    if spec.name == "qwen":
+        return ensure_qwen_project_layer(repo_root)
+    return None
 
 
 def ensure_qwen_project_layer(repo_root: Path) -> Optional[Path]:

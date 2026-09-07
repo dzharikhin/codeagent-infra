@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from opencode_framework.agent.registry import DEFAULT_TOOL, ToolSpec, get_tool_spec
 from opencode_framework.generators.base import FileGenerator, GenerationContext
 from opencode_framework.generators.templates import TemplateHandler
 
@@ -146,16 +147,47 @@ class DevcontainerGenerator(FileGenerator):
         return result
 
     @staticmethod
-    def _build_dockerfile_initializer() -> str:
+    def _build_install_block(spec: ToolSpec) -> str:
+        """Build the Dockerfile install block for a tool spec.
+
+        ARG declarations for the spec's build args followed by the
+        install snippet; empty when the tool installs via a
+        devcontainer feature instead.
+
+        Args:
+            spec: Tool spec providing build args and install snippet
+
+        Returns:
+            Install block lines, or "" for feature-installed tools
+        """
+        lines: List[str] = [f"ARG {arg}=latest" for arg in spec.install.build_args]
+        if spec.install.dockerfile_snippet:
+            lines.append(spec.install.dockerfile_snippet)
+        return "\n".join(lines)
+
+    @staticmethod
+    def _build_dockerfile_initializer(agent_tool: str = DEFAULT_TOOL) -> str:
         """Build the initializeCommand for Dockerfile generation.
 
-        Loads the dockerfile template and formats it as an echo -e command
-        that writes the Dockerfile to .opencode/runtime_data/Dockerfile.
+        Loads the dockerfile template, injects the tool's install block
+        into the {{AGENT_INSTALL}} slot, and formats it as an echo -e
+        command that writes the Dockerfile to .opencode/runtime_data/Dockerfile.
+
+        Args:
+            agent_tool: Agent tool name ("opencode" | "qwen")
 
         Returns:
             Shell command string for initializeCommand
         """
+        spec = get_tool_spec(agent_tool)
         dockerfile_content = TemplateHandler.load_dockerfile_template()
+        install_block = DevcontainerGenerator._build_install_block(spec)
+        if install_block:
+            dockerfile_content = dockerfile_content.replace(
+                "{{AGENT_INSTALL}}", install_block
+            )
+        else:
+            dockerfile_content = dockerfile_content.replace("\n{{AGENT_INSTALL}}", "")
         escaped_content = DevcontainerGenerator._escape_for_echo_e(dockerfile_content)
         return f'echo -e "{escaped_content}" > .opencode/runtime_data/Dockerfile'
 
@@ -186,8 +218,11 @@ class DevcontainerGenerator(FileGenerator):
     def _generate_scratch(self, ctx: GenerationContext) -> dict:
         """Generate devcontainer config from template (build-only)."""
         template = DevcontainerGenerator._load_template()
+        spec = get_tool_spec(ctx.agent_tool)
 
         features = dict(template.get("features", {}))
+        devcontainer = dict(template)
+        self._add_agent_install(devcontainer, features, spec)
         self._add_optional_features(
             features,
             ctx.optional_features,
@@ -195,15 +230,41 @@ class DevcontainerGenerator(FileGenerator):
             java_build_tools=ctx.java_build_tools,
         )
 
-        devcontainer = dict(template)
         devcontainer["features"] = features
 
         if self.PLACEHOLDER_DOCKERFILE_INITIALIZER in devcontainer.get(
             "initializeCommand", ""
         ):
-            devcontainer["initializeCommand"] = self._build_dockerfile_initializer()
+            devcontainer["initializeCommand"] = self._build_dockerfile_initializer(
+                ctx.agent_tool
+            )
 
         return devcontainer
+
+    @staticmethod
+    def _add_agent_install(devcontainer: dict, features: dict, spec: ToolSpec) -> None:
+        """Fill the agent install slots in the devcontainer config.
+
+        Feature-installed tools get their devcontainer feature entry with
+        a localEnv version pin; Dockerfile-installed tools get their
+        build args on the build section instead.
+
+        Args:
+            devcontainer: Devcontainer config dict (mutated for build args)
+            features: Features dict (mutated for feature-installed tools)
+            spec: Tool spec providing the install mechanism
+        """
+        install = spec.install
+        if install.devcontainer_feature:
+            version_env = install.feature_version_env or "OCF_AGENT_VERSION"
+            features[install.devcontainer_feature] = {
+                "version": f"${{localEnv:{version_env}:latest}}"
+            }
+        if install.build_args:
+            build = devcontainer.setdefault("build", {})
+            build["args"] = {
+                arg: f"${{localEnv:{arg}:latest}}" for arg in install.build_args
+            }
 
     @staticmethod
     def _add_one_feature(features: dict, key: str) -> None:

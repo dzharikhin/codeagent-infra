@@ -12,10 +12,7 @@
       "configureZshAsDefaultShell": false,
       "installPackages": "ripgrep"
     },
-    "ghcr.io/devcontainers/features/git:1": {},
-    "ghcr.io/jsburckhardt/devcontainer-features/opencode:1.1.1": {
-      "version": "${localEnv:OPENCODE_VERSION:latest}"
-    }
+    "ghcr.io/devcontainers/features/git:1": {}
   },
   "workspaceFolder": "/${localWorkspaceFolderBasename}",
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",

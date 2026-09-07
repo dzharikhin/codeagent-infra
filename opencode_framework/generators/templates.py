@@ -4,6 +4,8 @@ import json
 from importlib.resources import files
 from typing import Dict, List, Optional
 
+from opencode_framework.agent.registry import DEFAULT_TOOL, get_tool_spec
+
 
 class TemplateHandler:
     """Handles loading and rendering of template files."""
@@ -116,22 +118,26 @@ class TemplateHandler:
         global_config_path: Optional[str] = None,
         global_auth_path: Optional[str] = None,
         framework_repo_path: Optional[str] = None,
+        agent_tool: str = DEFAULT_TOOL,
     ) -> str:
-        """Render environment template with paths.
+        """Render environment template with paths and the tool fragment.
 
         Args:
-            global_config_path: Path to global config directory
-            global_auth_path: Path to global auth.json file
+            global_config_path: Path to the global config layer (dir or file)
+            global_auth_path: Path to the global auth file (opencode only)
             framework_repo_path: Path to framework repository
+            agent_tool: Agent tool name ("opencode" | "qwen")
 
         Returns:
             Rendered environment template
         """
         template = cls.load_env_template()
+        spec = get_tool_spec(agent_tool)
 
         replacements = {
-            "{{OCF_LOCAL_GLOBAL_CONFIG_PATH}}": global_config_path or "",
-            "{{OCF_LOCAL_GLOBAL_AUTH_PATH}}": global_auth_path or "",
+            "{{AGENT_ENV_TEMPLATE}}": spec.env_template_fragment,
+            "{{OCF_GLOBAL_CONFIG_PATH}}": global_config_path or "",
+            "{{OCF_GLOBAL_AUTH_PATH}}": global_auth_path or "",
             "{{OCF_LOCAL_FRAMEWORK_PATH}}": framework_repo_path or "",
         }
 
@@ -144,23 +150,29 @@ class TemplateHandler:
         optional_features: Optional[List[str]] = None,
         port_mappings: Optional[List[str]] = None,
         java_build_tools: Optional[List[str]] = None,
+        agent_tool: str = DEFAULT_TOOL,
     ) -> str:
-        """Render docker-compose template with container name.
+        """Render docker-compose template for the configured agent tool.
+
+        Service name, entrypoint binary and the agent env/mount blocks
+        come from the tool spec; everything else is tool-agnostic sandbox.
 
         Args:
             repo_root_name: Name of the repo
             optional_features: List of enabled optional features (e.g., ["python"])
             port_mappings: List of Docker-style port mappings (e.g. ["8080:8080"])
             java_build_tools: List of enabled Java build tools (e.g., ["maven"], ["gradle"])
+            agent_tool: Agent tool name ("opencode" | "qwen")
 
         Returns:
             Rendered docker-compose content
         """
         template = cls.load_compose_template()
+        spec = get_tool_spec(agent_tool)
 
         additional_volume_mounts = ""
         docker_privileged = ""
-        entrypoint = '["opencode"]'
+        entrypoint = f'["{spec.binary}"]'
 
         if optional_features and "python" in optional_features:
             additional_volume_mounts += (
@@ -181,7 +193,7 @@ class TemplateHandler:
 
         if optional_features and "docker" in optional_features:
             docker_privileged = "    privileged: true\n"
-            entrypoint = '["/usr/local/share/docker-init.sh", "opencode"]'
+            entrypoint = f'["/usr/local/share/docker-init.sh", "{spec.binary}"]'
             additional_volume_mounts += f"\n      - docker-{repo_root_name}:/var/lib/docker"
 
         volume_keys = []
@@ -206,6 +218,11 @@ class TemplateHandler:
             ports_section = f"    ports:\n{port_lines}"
 
         replacements = {
+            # Agent fragments first: they contain {{OCF_REPO_ROOT_NAME}}
+            # which the later pass must still resolve.
+            "{{SERVICE_NAME}}": spec.name,
+            "{{AGENT_ENV}}": spec.compose_env_fragment,
+            "{{AGENT_MOUNTS}}": spec.compose_mount_fragment,
             "{{OCF_REPO_ROOT_NAME}}": repo_root_name,
             "{{ADDITIONAL_VOLUME_MOUNTS}}": additional_volume_mounts,
             "{{TOP_LEVEL_VOLUMES_SECTION}}": top_level_volumes_section,
