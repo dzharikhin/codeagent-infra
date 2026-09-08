@@ -199,8 +199,10 @@ class TestComposeMountFragment:
             (QWEN_TOOL_SPEC, "qwen"),
         ):
             fragment = spec.compose_mount_fragment
-            assert "framework-nuts-and-bolts/common" in fragment
-            assert f"framework-nuts-and-bolts/{tool_dir}" in fragment
+            source = "${OCF_LOCAL_FRAMEWORK_PATH}/framework-nuts-and-bolts"
+            target = "/{{OCF_REPO_ROOT_NAME}}/.opencode/framework-nuts-and-bolts"
+            assert f"{source}/common:{target}/common:ro" in fragment
+            assert f"{source}/{tool_dir}:{target}/{tool_dir}:ro" in fragment
 
 
 class TestEnvTemplateFragment:
