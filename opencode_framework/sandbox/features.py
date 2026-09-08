@@ -103,7 +103,10 @@ def _prompt_editor_choice(default: str) -> str:
         choice_lower = choice.lower()
         if choice_lower in EDITOR_CHOICES:
             return choice_lower
-        typer.secho("Invalid choice. Please select one of: none, vi, or nano.", fg=typer.colors.RED)
+        typer.secho(
+            "Invalid choice. Please select one of: none, vi, or nano.",
+            fg=typer.colors.RED,
+        )
 
 
 def prompt_feature_changes(
@@ -227,7 +230,8 @@ def update_features(opencode_dir: Path, repo_name: str) -> bool:
         new_ports = []
 
     features_changed = (
-        set(new_features) != set(current_features) or new_editor != current_editor
+        set(new_features) != set(current_features)
+        or new_editor != current_editor
         or set(new_java_build_tools) != set(current_java_build_tools)
     )
     ports_changed = new_ports != current_ports

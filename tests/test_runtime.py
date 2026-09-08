@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from typing import List
 
 import pytest
 
@@ -217,8 +218,8 @@ class TestValidateRuntimeContext:
         assert valid is False
         assert "Framework repository no longer exists" in error
 
-    def test_fails_framework_path_invalid(self, tmp_path: Path):
-        """Should fail when framework path exists but is not a valid framework repo."""
+    def test_succeeds_when_framework_path_exists_without_content(self, tmp_path: Path):
+        """Should succeed when the framework path exists but is empty."""
         import subprocess
 
         subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
@@ -241,24 +242,22 @@ class TestValidateRuntimeContext:
             capture_output=True,
         )
 
-        invalid_framework = tmp_path / "invalid-framework"
-        invalid_framework.mkdir()
-        (invalid_framework / ".git").mkdir()
+        framework_repo = tmp_path / "plain-dir"
+        framework_repo.mkdir()
 
         opencode_dir = tmp_path / ".opencode"
         opencode_dir.mkdir()
         (opencode_dir / "devcontainer.json").write_text("{}")
         (opencode_dir / ".env").write_text(
-            f"REMOTE_USER=root\n"
-            f"OCF_LOCAL_FRAMEWORK_PATH={invalid_framework}\n"
+            f"REMOTE_USER=root\nOCF_LOCAL_FRAMEWORK_PATH={framework_repo}\n"
         )
 
         valid, error = validate_runtime_context(tmp_path)
-        assert valid is False
-        assert "Framework repository is invalid" in error
+        assert valid is True
+        assert error == ""
 
     def test_succeeds_with_valid_framework_repo(self, tmp_path: Path):
-        """Should succeed when all requirements are met including valid framework repo."""
+        """Should succeed when all requirements are met."""
         import subprocess
 
         subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
@@ -284,16 +283,12 @@ class TestValidateRuntimeContext:
         framework_repo = tmp_path / "framework"
         framework_repo.mkdir()
         (framework_repo / ".git").mkdir()
-        (framework_repo / "framework-nuts-and-bolts").mkdir()
-        (framework_repo / "framework-nuts-and-bolts" / "stub-auth.json").write_text("{}")
-        (framework_repo / "framework-config").mkdir()
 
         opencode_dir = tmp_path / ".opencode"
         opencode_dir.mkdir()
         (opencode_dir / "devcontainer.json").write_text("{}")
         (opencode_dir / ".env").write_text(
-            f"REMOTE_USER=root\n"
-            f"OCF_LOCAL_FRAMEWORK_PATH={framework_repo}\n"
+            f"REMOTE_USER=root\nOCF_LOCAL_FRAMEWORK_PATH={framework_repo}\n"
         )
 
         valid, error = validate_runtime_context(tmp_path)
@@ -388,7 +383,7 @@ class TestLoadEnvWithOverrides:
     def test_quoted_values_supported(self, tmp_path: Path):
         """Should handle quoted values."""
         env_path = tmp_path / ".env"
-        env_path.write_text('KEY1="value with spaces"\nKEY2=\'single quoted\'')
+        env_path.write_text("KEY1=\"value with spaces\"\nKEY2='single quoted'")
 
         result = load_env_with_overrides(env_path)
 
@@ -478,6 +473,7 @@ class TestApplyCustomInterpolation:
     def test_resolves_within_depth_limit(self):
         """Should resolve deep chains within max depth."""
         from opencode_framework.sandbox.runtime import apply_combined_interpolation
+
         env = {
             "A": "hello",
             "B": "$A",
@@ -497,6 +493,7 @@ class TestApplyCustomInterpolation:
     def test_undefined_vars_resolve_to_empty(self):
         """Undefined variables should resolve to empty string."""
         from opencode_framework.sandbox.runtime import apply_combined_interpolation
+
         env = {
             "A": "$UNDEFINED",
             "B": "$C",
@@ -507,6 +504,7 @@ class TestApplyCustomInterpolation:
     def test_partial_resolution_leaves_pattern(self):
         """Unresolvable patterns should stay in result (not raise error)."""
         from opencode_framework.sandbox.runtime import apply_combined_interpolation
+
         env = {
             "A": "$B",
             "B": "$C",
@@ -608,16 +606,11 @@ class TestIntegrationScenarios:
         """Test complex interpolation across multiple sources."""
         base_env = tmp_path / ".env"
         base_env.write_text(
-            "APP_NAME=myapp\n"
-            "BASE_DIR=/opt/${APP_NAME}\n"
-            "CONFIG_DIR=${BASE_DIR}/config\n"
+            "APP_NAME=myapp\nBASE_DIR=/opt/${APP_NAME}\nCONFIG_DIR=${BASE_DIR}/config\n"
         )
 
         override_env = tmp_path / "custom.env"
-        override_env.write_text(
-            "LOG_DIR=${BASE_DIR}/logs\n"
-            "TEMP_DIR=${BASE_DIR}/tmp\n"
-        )
+        override_env.write_text("LOG_DIR=${BASE_DIR}/logs\nTEMP_DIR=${BASE_DIR}/tmp\n")
 
         cli_vars = [
             "FULL_CONFIG_PATH=${CONFIG_DIR}/app.conf",
@@ -768,7 +761,9 @@ class TestImageIdHelpers:
     def test_get_image_id_path(self):
         """Should return correct path to image ID file."""
         opencode_dir = Path("/tmp/test/.opencode")
-        assert get_image_id_path(opencode_dir) == Path("/tmp/test/.opencode/runtime_data/.image_id")
+        assert get_image_id_path(opencode_dir) == Path(
+            "/tmp/test/.opencode/runtime_data/.image_id"
+        )
 
     def test_load_image_id_missing(self, tmp_path: Path):
         """Should return None if image ID file does not exist."""
@@ -784,7 +779,9 @@ class TestImageIdHelpers:
         opencode_dir = tmp_path / ".opencode"
         save_image_id(opencode_dir, "sha256:def456")
         assert (opencode_dir / "runtime_data" / ".image_id").exists()
-        assert (opencode_dir / "runtime_data" / ".image_id").read_text() == "sha256:def456"
+        assert (
+            opencode_dir / "runtime_data" / ".image_id"
+        ).read_text() == "sha256:def456"
 
     def test_save_image_id_overwrites(self, tmp_path: Path):
         """Should overwrite existing image ID."""

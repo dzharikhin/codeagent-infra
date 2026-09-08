@@ -12,7 +12,11 @@ from typing import Dict, List, Optional, Tuple
 import typer
 
 from opencode_framework import __version__
-from opencode_framework.agent.layers import discover_global_layer, expected_global_path
+from opencode_framework.agent.layers import (
+    discover_global_layer,
+    expected_global_path,
+    migrate_env_file,
+)
 from opencode_framework.agent.registry import (
     DEFAULT_TOOL,
     QWEN_TOOL_SPEC,
@@ -22,9 +26,7 @@ from opencode_framework.agent.registry import (
 from opencode_framework.config import (
     discover_global_settings,
     get_config_root,
-    get_framework_validation_error,
     get_local_data_home,
-    validate_framework_repo,
 )
 from opencode_framework.exceptions import PortAllocationError, ValidationError
 from opencode_framework.generators import GenerationOrchestrator
@@ -72,14 +74,7 @@ def _print_version_info() -> None:
 
     framework_path = settings.framework_repo_path
     if framework_path:
-        valid, missing = validate_framework_repo(Path(framework_path))
-        if valid:
-            typer.echo(f"framework repo path: {framework_path}")
-        else:
-            typer.secho(
-                f"framework repo path: {framework_path} (INVALID)", fg=typer.colors.RED
-            )
-            typer.secho(f"  Missing: {', '.join(missing)}", fg=typer.colors.RED)
+        typer.echo(f"framework repo path: {framework_path}")
     else:
         typer.secho("framework repo path: not found", fg=typer.colors.RED)
 
@@ -137,9 +132,9 @@ def _resolve_agent_tool(final_env: Dict[str, str]) -> ToolSpec:
 
 
 def _check_framework_repo() -> Optional[str]:
-    """Check if framework repo is valid.
+    """Check if the framework repo is installed.
 
-    Returns None if valid, error message if invalid.
+    Returns None when installed from a git clone, error message otherwise.
     """
     settings = discover_global_settings()
 
@@ -149,10 +144,6 @@ def _check_framework_repo() -> Optional[str]:
             "The framework must be installed as an editable package from a git clone:\n"
             "  pipx install -e <path-to-framework-git-clone>"
         )
-
-    valid, missing = validate_framework_repo(Path(settings.framework_repo_path))
-    if not valid:
-        return get_framework_validation_error(missing, settings.framework_repo_path)
 
     return None
 
@@ -710,6 +701,13 @@ def launch(
         raise typer.Exit(1)
 
     env_path = repo_root / ".opencode" / ".env"
+    migrated_keys = migrate_env_file(env_path)
+    if migrated_keys:
+        typer.secho(
+            f"Migrated renamed keys in .opencode/.env: {', '.join(migrated_keys)}",
+            fg=typer.colors.YELLOW,
+        )
+
     global_env_path = get_config_root() / "opencode" / ".env"
     warnings: List[str] = []
 

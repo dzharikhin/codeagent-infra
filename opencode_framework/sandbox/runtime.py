@@ -7,10 +7,6 @@ from typing import Dict, List, Optional, Tuple
 
 from dotenv import dotenv_values
 
-from opencode_framework.config import (
-    get_framework_validation_error,
-    validate_framework_repo,
-)
 from opencode_framework.preflight import get_repo_root, is_inside_git_tree
 
 
@@ -53,7 +49,7 @@ def validate_runtime_context(cwd: Path) -> Tuple[bool, str]:
     - .opencode/ directory exists
     - .opencode/devcontainer.json exists
     - .opencode/.env exists
-    - Framework repo from .env still exists and is valid
+    - Framework repo path from .env still exists
 
     Returns:
         (True, "") on success
@@ -110,11 +106,6 @@ def validate_runtime_context(cwd: Path) -> Tuple[bool, str]:
             "The framework must be reinstalled from a valid git clone:\n"
             "  pipx install -e <path-to-framework-git-clone>"
         )
-
-    valid, missing = validate_framework_repo(framework_path)
-    if not valid:
-        error_msg = get_framework_validation_error(missing, framework_path_str)
-        return False, f"Framework repository is invalid:\n{error_msg}"
 
     return True, ""
 

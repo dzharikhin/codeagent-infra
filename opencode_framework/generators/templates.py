@@ -6,6 +6,112 @@ from typing import Dict, List, Optional
 
 from opencode_framework.agent.registry import DEFAULT_TOOL, get_tool_spec
 
+# Per-tool README sections. Each *_SECTION value is a self-contained
+# Markdown block ending in a newline; it may embed {{LAUNCH_COMMAND}},
+# which resolves on the shared replacement pass afterwards.
+_README_SECTIONS: Dict[str, Dict[str, str]] = {
+    "opencode": {
+        "models": (
+            "### Available Models\n"
+            "\n"
+            "To see available models (including any autodiscovered by the\n"
+            "`opencode-models-discovery` plugin), run inside the container:\n"
+            "\n"
+            "```sh\n"
+            "opencode models\n"
+            "```\n"
+        ),
+        "install": (
+            "the `opencode` devcontainer feature "
+            "(ghcr.io/jsburckhardt/devcontainer-features/opencode), "
+            "version-pinned via `OCF_AGENT_VERSION`."
+        ),
+        "config_layers": (
+            "## Configuration Layers\n"
+            "\n"
+            "Config and env layers, lowest to highest precedence:\n"
+            "\n"
+            "| Layer | Location |\n"
+            "|---|---|\n"
+            "| Global | host `~/.config/opencode/` (config dir) and "
+            "`~/.local/share/opencode/auth.json` (auth), mounted read-only |\n"
+            "| Framework | framework-config mounted at `/opt/ocframework/config` "
+            "(`OPENCODE_CONFIG`, `OPENCODE_TUI_CONFIG`) |\n"
+            "| Project | this `.opencode/` worktree (`.env`, compose, "
+            "nuts-and-bolts) |\n"
+        ),
+        "serve": (
+            "## Run a Headless Server\n"
+            "\n"
+            "Run the OpenCode server inside the container so external clients "
+            "(TUI attach, SDK, IDE, web UI) can connect:\n"
+            "\n"
+            "```sh\n"
+            "{{LAUNCH_COMMAND}} --server\n"
+            "```\n"
+            "\n"
+            "`--server` publishes the server port (container port 4096) and "
+            "appends `serve --hostname 0.0.0.0 --port 4096` to the container "
+            "command. Pass an explicit host port with `--server=5000`; without "
+            "a value a free port is auto-assigned. Compose-configured ports "
+            "are republished individually in this mode (`--service-ports` and "
+            "`--publish` are mutually exclusive in `docker compose run`). Set "
+            "`OPENCODE_SERVER_PASSWORD` in `.env` to enable basic auth.\n"
+        ),
+        "docs": "- OpenCode docs: https://opencode.ai",
+    },
+    "qwen": {
+        "models": (
+            "### Available Models\n"
+            "\n"
+            "Models are selected via the model stack in `.env` "
+            "(`OCF_MAIN_MODEL`, `OCF_BUILD_MODEL`, `OCF_SMALL_MODEL`) or in "
+            "the qwen settings layers.\n"
+        ),
+        "install": (
+            "Node.js 22 + `npm install -g @qwen-code/qwen-code` in the "
+            "Dockerfile, version-pinned via the `OCF_AGENT_VERSION` build arg."
+        ),
+        "config_layers": (
+            "## Configuration Layers\n"
+            "\n"
+            "Settings layers, lowest to highest precedence (qwen native "
+            "scopes):\n"
+            "\n"
+            "| Layer | Location |\n"
+            "|---|---|\n"
+            "| Global | host `~/.qwen/settings.json`, injected as "
+            "`QWEN_CODE_SYSTEM_DEFAULTS_PATH` |\n"
+            "| Framework | framework `qwen-settings.json` mounted at "
+            "`~/.qwen/settings.json` in the container |\n"
+            "| Project | `.qwen/settings.json` at the repo root |\n"
+            "\n"
+            "qwen has no auth file: API keys (`DASHSCOPE_API_KEY`, or "
+            "`OPENAI_API_KEY` + `OPENAI_BASE_URL`) are provided via the env "
+            "layer (`.env` or `launch -e`).\n"
+        ),
+        "serve": (
+            "## Run a Headless Server\n"
+            "\n"
+            "Run the Qwen Code Web Shell inside the container:\n"
+            "\n"
+            "```sh\n"
+            "{{LAUNCH_COMMAND}} --server\n"
+            "```\n"
+            "\n"
+            "`--server` publishes the Web Shell port (container port 4170), "
+            "appends `serve --hostname 0.0.0.0 --port 4170` to the container "
+            "command and auto-generates a `QWEN_SERVER_TOKEN`, printed once "
+            "at launch (a value set in `.env` or passed via `-e` wins). Pass "
+            "an explicit host port with `--server=5000`; without a value a "
+            "free port is auto-assigned. Compose-configured ports are "
+            "republished individually in this mode. `qwen serve` is "
+            "experimental - the TUI remains the stable path.\n"
+        ),
+        "docs": "- Qwen Code docs: https://github.com/QwenLM/qwen-code",
+    },
+}
+
 
 class TemplateHandler:
     """Handles loading and rendering of template files."""
@@ -194,7 +300,9 @@ class TemplateHandler:
         if optional_features and "docker" in optional_features:
             docker_privileged = "    privileged: true\n"
             entrypoint = f'["/usr/local/share/docker-init.sh", "{spec.binary}"]'
-            additional_volume_mounts += f"\n      - docker-{repo_root_name}:/var/lib/docker"
+            additional_volume_mounts += (
+                f"\n      - docker-{repo_root_name}:/var/lib/docker"
+            )
 
         volume_keys = []
         if optional_features and "python" in optional_features:
@@ -240,21 +348,35 @@ class TemplateHandler:
         debug_command: str,
         shell_command: str,
         branch_name: str,
+        agent_tool: str = DEFAULT_TOOL,
     ) -> str:
-        """Render README template with commands and branch name.
+        """Render README template for the configured agent tool.
+
+        Tool-specific sections (models, install, config layers, serve,
+        docs link) come from the per-tool section map; everything else
+        is shared.
 
         Args:
             launch_command: CLI launch command
             debug_command: CLI debug command
             shell_command: CLI shell command
             branch_name: Git branch name for config worktree
+            agent_tool: Agent tool name ("opencode" | "qwen")
 
         Returns:
             Rendered README content
         """
         template = cls.load_readme_template()
+        sections = _README_SECTIONS[get_tool_spec(agent_tool).name]
 
         replacements = {
+            # Tool sections first: their text embeds {{LAUNCH_COMMAND}},
+            # which the later pass must still resolve.
+            "{{AGENT_MODELS_SECTION}}": sections["models"],
+            "{{AGENT_INSTALL_LINE}}": sections["install"],
+            "{{AGENT_CONFIG_LAYERS_SECTION}}": sections["config_layers"],
+            "{{AGENT_SERVE_SECTION}}": sections["serve"],
+            "{{AGENT_DOCS_LINE}}": sections["docs"],
             "{{LAUNCH_COMMAND}}": launch_command,
             "{{DEBUG_COMMAND}}": debug_command,
             "{{SHELL_COMMAND}}": shell_command,

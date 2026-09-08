@@ -33,6 +33,7 @@ class DocumentationGenerator(FileGenerator):
             debug_command=commands["debug"],
             shell_command=commands["shell"],
             branch_name=ctx.branch_name,
+            agent_tool=ctx.agent_tool,
         )
 
         readme_path = ctx.opencode_dir / "README.md"

@@ -298,9 +298,7 @@ class TestRebuildFeatures:
         assert ("    init: true" in text.split("\n")) is True
         assert ("docker-init.sh" in text) is has_docker
         # Python venv volume is mounted at /myrepo/.venv, not /home
-        assert (f"venv-{self.REPO}:/myrepo/.venv" in text) is (
-            "python" in features
-        )
+        assert (f"venv-{self.REPO}:/myrepo/.venv" in text) is ("python" in features)
         # Maven m2 volume is mounted at /home/${REMOTE_USER}/.m2
         assert (f"m2-{self.REPO}:/home/${{REMOTE_USER}}/.m2" in text) is (
             "java" in features and ("maven" in (java_build_tools or ["maven"]))
@@ -310,13 +308,17 @@ class TestRebuildFeatures:
             "java" in features and ("gradle" in (java_build_tools or ["maven"]))
         )
         assert (f"docker-{self.REPO}:/var/lib/docker" in text) is has_docker
-        if "python" in features or (
-            "java" in features
-            and (
-                "maven" in (java_build_tools or ["maven"])
-                or "gradle" in (java_build_tools or ["maven"])
+        if (
+            "python" in features
+            or (
+                "java" in features
+                and (
+                    "maven" in (java_build_tools or ["maven"])
+                    or "gradle" in (java_build_tools or ["maven"])
+                )
             )
-        ) or has_docker:
+            or has_docker
+        ):
             assert "\nvolumes:" in text
         else:
             assert "\nvolumes:" not in text
@@ -367,7 +369,7 @@ class TestRebuildFeatures:
         rebuilt = self._rebuild(text, ["docker"])
         assert '["/usr/local/share/docker-init.sh", "opencode"]' in rebuilt
         assert "    privileged: true" in rebuilt.split("\n")
-        assert f"docker-{self.REPO}:/var/lib/docker" in rebuilt.split("\n")
+        assert f"docker-{self.REPO}:/var/lib/docker" in rebuilt
 
     def test_toggle_docker_off(self):
         text = _render_compose(self.REPO, ["docker"])
@@ -395,8 +397,9 @@ class TestRebuildFeatures:
         """User-added environment lines must survive rebuild."""
         text = _render_compose(self.REPO, [])
         text = text.replace(
-            "      - OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT=true",
-            "      - OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT=true\n      - MY_CUSTOM=keepme",
+            "      - XDG_CACHE_HOME=${XDG_CACHE_HOME:-/${REMOTE_USER}/.cache}",
+            "      - XDG_CACHE_HOME=${XDG_CACHE_HOME:-/${REMOTE_USER}/.cache}"
+            "\n      - MY_CUSTOM=keepme",
             1,
         )
         rebuilt = self._rebuild(text, ["python", "docker"])
@@ -578,8 +581,9 @@ class TestRebuildPorts:
         """User-added environment lines survive a port rebuild."""
         text = _render_compose(self.REPO, [])
         text = text.replace(
-            "      - OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT=true",
-            "      - OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT=true\n      - MY_CUSTOM=keepme",
+            "      - XDG_CACHE_HOME=${XDG_CACHE_HOME:-/${REMOTE_USER}/.cache}",
+            "      - XDG_CACHE_HOME=${XDG_CACHE_HOME:-/${REMOTE_USER}/.cache}"
+            "\n      - MY_CUSTOM=keepme",
             1,
         )
         rebuilt = ComposeGenerator.rebuild_features(
@@ -633,7 +637,7 @@ class TestRenderComposeTemplateVolumeFix:
     def test_docker_volume_mounts_var_lib_docker(self):
         """Docker mount targets /var/lib/docker."""
         text = _render_compose("repo", ["docker"])
-        assert "docker-repo:/var/lib/docker" in text.split("\n")
+        assert "docker-repo:/var/lib/docker" in text
 
     def test_python_and_docker_both_volumes(self):
         """Python and Docker both add top-level volume keys."""
@@ -649,7 +653,7 @@ class TestRenderComposeTemplateVolumeFix:
         assert "  venv-repo:" in text.split("\n")
         assert "  m2-repo:" in text.split("\n")
         assert "  docker-repo:" in text.split("\n")
-        assert "      - gradle-repo:/home/${REMOTE_USER}/.gradle" in text
+        assert "      - m2-repo:/home/${REMOTE_USER}/.m2" in text
 
     def test_java_both_has_both_volumes(self):
         """Both Maven and Gradle add both volumes."""
@@ -864,21 +868,27 @@ class TestUpdateFeatures:
         compose_before = (opencode_dir / "docker-compose.yaml").read_text()
 
         # Manually create a drifted compose without the docker volume
-        drifted = compose_before.replace(
-            "      - docker-repo:/var/lib/docker",
-            "",
-        ).replace(
-            "  docker-repo:",
-            "",
-        ).replace(
-            "    privileged: true",
-            "",
-        ).replace(
-            '["/usr/local/share/docker-init.sh", "opencode"]',
-            '["opencode"]',
-        ).replace(
-            "\n  volumes:",
-            "\nvolumes:",
+        drifted = (
+            compose_before.replace(
+                "      - docker-repo:/var/lib/docker",
+                "",
+            )
+            .replace(
+                "  docker-repo:",
+                "",
+            )
+            .replace(
+                "    privileged: true",
+                "",
+            )
+            .replace(
+                '["/usr/local/share/docker-init.sh", "opencode"]',
+                '["opencode"]',
+            )
+            .replace(
+                "\n  volumes:",
+                "\nvolumes:",
+            )
         )
         (opencode_dir / "docker-compose.yaml").write_text(drifted)
 
@@ -898,7 +908,9 @@ class TestUpdateFeatures:
         compose_after = (opencode_dir / "docker-compose.yaml").read_text()
         # The mount name will use tmp_path.name, which is the actual repo path
         assert any("/var/lib/docker" in line for line in compose_after.split("\n"))
-        assert any(f"docker-{tmp_path.name}" in line for line in compose_after.split("\n"))
+        assert any(
+            f"docker-{tmp_path.name}" in line for line in compose_after.split("\n")
+        )
         assert "    privileged: true" in compose_after
         assert '["/usr/local/share/docker-init.sh", "opencode"]' in compose_after
 
@@ -918,7 +930,9 @@ class TestUpdateFeatures:
         # With the fix, compose is always reconciled. If it's in sync, no bytes change.
         # The function returns True when anything was written (even if bytes unchanged).
         result = features.update_features(opencode_dir, tmp_path.name)
-        assert result is True  # Compose was reconciled (bytes unchanged is still a write)
+        assert (
+            result is True
+        )  # Compose was reconciled (bytes unchanged is still a write)
 
         # Verify compose bytes are unchanged (idempotent - only whitespace differences expected)
         compose_after = (opencode_dir / "docker-compose.yaml").read_text()

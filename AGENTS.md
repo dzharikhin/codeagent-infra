@@ -96,7 +96,7 @@ from opencode_framework.exceptions import FrameworkError
 def run_command(args: List[str], cwd: Optional[Path] = None) -> GitResult:
     ...
 
-def validate_framework_repo(path: Path) -> Tuple[bool, List[str]]:
+def validate_runtime_context(cwd: Path) -> Tuple[bool, str]:
     ...
 ```
 
@@ -133,19 +133,17 @@ class PreflightResult:
 Use Google-style docstrings for modules, classes, and public functions:
 
 ```python
-def validate_framework_repo(path: Path) -> Tuple[bool, List[str]]:
-    """Validate that a path is a valid framework repository.
-    
-    Checks for required paths:
-    - .git/
-    - framework-nuts-and-bolts/
-    - framework-config/
-    
+def migrate_env_file(path: Path) -> List[str]:
+    """Apply ENV_RENAMES to a .env file in place.
+
+    The file is written back only when at least one key changed; keys
+    are renamed in place and the layout is never reordered.
+
     Args:
-        path: Path to validate
-        
+        path: path to the .env file.
+
     Returns:
-        Tuple of (is_valid, list_of_missing_paths)
+        List of renamed old keys (empty when nothing changed).
     """
 ```
 

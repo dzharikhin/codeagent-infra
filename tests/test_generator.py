@@ -7,6 +7,7 @@ from opencode_framework.config import GlobalSettings
 from opencode_framework.generators import GenerationContext, GenerationOrchestrator
 from opencode_framework.generators.config_files import ConfigFilesGenerator
 from opencode_framework.generators.documentation import DocumentationGenerator
+from opencode_framework.generators.templates import TemplateHandler
 from opencode_framework.sandbox.compose import ComposeGenerator
 from opencode_framework.sandbox.devcontainer import DevcontainerGenerator
 from opencode_framework.wizard import WizardResult
@@ -150,7 +151,9 @@ class TestDevcontainerGenerator:
         gen = DevcontainerGenerator()
         gen.generate(ctx)
 
-        dc_content = json.loads((tmp_path / ".opencode" / "devcontainer.json").read_text())
+        dc_content = json.loads(
+            (tmp_path / ".opencode" / "devcontainer.json").read_text()
+        )
         assert "features" in dc_content
         assert "ghcr.io/devcontainers/features/git:1" in dc_content["features"]
 
@@ -162,7 +165,9 @@ class TestDevcontainerGenerator:
         gen = DevcontainerGenerator()
         gen.generate(ctx)
 
-        dc_content = json.loads((tmp_path / ".opencode" / "devcontainer.json").read_text())
+        dc_content = json.loads(
+            (tmp_path / ".opencode" / "devcontainer.json").read_text()
+        )
         assert "REMOTE_USER" in dc_content.get("remoteUser", "")
 
     def test_ripgrep_installed_by_default(self, tmp_path: Path):
@@ -173,8 +178,12 @@ class TestDevcontainerGenerator:
         gen = DevcontainerGenerator()
         gen.generate(ctx)
 
-        dc_content = json.loads((tmp_path / ".opencode" / "devcontainer.json").read_text())
-        common_utils = dc_content["features"]["ghcr.io/devcontainers/features/common-utils:2"]
+        dc_content = json.loads(
+            (tmp_path / ".opencode" / "devcontainer.json").read_text()
+        )
+        common_utils = dc_content["features"][
+            "ghcr.io/devcontainers/features/common-utils:2"
+        ]
         assert "ripgrep" in common_utils["installPackages"]
 
 
@@ -189,10 +198,17 @@ class TestOpenCodeFeature:
         gen = DevcontainerGenerator()
         gen.generate(ctx)
 
-        dc_content = json.loads((tmp_path / ".opencode" / "devcontainer.json").read_text())
-        assert "ghcr.io/jsburckhardt/devcontainer-features/opencode:1.1.1" in dc_content["features"]
+        dc_content = json.loads(
+            (tmp_path / ".opencode" / "devcontainer.json").read_text()
+        )
+        assert (
+            "ghcr.io/jsburckhardt/devcontainer-features/opencode:1.1.1"
+            in dc_content["features"]
+        )
 
-        feature = dc_content["features"]["ghcr.io/jsburckhardt/devcontainer-features/opencode:1.1.1"]
+        feature = dc_content["features"][
+            "ghcr.io/jsburckhardt/devcontainer-features/opencode:1.1.1"
+        ]
         assert "version" in feature
         assert "OCF_AGENT_VERSION" in feature["version"]
 
@@ -315,6 +331,77 @@ class TestReadmeLaunchCommand:
 
         readme_content = (tmp_path / ".opencode" / "README.md").read_text()
         assert "### Shell" in readme_content
+
+
+class TestReadmeToolSections:
+    """Tests for per-tool README sections driven by agent_tool."""
+
+    @staticmethod
+    def _render(agent_tool: str) -> str:
+        return TemplateHandler.render_readme_template(
+            launch_command="ocframework launch",
+            debug_command="ocframework launch -- debug config",
+            shell_command="docker exec -it <container_name> /bin/bash",
+            branch_name="codeagent-test",
+            agent_tool=agent_tool,
+        )
+
+    def test_opencode_sections(self):
+        """opencode README shows opencode models/serve/auth wording."""
+        readme = self._render("opencode")
+        assert "opencode models" in readme
+        assert "OPENCODE_SERVER_PASSWORD" in readme
+        assert "container port 4096" in readme
+        assert "ghcr.io/jsburckhardt/devcontainer-features/opencode" in readme
+        assert "- OpenCode docs: https://opencode.ai" in readme
+        # {{LAUNCH_COMMAND}} inside the tool serve section is resolved
+        assert "ocframework launch --server" in readme
+
+    def test_qwen_sections(self):
+        """qwen README shows qwen serve/token/settings wording."""
+        readme = self._render("qwen")
+        assert "QWEN_SERVER_TOKEN" in readme
+        assert "container port 4170" in readme
+        assert "QWEN_CODE_SYSTEM_DEFAULTS_PATH" in readme
+        assert "DASHSCOPE_API_KEY" in readme
+        assert "@qwen-code/qwen-code" in readme
+        assert "- Qwen Code docs: https://github.com/QwenLM/qwen-code" in readme
+        assert "ocframework launch --server" in readme
+
+    def test_qwen_sections_exclude_opencode_wording(self):
+        """qwen README must not leak opencode-specific content."""
+        readme = self._render("qwen")
+        assert "opencode models" not in readme
+        assert "OPENCODE_SERVER_PASSWORD" not in readme
+        assert "https://opencode.ai" not in readme
+        assert "devcontainer-features/opencode" not in readme
+
+    def test_no_unresolved_placeholders(self):
+        """Rendered README must not contain any template placeholders."""
+        for tool in ("opencode", "qwen"):
+            readme = self._render(tool)
+            assert "{{" not in readme
+
+    def test_unknown_tool_rejected(self):
+        """An unsupported tool name raises ValidationError."""
+        import pytest
+
+        from opencode_framework.exceptions import ValidationError
+
+        with pytest.raises(ValidationError):
+            self._render("nope")
+
+    def test_documentation_generator_uses_ctx_tool(self, tmp_path: Path):
+        """DocumentationGenerator renders sections for ctx.agent_tool."""
+        (tmp_path / ".opencode").mkdir()
+        ctx = _make_generation_context(tmp_path, agent_tool="qwen")
+
+        gen = DocumentationGenerator()
+        gen.generate(ctx)
+
+        readme_content = (tmp_path / ".opencode" / "README.md").read_text()
+        assert "QWEN_SERVER_TOKEN" in readme_content
+        assert "https://opencode.ai" not in readme_content
 
 
 class TestRuntimeDataStructure:
@@ -559,7 +646,9 @@ class TestComposeGenerator:
         assert "m2-myproject" in compose_content
         assert "/myproject/.venv" in compose_content
         assert "/home/${REMOTE_USER}/.m2" in compose_content
-        assert compose_content.count("volumes:") == 2  # One in services, one top-level for named volumes
+        assert (
+            compose_content.count("volumes:") == 2
+        )  # One in services, one top-level for named volumes
 
     def test_port_mappings_adds_ports_block(self, tmp_path: Path):
         """Port mappings should produce a ports: block in compose."""

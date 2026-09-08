@@ -116,7 +116,9 @@ def run_wizard(
         type=str,
     )
 
-    optional_features, editor_choice, java_build_tools = prompt_feature_changes([], "none", None)
+    optional_features, editor_choice, java_build_tools = prompt_feature_changes(
+        [], "none", None
+    )
 
     port_mappings = prompt_port_mappings()
 

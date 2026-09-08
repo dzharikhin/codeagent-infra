@@ -6,11 +6,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
-from opencode_framework.config import (
-    get_framework_validation_error,
-    validate_framework_repo,
-)
-
 
 @dataclass
 class PreflightResult:
@@ -153,17 +148,6 @@ def run_preflight_checks(cwd: Path, force: bool = False) -> PreflightResult:
         )
 
     framework_repo_path = Path(framework_repo_path_str)
-    valid, missing_paths = validate_framework_repo(framework_repo_path)
-    if not valid:
-        error_msg = get_framework_validation_error(
-            missing_paths, framework_repo_path_str
-        )
-        return PreflightResult(
-            success=False,
-            error=error_msg,
-            remediation="Ensure the framework repository is a valid git clone with all required files.",
-            framework_repo_path=framework_repo_path,
-        )
 
     if not is_inside_git_tree(cwd):
         return PreflightResult(

@@ -301,4 +301,7 @@ class TestGeneratedConfig:
         gen.generate(ctx)
         result = json.loads((tmp_path / ".opencode" / "devcontainer.json").read_text())
 
-        assert "ghcr.io/jsburckhardt/devcontainer-features/opencode:1.1.1" in result["features"]
+        assert (
+            "ghcr.io/jsburckhardt/devcontainer-features/opencode:1.1.1"
+            in result["features"]
+        )

@@ -1,6 +1,7 @@
 # Tool Adoption Plan: opencode | qwen
 
-Status: **approved design, implementation pending** (branch: `qwen`).
+Status: **implemented** (branch: `qwen`).
+`vision.md`, `AGENTS.md` and this file describe the target state.
 `vision.md`, `AGENTS.md` and this file already describe the target state.
 
 ## Goal
@@ -196,7 +197,10 @@ Renames: `OPENCODE_VERSION` → `OCF_AGENT_VERSION`;
 - `framework-config/opencode/{config.json,tui.json,cost-guard.config.json,stubs/stub-auth.json}`
   (moved); `framework-config/qwen/{qwen-settings.json,stubs/stub-qwen-settings.json}` (new).
 - `framework-nuts-and-bolts/` restructure per Part 3 above.
-- `preflight.py` `REQUIRED_FRAMEWORK_PATHS` updated to the new layout.
+- `preflight.py` / `config.py`: framework-content path validation removed
+  (`REQUIRED_FRAMEWORK_PATHS` dropped); repo detection is a `.git`-directory
+  check only, and missing framework content degrades to `/dev/null` stubs
+  (`_stub_reference`).
 
 **Tests**
 - Parametrize existing generator/compose/CLI/integration tests over both tools.
