@@ -205,12 +205,8 @@ class DevcontainerGenerator(FileGenerator):
         if java_url not in features:
             return
 
-        # None = backward compat default (maven only); [] = explicit empty choice
-        if java_build_tools is None:
-            maven_installed, gradle_installed = True, False
-        else:
-            maven_installed = "maven" in java_build_tools
-            gradle_installed = "gradle" in java_build_tools
+        maven_installed = "maven" in java_build_tools
+        gradle_installed = "gradle" in java_build_tools
 
         features[java_url]["installMaven"] = maven_installed
         features[java_url]["installGradle"] = gradle_installed
@@ -337,9 +333,9 @@ class DevcontainerGenerator(FileGenerator):
             devcontainer: Parsed devcontainer.json content
 
         Returns:
-            List of enabled build tools (e.g. ["maven"], ["gradle"], ["maven","gradle"])
-            Defaults to ["maven"] for backward compatibility when Java is present
-            but no build flags are explicitly set.
+            List of enabled build tools (e.g. ["maven"], ["gradle"],
+            ["maven","gradle"]). Empty when Java is present without
+            explicit install flags.
         """
         raw_features = devcontainer.get("features", {})
         features = raw_features if isinstance(raw_features, dict) else {}
@@ -357,13 +353,6 @@ class DevcontainerGenerator(FileGenerator):
             tools.append("maven")
         if java_feature.get("installGradle"):
             tools.append("gradle")
-
-        # Backward compatibility: if Java is present but no flags set, default to maven
-        has_explicit_flags = (
-            "installMaven" in java_feature or "installGradle" in java_feature
-        )
-        if not tools and not has_explicit_flags:
-            tools = ["maven"]
 
         return tools
 

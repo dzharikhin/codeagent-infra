@@ -3,7 +3,7 @@
 Technical details and code conventions for the OpenCode Framework.
 
 **Active plan:** [tool-adoption.md](tool-adoption.md) — configurable agent tool
-(`opencode` | `qwen`), 3-part restructure, env-var taxonomy, and migration.
+(`opencode` | `qwen`), 3-part restructure, and env-var taxonomy.
 The layout and conventions on this page describe the target state of that plan.
 
 ## Setup
@@ -22,7 +22,7 @@ opencode_framework/
 ├── __main__.py          # Entry point for python -m
 ├── agent/               # PART 2: agent tool integration
 │   ├── registry.py      # ToolSpec registry (opencode | qwen)
-│   └── layers.py        # .env tool sections, project stubs, stub fallbacks, env migration
+│   └── layers.py        # .env tool sections, project stubs, stub fallbacks
 ├── sandbox/             # PART 1: tool-agnostic sandbox
 │   ├── devcontainer.py  # devcontainer.json + Dockerfile image build
 │   ├── compose.py       # docker-compose generation + reconciliation
@@ -133,17 +133,18 @@ class PreflightResult:
 Use Google-style docstrings for modules, classes, and public functions:
 
 ```python
-def migrate_env_file(path: Path) -> List[str]:
-    """Apply ENV_RENAMES to a .env file in place.
+def ensure_qwen_project_layer(repo_root: Path) -> Optional[Path]:
+    """Create the qwen project layer (``.qwen/settings.json``) if absent.
 
-    The file is written back only when at least one key changed; keys
-    are renamed in place and the layout is never reordered.
+    Only-if-missing by design: an existing file is never overwritten,
+    so ``init --force`` preserves user edits.
 
     Args:
-        path: path to the .env file.
+        repo_root: project repository root.
 
     Returns:
-        List of renamed old keys (empty when nothing changed).
+        Path to the created settings file, or None when it already
+        existed.
     """
 ```
 
@@ -322,7 +323,7 @@ This hybrid approach enables:
 The framework splits into three parts with explicit borders (module names in code, variable prefixes in `.env`, directory structure for content) — see [vision.md](vision.md) and [tool-adoption.md](tool-adoption.md):
 
 1. **Sandbox** (`opencode_framework/sandbox/`) — tool-agnostic isolation: devcontainer image build, compose runtime, mounts, ports. Never imports tool knowledge; renders agent slots only (`{{AGENT_FEATURE}}`, `{{AGENT_INSTALL}}`, `{{AGENT_ENV}}`, `{{AGENT_MOUNTS}}`, `{{SERVICE_NAME}}`/`{{ENTRYPOINT}}`, build args).
-2. **Agent integration** (`opencode_framework/agent/`) — `registry.py` holds one ToolSpec per tool (opencode, qwen); `layers.py` wires the config layers global < framework < project (+ env, CLI args) and migrates env names.
+2. **Agent integration** (`opencode_framework/agent/`) — `registry.py` holds one ToolSpec per tool (opencode, qwen); `layers.py` wires the config layers global < framework < project (+ env, CLI args).
 3. **Nuts-and-bolts** (repo content `framework-nuts-and-bolts/{common,opencode,qwen}/`) — snippet library; `common/` + the active tool's folder are mounted read-only into `.opencode/framework-nuts-and-bolts/`.
 
 ### Environment Variable Taxonomy
@@ -338,7 +339,8 @@ Rule: variables shared across parts/tools may be unprefixed; part- or tool-speci
 | agent defaults via env | `OCF_MAIN_MODEL`, `OCF_BUILD_MODEL`, `OCF_SMALL_MODEL`, `OCF_PLAN_MAX_BEFORE_RESPONSE_STEPS`, `OCF_BUILD_MAX_BEFORE_RESPONSE_STEPS` |
 | tool-native (agent's own contract, never OCF-prefixed) | `OPENCODE_*`, `QWEN_*` |
 
-Renamed keys migrate automatically during `.opencode/` reconciliation (values and user-added keys preserved).
+Renamed keys are not migrated: stale `.opencode/.env` files regenerate via
+`ocframework init --force` (existing directory backed up first).
 
 ### Git Worktree Model
 

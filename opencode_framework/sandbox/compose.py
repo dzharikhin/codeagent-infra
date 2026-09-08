@@ -26,7 +26,7 @@ class ComposeGenerator(FileGenerator):
             repo_root_name=ctx.repo_root.name,
             optional_features=ctx.optional_features,
             port_mappings=ctx.port_mappings,
-            java_build_tools=getattr(ctx, "java_build_tools", None),
+            java_build_tools=ctx.java_build_tools,
             agent_tool=ctx.agent_tool,
         )
         compose_path.write_text(compose_content)
@@ -88,7 +88,8 @@ class ComposeGenerator(FileGenerator):
             repo_name: Repository name (used in managed volume names)
             optional_features: Final feature set to apply
             port_mappings: Desired port mappings, or None to leave ports as-is
-            java_build_tools: List of enabled Java build tools (e.g., ["maven"], ["gradle"])
+            java_build_tools: Enabled Java build tools (e.g., ["maven"], ["gradle"]).
+                Empty/None mounts no build-tool volumes.
             agent_tool: Agent tool name ("opencode" | "qwen")
 
         Returns:
@@ -119,7 +120,7 @@ class ComposeGenerator(FileGenerator):
         )
 
         # Determine which Java build tools are enabled
-        tools = java_build_tools or ["maven"]
+        tools = java_build_tools or []
         has_maven = "maven" in tools
         has_gradle = "gradle" in tools
 

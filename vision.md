@@ -38,7 +38,7 @@ Integration of one agent tool (opencode or qwen) and its layered configuration. 
 
 effective config = global < framework < project (optional) < env < CLI args
 
-- Code: `opencode_framework/agent/` — `registry.py` (one ToolSpec per tool: binary, install, env/mount fragments, serve, version pin), `layers.py` (env sections, project stubs, stub fallbacks, migrations)
+- Code: `opencode_framework/agent/` — `registry.py` (one ToolSpec per tool: binary, install, env/mount fragments, serve, version pin), `layers.py` (env sections, project stubs, stub fallbacks)
 - Payloads: `framework-config/<tool>/` — the framework layer, mounted read-only
 - Env: `OCF_AGENT_*` (tool selection and version), `OCF_GLOBAL_*` (global layer source), agent defaults as env (`OCF_MAIN/BUILD/SMALL_MODEL`, `OCF_PLAN_/OCF_BUILD_MAX_BEFORE_RESPONSE_STEPS`). Tool-native variables (`OPENCODE_*`, `QWEN_*`) are the agent's own contract — used unprefixed, only for the active tool.
 

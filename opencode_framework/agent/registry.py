@@ -94,6 +94,7 @@ class ToolSpec:
     global_config_base: Literal["config_root", "home"]
     global_config_is_dir: bool
     global_config_relpath: Tuple[str, ...]
+    global_env_relpath: Tuple[str, ...]
     auth_relpath: Optional[Tuple[str, ...]]
     stub_relpath: Tuple[str, ...]
     context_files: Tuple[str, ...]
@@ -179,6 +180,7 @@ OPENCODE_TOOL_SPEC = ToolSpec(
     global_config_base="config_root",
     global_config_is_dir=True,
     global_config_relpath=("opencode",),
+    global_env_relpath=("opencode", ".env"),
     auth_relpath=("opencode", "auth.json"),
     stub_relpath=("opencode", "stubs", "stub-auth.json"),
     context_files=("AGENTS.md",),
@@ -218,6 +220,7 @@ QWEN_TOOL_SPEC = ToolSpec(
     global_config_base="home",
     global_config_is_dir=False,
     global_config_relpath=(".qwen", "settings.json"),
+    global_env_relpath=(".qwen", ".env"),
     auth_relpath=None,
     stub_relpath=("qwen", "stubs", "stub-qwen-settings.json"),
     context_files=("QWEN.md", "AGENTS.md"),

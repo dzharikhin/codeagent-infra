@@ -139,11 +139,11 @@ class TestDetect:
         tools = DevcontainerGenerator.detect_build_tools(dc)
         assert tools == []
 
-    def test_detect_build_tools_default_to_maven_when_no_flags(self):
-        """Backward compatibility: Java present but no build flags → default to maven."""
+    def test_detect_build_tools_no_flags_returns_empty(self):
+        """Java present but no build flags → no tools (no compat default)."""
         dc = _dc_with_features("java")
         tools = DevcontainerGenerator.detect_build_tools(dc)
-        assert tools == ["maven"]
+        assert tools == []
 
     def test_detect_build_tools_no_java(self):
         dc = _dc_with_features("python")
@@ -301,11 +301,11 @@ class TestRebuildFeatures:
         assert (f"venv-{self.REPO}:/myrepo/.venv" in text) is ("python" in features)
         # Maven m2 volume is mounted at /home/${REMOTE_USER}/.m2
         assert (f"m2-{self.REPO}:/home/${{REMOTE_USER}}/.m2" in text) is (
-            "java" in features and ("maven" in (java_build_tools or ["maven"]))
+            "java" in features and ("maven" in (java_build_tools or []))
         )
         # Gradle home volume is mounted at /home/${REMOTE_USER}/.gradle
         assert (f"gradle-{self.REPO}:/home/${{REMOTE_USER}}/.gradle" in text) is (
-            "java" in features and ("gradle" in (java_build_tools or ["maven"]))
+            "java" in features and ("gradle" in (java_build_tools or []))
         )
         assert (f"docker-{self.REPO}:/var/lib/docker" in text) is has_docker
         if (
@@ -313,8 +313,8 @@ class TestRebuildFeatures:
             or (
                 "java" in features
                 and (
-                    "maven" in (java_build_tools or ["maven"])
-                    or "gradle" in (java_build_tools or ["maven"])
+                    "maven" in (java_build_tools or [])
+                    or "gradle" in (java_build_tools or [])
                 )
             )
             or has_docker
@@ -412,7 +412,9 @@ class TestRebuildFeatures:
             "volumes:\n  venv-myrepo:",
             "volumes:\n  user-keepvol:\n  venv-myrepo:",
         )
-        rebuilt = self._rebuild(text, ["python", "java", "docker"])
+        rebuilt = self._rebuild(
+            text, ["python", "java", "docker"], java_build_tools=["maven"]
+        )
         assert "  user-keepvol:" in rebuilt.split("\n")
         assert "  venv-myrepo:" in rebuilt.split("\n")
         assert "  m2-myrepo:" in rebuilt.split("\n")
@@ -471,6 +473,16 @@ class TestRebuildFeatures:
         rebuilt = self._rebuild(text, ["java"], java_build_tools=["maven", "gradle"])
         assert "m2-" in rebuilt
         assert "gradle-" in rebuilt
+
+    def test_java_rebuild_to_empty_tools_removes_mounts(self):
+        """Rebuilding java with empty build tools strips existing tool mounts."""
+        text = _render_compose(
+            self.REPO, ["java"], java_build_tools=["maven", "gradle"]
+        )
+        rebuilt = self._rebuild(text, ["java"], java_build_tools=[])
+        self.assert_managed(rebuilt, ["java"], [])
+        assert f"m2-{self.REPO}:/home" not in rebuilt
+        assert f"gradle-{self.REPO}:/home" not in rebuilt
 
     def test_rebuild_features_accepts_java_build_tools_kwarg(self):
         """rebuild_features must accept java_build_tools as a keyword argument."""
@@ -596,19 +608,19 @@ class TestRenderComposeTemplateVolumeFix:
     """Regression tests for the java-without-python volumes: header bug."""
 
     def test_java_only_has_volumes_header(self):
-        text = _render_compose("repo", ["java"])
+        text = _render_compose("repo", ["java"], java_build_tools=["maven"])
         assert "\nvolumes:" in text
         assert "  m2-repo:" in text.split("\n")
 
     def test_java_only_not_orphaned_under_services(self):
         """The m2 volume key must live under top-level volumes:, not services."""
-        text = _render_compose("repo", ["java"])
+        text = _render_compose("repo", ["java"], java_build_tools=["maven"])
         lines = text.split("\n")
         vol_idx = next(i for i, ln in enumerate(lines) if ln == "volumes:")
         assert lines[vol_idx + 1] == "  m2-repo:"
 
     def test_python_and_java_both_volumes(self):
-        text = _render_compose("repo", ["python", "java"])
+        text = _render_compose("repo", ["python", "java"], java_build_tools=["maven"])
         assert text.count("\nvolumes:") == 1
         assert "  venv-repo:" in text.split("\n")
         assert "  m2-repo:" in text.split("\n")
@@ -627,6 +639,15 @@ class TestRenderComposeTemplateVolumeFix:
     def test_java_gradle_mounts_gradle_home(self):
         """Gradle only mounts the gradle home directory."""
         text = _render_compose("repo", ["java"], java_build_tools=["gradle"])
+
+    def test_java_without_tools_no_tool_volumes(self):
+        """Java with empty build tools must not silently mount maven volumes."""
+        text = _render_compose("repo", ["java"], java_build_tools=[])
+        assert "  m2-repo:" not in text.split("\n")
+        assert "  gradle-repo:" not in text.split("\n")
+        assert "m2-repo:/home" not in text
+        assert "gradle-repo:/home" not in text
+        assert "\nvolumes:" not in text
 
     def test_docker_only_has_volumes_header(self):
         """Docker adds a named volume for /var/lib/docker."""
@@ -648,7 +669,9 @@ class TestRenderComposeTemplateVolumeFix:
 
     def test_java_docker_and_python_all_volumes(self):
         """All three features add their own volume keys."""
-        text = _render_compose("repo", ["python", "java", "docker"])
+        text = _render_compose(
+            "repo", ["python", "java", "docker"], java_build_tools=["maven"]
+        )
         assert text.count("\nvolumes:") == 1
         assert "  venv-repo:" in text.split("\n")
         assert "  m2-repo:" in text.split("\n")
@@ -752,11 +775,11 @@ class TestUpdateFeatures:
     def test_change_writes_both_files(self, tmp_path: Path, monkeypatch):
         """A feature change must update devcontainer.json and compose."""
         monkeypatch.setattr(features, "is_interactive", lambda: True)
-        # Simulate the user adding docker + java to an existing python setup.
+        # Simulate the user adding docker + java (maven) to a python setup.
         monkeypatch.setattr(
             features,
             "prompt_feature_changes",
-            lambda cur, ed, jbt: (["python", "docker", "java"], ed, []),
+            lambda cur, ed, jbt: (["python", "docker", "java"], ed, ["maven"]),
         )
         monkeypatch.setattr(features, "prompt_port_mappings", lambda cur=None: [])
         opencode_dir = self._seed_opencode(tmp_path, ["python"])
@@ -819,10 +842,10 @@ class TestUpdateFeatures:
         """Java→Gradle transition through update_features must work correctly."""
         monkeypatch.setattr(features, "is_interactive", lambda: True)
 
-        # Seed with java+maven (no explicit build flags in _seed_opencode)
+        # Seed with java (no explicit build flags in _seed_opencode)
         opencode_dir = self._seed_opencode(tmp_path, ["java"])
 
-        # Monkeypatch prompt to change java from maven to gradle
+        # Monkeypatch prompt to change java build tools to gradle
         def mock_prompt(cur, ed, jbt):
             # Keep java enabled, change build tools
             if "java" in cur:
@@ -970,19 +993,23 @@ class TestPromptJavaBuildTools:
             lambda *args, **kwargs: None,
         )
 
-    def test_none_defaults_maven_true_gradle_false(self):
-        """When current_tools is None, default to maven=True, gradle=False."""
+    def test_none_defaults_both_prompts_false(self):
+        """When current_tools is None, both prompts default to No."""
         tools = features._prompt_java_build_tools(None)
 
         assert self.typer_confirm.call_count == 2
-        assert tools == ["maven"]
+        assert self.typer_confirm.answers[0][1] is False
+        assert self.typer_confirm.answers[1][1] is False
+        assert tools == []
 
-    def test_empty_list_defaults_maven_true(self):
-        """When current_tools is [], default to maven=True, gradle=False."""
+    def test_empty_list_defaults_both_prompts_false(self):
+        """When current_tools is [], both prompts default to No."""
         tools = features._prompt_java_build_tools([])
 
         assert self.typer_confirm.call_count == 2
-        assert tools == ["maven"]
+        assert self.typer_confirm.answers[0][1] is False
+        assert self.typer_confirm.answers[1][1] is False
+        assert tools == []
 
     def test_existing_gradle_preserved_as_default(self):
         """When current_tools has gradle, gradle defaults True, maven defaults False."""

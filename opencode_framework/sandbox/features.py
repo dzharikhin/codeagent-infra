@@ -68,7 +68,8 @@ def _prompt_java_build_tools(current_tools: Optional[List[str]] = None) -> List[
     """Prompt user to select Java build tools (Maven and/or Gradle).
 
     Args:
-        current_tools: Currently enabled build tools (for defaults). If None, defaults to maven only.
+        current_tools: Currently enabled build tools (for prompt defaults).
+            With no current tools both prompts default to No.
 
     Returns:
         List of enabled build tools (e.g. ["maven"], ["gradle"], ["maven","gradle"])
@@ -76,7 +77,7 @@ def _prompt_java_build_tools(current_tools: Optional[List[str]] = None) -> List[
     typer.echo("\nJava build tools:")
 
     cur = current_tools or []
-    maven = typer.confirm("  Install Maven?", default=("maven" in cur) if cur else True)
+    maven = typer.confirm("  Install Maven?", default=("maven" in cur))
     gradle = typer.confirm("  Install Gradle?", default=("gradle" in cur))
 
     tools: List[str] = []

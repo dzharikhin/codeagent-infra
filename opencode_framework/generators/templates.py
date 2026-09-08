@@ -267,7 +267,8 @@ class TemplateHandler:
             repo_root_name: Name of the repo
             optional_features: List of enabled optional features (e.g., ["python"])
             port_mappings: List of Docker-style port mappings (e.g. ["8080:8080"])
-            java_build_tools: List of enabled Java build tools (e.g., ["maven"], ["gradle"])
+            java_build_tools: Enabled Java build tools (e.g., ["maven"], ["gradle"]).
+                Empty/None mounts no build-tool volumes.
             agent_tool: Agent tool name ("opencode" | "qwen")
 
         Returns:
@@ -287,7 +288,7 @@ class TemplateHandler:
 
         # Java build tools: maven or gradle, or both
         if optional_features and "java" in optional_features:
-            tools = java_build_tools or ["maven"]
+            tools = java_build_tools or []
             if "maven" in tools:
                 additional_volume_mounts += (
                     f"\n      - m2-{repo_root_name}:/home/${{REMOTE_USER}}/.m2"
@@ -310,7 +311,7 @@ class TemplateHandler:
         if optional_features and "docker" in optional_features:
             volume_keys.append(f"  docker-{repo_root_name}:")
         if optional_features and "java" in optional_features:
-            tools = java_build_tools or ["maven"]
+            tools = java_build_tools or []
             if "maven" in tools:
                 volume_keys.append(f"  m2-{repo_root_name}:")
             if "gradle" in tools:

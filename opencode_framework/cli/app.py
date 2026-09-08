@@ -10,15 +10,15 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import typer
+from dotenv import dotenv_values
 
 from opencode_framework import __version__
 from opencode_framework.agent.layers import (
     discover_global_layer,
+    expected_global_env_path,
     expected_global_path,
-    migrate_env_file,
 )
 from opencode_framework.agent.registry import (
-    DEFAULT_TOOL,
     QWEN_TOOL_SPEC,
     ToolSpec,
     get_tool_spec,
@@ -49,6 +49,7 @@ from opencode_framework.sandbox.runtime import (
     build_docker_env,
     load_env_with_overrides,
     load_image_id,
+    parse_cli_env_vars,
     remove_image_id,
     save_image_id,
     validate_runtime_context,
@@ -101,23 +102,86 @@ def _print_version_info() -> None:
         typer.echo(f"expected qwen global settings path: {expected_qwen_path}")
 
 
-def _resolve_agent_tool(final_env: Dict[str, str]) -> ToolSpec:
-    """Resolve the agent ToolSpec from OCF_AGENT_TOOL in the merged env.
+def _peek_agent_tool(
+    env_path: Path,
+    env_file: Optional[Path] = None,
+    env_vars: Optional[List[str]] = None,
+) -> str:
+    """Peek at OCF_AGENT_TOOL without full env loading.
 
-    Absent or empty OCF_AGENT_TOOL falls back to the default tool
-    (opencode), keeping projects initialized before the variable
-    existed working unchanged.
+    Sources are consulted in the precedence the launcher merges them
+    (highest first): CLI variables, override file, project .env. Parse
+    failures are tolerated here — the real loader reports them later.
 
     Args:
-        final_env: Merged environment (global < project < override < CLI).
+        env_path: project .opencode/.env path (lowest peek priority).
+        env_file: override file from --env-file, when given.
+        env_vars: KEY=VALUE strings from -e/--env, when given.
+
+    Returns:
+        The first non-empty OCF_AGENT_TOOL value, or "" when absent
+        everywhere.
+    """
+    if env_vars:
+        try:
+            cli_env = parse_cli_env_vars(env_vars)
+        except ValueError:
+            cli_env = {}  # reported later by load_env_with_overrides
+        value = (cli_env.get("OCF_AGENT_TOOL") or "").strip()
+        if value:
+            return value
+
+    for source in (env_file, env_path):
+        if source is None or not source.exists():
+            continue
+        try:
+            parsed = dotenv_values(source, interpolate=False)
+        except Exception:
+            continue  # reported later by load_env_with_overrides
+        value = (parsed.get("OCF_AGENT_TOOL") or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _resolve_agent_tool(
+    env_path: Path,
+    env_file: Optional[Path] = None,
+    env_vars: Optional[List[str]] = None,
+) -> ToolSpec:
+    """Resolve the agent ToolSpec from OCF_AGENT_TOOL.
+
+    The key is required: every generated .opencode/.env carries it, so
+    absence means stale or hand-edited configuration. Sources in
+    precedence order: -e/--env > --env-file > .opencode/.env.
+
+    Args:
+        env_path: project .opencode/.env path.
+        env_file: override file from --env-file, when given.
+        env_vars: KEY=VALUE strings from -e/--env, when given.
 
     Returns:
         The resolved ToolSpec.
 
     Raises:
-        typer.Exit: When OCF_AGENT_TOOL names an unsupported tool.
+        typer.Exit: When OCF_AGENT_TOOL is absent/empty or names an
+            unsupported tool.
     """
-    name = (final_env.get("OCF_AGENT_TOOL") or DEFAULT_TOOL).strip()
+    name = _peek_agent_tool(env_path, env_file, env_vars)
+    if not name:
+        typer.secho(
+            "Error: OCF_AGENT_TOOL is not set "
+            "(searched -e/--env, --env-file, .opencode/.env).",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        typer.secho(
+            "Remediation: run 'ocframework init --force' to regenerate the "
+            "configuration, or set OCF_AGENT_TOOL (opencode | qwen).",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+        raise typer.Exit(1)
     try:
         return get_tool_spec(name)
     except ValidationError as e:
@@ -661,11 +725,13 @@ def launch(
     """Launch the configured agent (opencode or qwen) in a container.
 
     Builds the devcontainer image (if needed) and runs the agent using
-    docker compose. The agent tool is read from OCF_AGENT_TOOL in the
-    environment (default: opencode).
+    docker compose. The agent tool is read from OCF_AGENT_TOOL, which is
+    required; it is searched in -e/--env, then --env-file, then
+    .opencode/.env.
 
     Environment variables are loaded with precedence (lowest to highest):
-    1. Global env file (~/.config/opencode/.env, auto-loaded if present)
+    1. Global env file (~/.config/opencode/.env for opencode, ~/.qwen/.env
+       for qwen; auto-loaded if present)
     2. Base .opencode/.env file
     3. Override file (--env-file)
     4. Command-line variables (-e KEY=VALUE)
@@ -701,14 +767,9 @@ def launch(
         raise typer.Exit(1)
 
     env_path = repo_root / ".opencode" / ".env"
-    migrated_keys = migrate_env_file(env_path)
-    if migrated_keys:
-        typer.secho(
-            f"Migrated renamed keys in .opencode/.env: {', '.join(migrated_keys)}",
-            fg=typer.colors.YELLOW,
-        )
 
-    global_env_path = get_config_root() / "opencode" / ".env"
+    spec = _resolve_agent_tool(env_path, env_file, env_vars)
+    global_env_path = expected_global_env_path(spec)
     warnings: List[str] = []
 
     try:
@@ -732,8 +793,6 @@ def launch(
     # Print any warnings (e.g., global env file failed to parse)
     for warning in warnings:
         typer.secho(f"Warning: {warning}", fg=typer.colors.YELLOW)
-
-    spec = _resolve_agent_tool(final_env)
 
     subprocess_env = build_docker_env(final_env, docker_context)
 

@@ -589,7 +589,7 @@ class TestComposeGenerator:
         assert "docker-init.sh" not in compose_content
 
     def test_java_feature_adds_m2_volume(self, tmp_path: Path):
-        """Java feature should add m2 named volume to compose."""
+        """Java feature with maven should add m2 named volume to compose."""
         repo_root = tmp_path / "myproject"
         repo_root.mkdir()
         opencode_dir = repo_root / ".opencode"
@@ -598,6 +598,7 @@ class TestComposeGenerator:
         ctx = _make_generation_context(
             repo_root,
             optional_features=["java"],
+            java_build_tools=["maven"],
         )
 
         gen = ComposeGenerator()
@@ -607,6 +608,26 @@ class TestComposeGenerator:
         assert "m2-myproject" in compose_content
         assert "volumes:" in compose_content
         assert "/home/${REMOTE_USER}/.m2" in compose_content
+
+    def test_java_without_build_tools_no_m2_volume(self, tmp_path: Path):
+        """Java feature with empty build tools must not add tool volumes."""
+        repo_root = tmp_path / "myproject"
+        repo_root.mkdir()
+        opencode_dir = repo_root / ".opencode"
+        opencode_dir.mkdir()
+
+        ctx = _make_generation_context(
+            repo_root,
+            optional_features=["java"],
+            java_build_tools=[],
+        )
+
+        gen = ComposeGenerator()
+        gen.generate(ctx)
+
+        compose_content = (opencode_dir / "docker-compose.yaml").read_text()
+        assert "m2-" not in compose_content
+        assert "gradle-" not in compose_content
 
     def test_no_java_feature_no_m2_volume(self, tmp_path: Path):
         """Without Java feature, no m2 volume should be added."""
@@ -636,6 +657,7 @@ class TestComposeGenerator:
         ctx = _make_generation_context(
             repo_root,
             optional_features=["python", "java"],
+            java_build_tools=["maven"],
         )
 
         gen = ComposeGenerator()

@@ -57,9 +57,10 @@ mounts, networks, ports, and the env vars of this layer.
 - `registry.py` — `ToolSpec` per tool: binary/compose service name,
   entrypoints, install spec (fills sandbox slots), compose env/mount fragments,
   serve spec (port, token), env-template fragment, global-layer discovery hook,
-  version-pin mapping (`OCF_AGENT_VERSION` → feature version / build arg).
+  version-pin mapping (`OCF_AGENT_VERSION` → feature version / build arg),
+  global `.env` relpath (`global_env_relpath`).
 - `layers.py` — `.env` tool sections, `.qwen/` project stub generation,
-  stub fallbacks, env-var auto-migration.
+  stub fallbacks.
 - Payloads: `framework-config/<tool>/` (framework layer, read-only mount).
 - Tool matrix:
 
@@ -147,8 +148,9 @@ Renames: `OPENCODE_VERSION` → `OCF_AGENT_VERSION`;
 
 1. Configurable ToolSpec registry (`opencode` | `qwen`) — not a hard replace.
 2. Tool chosen at `init` (wizard prompt + `--tool` flag), persisted as
-   `OCF_AGENT_TOOL` in `.opencode/.env`; absent ⇒ `opencode` (backward
-   compatible); switching tools = re-init.
+   `OCF_AGENT_TOOL` in `.opencode/.env`; at `launch` the key is required
+   (searched `-e/--env` > `--env-file` > `.opencode/.env`; absent ⇒ error
+   with re-init remediation); switching tools = re-init.
 3. qwen install via Dockerfile (Node 22 + npm, `OCF_AGENT_VERSION` build arg) —
    no devcontainer feature exists.
 4. Layer precedence global < framework < project, wired through qwen's native
@@ -158,10 +160,14 @@ Renames: `OPENCODE_VERSION` → `OCF_AGENT_VERSION`;
 6. `.qwen/` gitignore mirrors the `.opencode/` wizard prompt.
 7. Serve: auto `QWEN_SERVER_TOKEN`, `--env` injection, Web Shell URL printed.
 8. Full module restructure: `sandbox/` + `agent/` packages.
-9. Env taxonomy as above, with auto-migration of old names.
+9. Env taxonomy as above; renamed keys are not migrated — stale
+   `.opencode/.env` regenerates via `init --force`.
 10. `framework-config/{opencode,qwen}/` full tool subdirs incl. `stubs/`.
 11. `framework-nuts-and-bolts/{common,opencode,qwen}/` with per-tool submounts.
 12. Global layer for qwen = settings file only (global `QWEN.md` follow-up).
+13. No implicit Maven default: empty Java build-tool selection = JDK only
+    (no m2/gradle volumes, `installMaven`/`installGradle` false); fresh-init
+    wizard prompts default to No — build tools are explicit opt-in.
 
 ## Changes by file
 
@@ -206,15 +212,15 @@ Renames: `OPENCODE_VERSION` → `OCF_AGENT_VERSION`;
 - Parametrize existing generator/compose/CLI/integration tests over both tools.
 - New: registry specs, qwen compose/env rendering, launch service command,
   token injection, reconciliation with per-tool entrypoint/mounts, Dockerfile
-  `$`-escaping, `.qwen/` only-if-missing + `--force` preserves, env migration
-  (old→new keys, user keys preserved, idempotent).
+  `$`-escaping, `.qwen/` only-if-missing + `--force` preserves.
 
 ## Migration & backward compatibility
 
-- Auto-migrate `.opencode/.env` during reconciliation: rewrite renamed keys
-  (values preserved, user-added keys kept verbatim, idempotent), log one line;
-  compose regenerated with new references (`/opt/ocframework/config/opencode/…`
-  subpaths, two nuts mounts).
+- No `.env` key migration: renamed keys in existing `.opencode/.env` are
+  simply ignored (defaults apply); users re-run `ocframework init --force`
+  to regenerate (existing `.opencode/` is backed up first). Compose is
+  regenerated with new references
+  (`/opt/ocframework/config/opencode/…` subpaths, two nuts mounts).
 - `OCF_AGENT_TOOL` absent ⇒ opencode; entrypoint and mounts unchanged for
   existing opencode projects.
 - Tool switch after init requires re-init (documented).
@@ -228,7 +234,7 @@ Renames: `OPENCODE_VERSION` → `OCF_AGENT_VERSION`;
 3. Templates + generators (slots and fragments).
 4. CLI (`init --tool`, launch, serve token).
 5. Framework repo content moves + preflight paths.
-6. Env renames + auto-migration.
+6. Env taxonomy (no migration: re-init on rename).
 7. Tests.
 8. Docs sync (status update in this file, generated README template).
 

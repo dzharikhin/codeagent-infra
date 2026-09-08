@@ -282,7 +282,7 @@ class TestLaunchRebuildFeaturePrompt:
         (opencode / "docker-compose.yaml").write_text(
             "services:\n  opencode:\n    container_name: ocf_repo\n"
         )
-        (opencode / ".env").write_text("REMOTE_USER=root\n")
+        (opencode / ".env").write_text("REMOTE_USER=root\nOCF_AGENT_TOOL=opencode\n")
         return opencode
 
     def _patch_launch_deps(self, monkeypatch, tmp_path: Path, attach_rc=0):
@@ -433,7 +433,7 @@ class TestLaunchAttachRemoveFeature:
         (opencode / "docker-compose.yaml").write_text(
             "services:\n  opencode:\n    container_name: ocf_repo\n"
         )
-        (opencode / ".env").write_text("REMOTE_USER=root\n")
+        (opencode / ".env").write_text("REMOTE_USER=root\nOCF_AGENT_TOOL=opencode\n")
         return opencode
 
     def _patch_launch_deps(
@@ -664,7 +664,7 @@ class TestLaunchServer:
         if ports_block:
             compose += ports_block
         (opencode / "docker-compose.yaml").write_text(compose)
-        (opencode / ".env").write_text("REMOTE_USER=root\n")
+        (opencode / ".env").write_text("REMOTE_USER=root\nOCF_AGENT_TOOL=opencode\n")
         return opencode
 
     def _patch_launch_deps(self, monkeypatch, tmp_path: Path):
@@ -1018,7 +1018,7 @@ class TestLaunchToolSpec:
         (opencode / "docker-compose.yaml").write_text(
             f"services:\n  {service}:\n    container_name: ocf_repo\n"
         )
-        (opencode / ".env").write_text("REMOTE_USER=root\n")
+        (opencode / ".env").write_text(f"REMOTE_USER=root\nOCF_AGENT_TOOL={service}\n")
         return opencode
 
     def _patch_launch_deps(self, monkeypatch, tmp_path: Path, tool_env=None):
@@ -1146,15 +1146,65 @@ class TestLaunchToolSpec:
     def test_invalid_agent_tool_env_exits(self, tmp_path: Path, monkeypatch):
         """An unsupported OCF_AGENT_TOOL value exits 1 with remediation."""
         self._setup_repo(tmp_path)
-        app_module, captured = self._patch_launch_deps(
-            monkeypatch, tmp_path, {"OCF_AGENT_TOOL": "nope"}
-        )
+        opencode = tmp_path / ".opencode"
+        (opencode / ".env").write_text("REMOTE_USER=root\nOCF_AGENT_TOOL=nope\n")
+        app_module, captured = self._patch_launch_deps(monkeypatch, tmp_path)
 
         result = self._invoke(app_module, ["launch"])
 
         assert result.exit_code == 1
         assert "Unsupported agent tool" in result.output
         assert captured == []
+
+    def test_missing_agent_tool_env_exits(self, tmp_path: Path, monkeypatch):
+        """Absent OCF_AGENT_TOOL exits 1 with a re-init remediation."""
+        self._setup_repo(tmp_path)
+        opencode = tmp_path / ".opencode"
+        (opencode / ".env").write_text("REMOTE_USER=root\n")
+        app_module, captured = self._patch_launch_deps(monkeypatch, tmp_path)
+
+        result = self._invoke(app_module, ["launch"])
+
+        assert result.exit_code == 1
+        assert "OCF_AGENT_TOOL is not set" in result.output
+        assert "init --force" in result.output
+        assert captured == []
+
+    def test_global_env_path_follows_opencode_tool(self, tmp_path: Path, monkeypatch):
+        """launch loads the global .env from the opencode tool's path."""
+        self._setup_repo(tmp_path)
+        app_module, _ = self._patch_launch_deps(monkeypatch, tmp_path)
+        load_calls: list = []
+
+        def fake_load(**kw):
+            load_calls.append(kw)
+            return {"REMOTE_USER": "root"}
+
+        monkeypatch.setattr(app_module, "load_env_with_overrides", fake_load)
+
+        result = self._invoke(app_module, ["launch"])
+
+        assert result.exit_code == 0
+        assert len(load_calls) == 1
+        assert str(load_calls[0]["global_env_path"]).endswith("opencode/.env")
+
+    def test_global_env_path_follows_qwen_tool(self, tmp_path: Path, monkeypatch):
+        """launch loads the global .env from the qwen tool's path."""
+        self._setup_repo(tmp_path, service="qwen")
+        app_module, _ = self._patch_launch_deps(monkeypatch, tmp_path)
+        load_calls: list = []
+
+        def fake_load(**kw):
+            load_calls.append(kw)
+            return {"REMOTE_USER": "root"}
+
+        monkeypatch.setattr(app_module, "load_env_with_overrides", fake_load)
+
+        result = self._invoke(app_module, ["launch"])
+
+        assert result.exit_code == 0
+        assert len(load_calls) == 1
+        assert str(load_calls[0]["global_env_path"]).endswith(".qwen/.env")
 
     def test_qwen_server_url_wording(self, tmp_path: Path, monkeypatch):
         """--server with qwen echoes the qwen serve URL."""
@@ -1167,103 +1217,3 @@ class TestLaunchToolSpec:
 
         assert result.exit_code == 0
         assert "qwen serve will be available at http://127.0.0.1:5000" in result.output
-
-
-class TestLaunchEnvMigration:
-    """Tests for .opencode/.env key migration wired into launch."""
-
-    LEGACY_ENV = (
-        "# legacy keys from a previous framework install\n"
-        "OPENCODE_VERSION=1.2.3\n"
-        "PLAN_MAX_BEFORE_RESPONSE_STEPS=3\n"
-        "MY_CUSTOM_KEY=keep-me\n"
-    )
-
-    def _setup_repo(self, tmp_path: Path, env_content: str) -> Path:
-        opencode = tmp_path / ".opencode"
-        opencode.mkdir()
-        (opencode / "docker-compose.yaml").write_text(
-            "services:\n  opencode:\n    container_name: ocf_repo\n"
-        )
-        (opencode / ".env").write_text(env_content)
-        return opencode
-
-    def _patch_launch_deps(self, monkeypatch, tmp_path: Path):
-        import importlib
-
-        app_module = importlib.import_module("opencode_framework.cli.app")
-
-        def mock_run(*args, **kw):
-            cmd = list(args[0]) if args else args[1].get("args", [])
-            result = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
-            if cmd[:2] == ["docker", "inspect"] and "--format" in cmd:
-                result.stdout = ""  # no container
-            return result
-
-        monkeypatch.setattr(
-            app_module, "validate_runtime_context", lambda cwd: (True, "")
-        )
-        monkeypatch.setattr(app_module, "get_repo_root", lambda cwd: tmp_path.resolve())
-        monkeypatch.setattr(
-            app_module, "load_env_with_overrides", lambda **kw: {"REMOTE_USER": "root"}
-        )
-        monkeypatch.setattr(app_module, "build_docker_env", lambda env, ctx: {})
-        monkeypatch.setattr(app_module, "load_image_id", lambda d: "sha256:cached")
-        monkeypatch.setattr(app_module, "_build_image", lambda *a, **kw: "sha256:fake")
-        monkeypatch.setattr(app_module, "save_image_id", lambda *a, **kw: None)
-        monkeypatch.setattr(app_module.subprocess, "run", mock_run)
-        return app_module
-
-    def _invoke(self, app_module, args: list):
-        from typer.testing import CliRunner
-
-        return CliRunner().invoke(app_module.app, args)
-
-    def test_launch_migrates_legacy_keys(self, tmp_path: Path, monkeypatch):
-        """launch rewrites renamed keys, preserving values and user content."""
-        opencode = self._setup_repo(tmp_path, self.LEGACY_ENV)
-        app_module = self._patch_launch_deps(monkeypatch, tmp_path)
-
-        result = self._invoke(app_module, ["launch"])
-
-        assert result.exit_code == 0
-        migrated = (opencode / ".env").read_text()
-        assert "OCF_AGENT_VERSION=1.2.3\n" in migrated
-        assert "OCF_PLAN_MAX_BEFORE_RESPONSE_STEPS=3\n" in migrated
-        assert "MY_CUSTOM_KEY=keep-me\n" in migrated
-        assert "# legacy keys from a previous framework install\n" in migrated
-        assert "OPENCODE_VERSION" not in migrated
-        assert not any(
-            line.startswith("PLAN_MAX_BEFORE_RESPONSE_STEPS=")
-            for line in migrated.splitlines()
-        )
-        assert (
-            "Migrated renamed keys in .opencode/.env: "
-            "OPENCODE_VERSION, PLAN_MAX_BEFORE_RESPONSE_STEPS" in result.output
-        )
-
-    def test_launch_migration_is_idempotent(self, tmp_path: Path, monkeypatch):
-        """A second launch after migration leaves the file and output untouched."""
-        opencode = self._setup_repo(tmp_path, self.LEGACY_ENV)
-        app_module = self._patch_launch_deps(monkeypatch, tmp_path)
-
-        first = self._invoke(app_module, ["launch"])
-        assert first.exit_code == 0
-        after_first = (opencode / ".env").read_text()
-
-        second = self._invoke(app_module, ["launch"])
-
-        assert second.exit_code == 0
-        assert (opencode / ".env").read_text() == after_first
-        assert "Migrated renamed keys" not in second.output
-
-    def test_launch_without_legacy_keys_is_noop(self, tmp_path: Path, monkeypatch):
-        """launch with only current keys does not rewrite .env or print a notice."""
-        opencode = self._setup_repo(tmp_path, "REMOTE_USER=root\n")
-        app_module = self._patch_launch_deps(monkeypatch, tmp_path)
-
-        result = self._invoke(app_module, ["launch"])
-
-        assert result.exit_code == 0
-        assert (opencode / ".env").read_text() == "REMOTE_USER=root\n"
-        assert "Migrated renamed keys" not in result.output

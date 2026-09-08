@@ -217,3 +217,13 @@ class TestEnvTemplateFragment:
         assert "OCF_AGENT_TOOL=qwen" in fragment
         assert "OCF_GLOBAL_CONFIG_PATH={{OCF_GLOBAL_CONFIG_PATH}}" in fragment
         assert "OCF_GLOBAL_AUTH_PATH" not in fragment
+
+
+class TestGlobalEnvRelpath:
+    """Tests for the per-tool global .env relpath."""
+
+    def test_opencode_global_env_relpath(self):
+        assert OPENCODE_TOOL_SPEC.global_env_relpath == ("opencode", ".env")
+
+    def test_qwen_global_env_relpath(self):
+        assert QWEN_TOOL_SPEC.global_env_relpath == (".qwen", ".env")

@@ -1,14 +1,13 @@
-"""Agent config layers: env migration, global-layer discovery, stubs.
+"""Agent config layers: global-layer discovery, stubs, project layers.
 
 Implements the layer wiring global < framework < project for each tool:
 resolves the global layer (host config file/dir, with framework stub
-fallback), generates the qwen project layer (only-if-missing), and
-migrates renamed keys in ``.opencode/.env`` during reconciliation.
+fallback) and generates the qwen project layer (only-if-missing).
 """
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Optional
 
 from opencode_framework.config import (
     get_local_config_root,
@@ -17,14 +16,6 @@ from opencode_framework.config import (
 )
 
 from .registry import ToolSpec
-
-ENV_RENAMES: Dict[str, str] = {
-    "OPENCODE_VERSION": "OCF_AGENT_VERSION",
-    "OCF_LOCAL_GLOBAL_CONFIG_PATH": "OCF_GLOBAL_CONFIG_PATH",
-    "OCF_LOCAL_GLOBAL_AUTH_PATH": "OCF_GLOBAL_AUTH_PATH",
-    "PLAN_MAX_BEFORE_RESPONSE_STEPS": "OCF_PLAN_MAX_BEFORE_RESPONSE_STEPS",
-    "BUILD_MAX_BEFORE_RESPONSE_STEPS": "OCF_BUILD_MAX_BEFORE_RESPONSE_STEPS",
-}
 
 QWEN_PROJECT_SETTINGS_STUB = "{}\n"
 
@@ -38,52 +29,6 @@ class GlobalLayer:
     auth_found: bool
     auth_path: Optional[str]
     stub_path: Optional[str]
-
-
-def migrate_env_content(content: str) -> Tuple[str, List[str]]:
-    """Rename migrated keys in .env content, preserving everything else.
-
-    Rewrites only ``KEY=`` lines whose key is in ENV_RENAMES; values,
-    order, comments, blank lines and user keys are preserved verbatim.
-    Idempotent: new names are not rename sources.
-
-    Args:
-        content: raw .env file content.
-
-    Returns:
-        Tuple of (migrated_content, list_of_renamed_old_keys).
-    """
-    migrated: List[str] = []
-    lines: List[str] = []
-    for line in content.splitlines(keepends=True):
-        key_part, sep, value_part = line.partition("=")
-        if sep and key_part.strip() in ENV_RENAMES:
-            old_key = key_part.strip()
-            indent = key_part[: len(key_part) - len(key_part.lstrip())]
-            lines.append(f"{indent}{ENV_RENAMES[old_key]}={value_part}")
-            migrated.append(old_key)
-        else:
-            lines.append(line)
-    return "".join(lines), migrated
-
-
-def migrate_env_file(path: Path) -> List[str]:
-    """Apply ENV_RENAMES to a .env file in place.
-
-    The file is written back only when at least one key changed; keys
-    are renamed in place and the layout is never reordered.
-
-    Args:
-        path: path to the .env file.
-
-    Returns:
-        List of renamed old keys (empty when nothing changed).
-    """
-    content = path.read_text()
-    migrated_content, migrated = migrate_env_content(content)
-    if migrated:
-        path.write_text(migrated_content)
-    return migrated
 
 
 def expected_global_path(
@@ -101,6 +46,25 @@ def expected_global_path(
     else:
         base = home if home is not None else get_local_home()
     return base.joinpath(*spec.global_config_relpath)
+
+
+def expected_global_env_path(
+    spec: ToolSpec,
+    config_root: Optional[Path] = None,
+    home: Optional[Path] = None,
+) -> Path:
+    """Expected host path of a tool's global .env file.
+
+    Follows the spec's global_config_base and global_env_relpath
+    (e.g. ~/.config/opencode/.env for opencode, ~/.qwen/.env for
+    qwen); injectable roots override the host defaults (XDG-aware)
+    for testing.
+    """
+    if spec.global_config_base == "config_root":
+        base = config_root if config_root is not None else get_local_config_root()
+    else:
+        base = home if home is not None else get_local_home()
+    return base.joinpath(*spec.global_env_relpath)
 
 
 def discover_global_layer(
