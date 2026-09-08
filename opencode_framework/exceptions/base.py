@@ -1,5 +1,7 @@
 """Base exception hierarchy."""
 
+from typing import Optional
+
 
 class FrameworkError(Exception):
     """Base exception for the OpenCode Framework.
@@ -10,8 +12,8 @@ class FrameworkError(Exception):
     def __init__(
         self,
         message: str,
-        remediation: str = None,
-        context: dict = None,
+        remediation: Optional[str] = None,
+        context: Optional[dict] = None,
     ):
         """Initialize framework error.
 

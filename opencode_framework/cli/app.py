@@ -7,42 +7,48 @@ import shutil
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, NoReturn, Optional, Tuple
 
 import typer
 from dotenv import dotenv_values
 
 from opencode_framework import __version__
+from opencode_framework.agent.discovery import (
+    AGENT_TOOL_KEY,
+    ConfigLocation,
+    discover_configs,
+)
 from opencode_framework.agent.layers import (
     discover_global_layer,
     expected_global_env_path,
     expected_global_path,
 )
 from opencode_framework.agent.registry import (
+    DEFAULT_TOOL,
     QWEN_TOOL_SPEC,
+    SUPPORTED_TOOLS,
     ToolSpec,
-    get_tool_spec,
 )
 from opencode_framework.config import (
     discover_global_settings,
     get_config_root,
     get_local_data_home,
 )
-from opencode_framework.exceptions import PortAllocationError, ValidationError
+from opencode_framework.exceptions import PortAllocationError
 from opencode_framework.generators import GenerationOrchestrator
 from opencode_framework.generators.documentation import DocumentationGenerator
 from opencode_framework.git_ops import (
+    get_current_branch,
     is_worktree,
     remove_worktree,
     setup_opencode_worktree,
 )
 from opencode_framework.preflight import (
     get_repo_root,
-    opencode_directory_exists,
     run_preflight_checks,
 )
 from opencode_framework.sandbox.compose import ComposeGenerator
-from opencode_framework.sandbox.features import update_features
+from opencode_framework.sandbox.features import is_interactive, update_features
 from opencode_framework.sandbox.net import find_free_port
 from opencode_framework.sandbox.runtime import (
     EnvError,
@@ -102,97 +108,251 @@ def _print_version_info() -> None:
         typer.echo(f"expected qwen global settings path: {expected_qwen_path}")
 
 
-def _peek_agent_tool(
-    env_path: Path,
+def _peek_env_agent_tool(
     env_file: Optional[Path] = None,
     env_vars: Optional[List[str]] = None,
 ) -> str:
-    """Peek at OCF_AGENT_TOOL without full env loading.
+    """Peek at OCF_AGENT_TOOL from CLI env overrides only.
 
     Sources are consulted in the precedence the launcher merges them
-    (highest first): CLI variables, override file, project .env. Parse
-    failures are tolerated here — the real loader reports them later.
+    (highest first): CLI variables, override file. The config directory's
+    .env is deliberately not consulted — launch selects the directory via
+    discovery, which cross-checks OCF_AGENT_TOOL against the directory
+    itself. Parse failures are tolerated here; the real loader reports
+    them later.
 
     Args:
-        env_path: project .opencode/.env path (lowest peek priority).
         env_file: override file from --env-file, when given.
         env_vars: KEY=VALUE strings from -e/--env, when given.
 
     Returns:
         The first non-empty OCF_AGENT_TOOL value, or "" when absent
-        everywhere.
+        from both sources.
     """
     if env_vars:
         try:
             cli_env = parse_cli_env_vars(env_vars)
         except ValueError:
             cli_env = {}  # reported later by load_env_with_overrides
-        value = (cli_env.get("OCF_AGENT_TOOL") or "").strip()
+        value = (cli_env.get(AGENT_TOOL_KEY) or "").strip()
         if value:
             return value
 
-    for source in (env_file, env_path):
-        if source is None or not source.exists():
-            continue
-        try:
-            parsed = dotenv_values(source, interpolate=False)
-        except Exception:
-            continue  # reported later by load_env_with_overrides
-        value = (parsed.get("OCF_AGENT_TOOL") or "").strip()
-        if value:
-            return value
-    return ""
+    if env_file is None or not env_file.exists():
+        return ""
+    try:
+        parsed = dotenv_values(env_file, interpolate=False)
+    except Exception:
+        return ""  # reported later by load_env_with_overrides
+    return (parsed.get(AGENT_TOOL_KEY) or "").strip()
 
 
-def _resolve_agent_tool(
-    env_path: Path,
-    env_file: Optional[Path] = None,
-    env_vars: Optional[List[str]] = None,
-) -> ToolSpec:
-    """Resolve the agent ToolSpec from OCF_AGENT_TOOL.
+def _describe_env_mismatch(loc: ConfigLocation) -> str:
+    """One-line explanation of a config directory contradicted by its .env."""
+    if loc.env_tool:
+        return (
+            f"{loc.spec.config_dirname}/.env sets "
+            f"{AGENT_TOOL_KEY}={loc.env_tool!r}, but "
+            f"{loc.spec.config_dirname}/ is the {loc.spec.name} config directory"
+        )
+    return (
+        f"{loc.spec.config_dirname}/.env does not set {AGENT_TOOL_KEY}, but "
+        f"{loc.spec.config_dirname}/ is the {loc.spec.name} config directory"
+    )
 
-    The key is required: every generated .opencode/.env carries it, so
-    absence means stale or hand-edited configuration. Sources in
-    precedence order: -e/--env > --env-file > .opencode/.env.
+
+def _no_such_config_exit(repo_root: Path, spec: ToolSpec) -> NoReturn:
+    """Exit when the requested tool has no usable config directory here."""
+    if (repo_root / spec.config_dirname).is_dir():
+        typer.secho(
+            f"Error: {spec.config_dirname}/ exists but is not a framework "
+            "config directory (missing .env).",
+            fg=typer.colors.RED,
+            err=True,
+        )
+    else:
+        typer.secho(
+            f"Error: no {spec.config_dirname}/ framework config directory "
+            f"for tool '{spec.name}' in this repository.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+    typer.secho(
+        f"Remediation: run 'ocframework init --tool {spec.name}' "
+        "(add --force if the directory already exists).",
+        fg=typer.colors.YELLOW,
+        err=True,
+    )
+    raise typer.Exit(1)
+
+
+def _invalid_config_exit(loc: ConfigLocation) -> NoReturn:
+    """Exit on a legacy/hand-edited config; no silent migration."""
+    typer.secho(f"Error: {_describe_env_mismatch(loc)}.", fg=typer.colors.RED, err=True)
+    typer.secho(
+        f"Remediation: run 'ocframework init --force --tool {loc.spec.name}' "
+        "to regenerate the configuration.",
+        fg=typer.colors.YELLOW,
+        err=True,
+    )
+    raise typer.Exit(1)
+
+
+def _require_location(
+    repo_root: Path,
+    locations: List[ConfigLocation],
+    spec: ToolSpec,
+) -> ConfigLocation:
+    """Return the discovered location for spec, exiting when unusable."""
+    loc = next((item for item in locations if item.spec.name == spec.name), None)
+    if loc is None:
+        _no_such_config_exit(repo_root, spec)
+    if not loc.valid:
+        _invalid_config_exit(loc)
+    return loc
+
+
+def _select_launch_target(
+    repo_root: Path,
+    tool: Optional[str],
+    env_file: Optional[Path],
+    env_vars: Optional[List[str]],
+) -> Tuple[Path, ToolSpec]:
+    """Select the config worktree and ToolSpec to launch.
+
+    Precedence: the --tool option wins; otherwise an OCF_AGENT_TOOL
+    override from -e/--env or --env-file; otherwise the single valid
+    config directory is auto-selected (prompted when several exist).
+    Config directories whose .env contradicts the tool their name implies
+    are never launched; they get a re-init remediation instead.
 
     Args:
-        env_path: project .opencode/.env path.
+        repo_root: project repository root.
+        tool: --tool option value, when given.
         env_file: override file from --env-file, when given.
         env_vars: KEY=VALUE strings from -e/--env, when given.
 
     Returns:
-        The resolved ToolSpec.
+        (config_dir, spec) of the selected config worktree.
 
     Raises:
-        typer.Exit: When OCF_AGENT_TOOL is absent/empty or names an
-            unsupported tool.
+        typer.Exit: when no usable config directory matches the request.
     """
-    name = _peek_agent_tool(env_path, env_file, env_vars)
-    if not name:
-        typer.secho(
-            "Error: OCF_AGENT_TOOL is not set "
-            "(searched -e/--env, --env-file, .opencode/.env).",
-            fg=typer.colors.RED,
-            err=True,
+    locations = discover_configs(repo_root)
+
+    requested: Optional[ToolSpec] = None
+    if tool is not None:
+        requested = resolve_tool_or_exit(tool)
+    else:
+        override = _peek_env_agent_tool(env_file, env_vars)
+        if override:
+            requested = resolve_tool_or_exit(
+                override,
+                hint=f"Fix {AGENT_TOOL_KEY} in -e/--env or the --env-file override.",
+            )
+
+    if requested is not None:
+        loc = _require_location(repo_root, locations, requested)
+        if tool is not None:
+            override = _peek_env_agent_tool(env_file, env_vars)
+            if override and override != requested.name:
+                typer.secho(
+                    f"Warning: {AGENT_TOOL_KEY}={override!r} from -e/--env or "
+                    f"--env-file overrides the selected tool '{requested.name}' "
+                    "inside the container environment.",
+                    fg=typer.colors.YELLOW,
+                )
+        typer.echo(f"Using {requested.name} config at {requested.config_dirname}/")
+        return loc.config_dir, requested
+
+    valid = [loc for loc in locations if loc.valid]
+    invalid = [loc for loc in locations if not loc.valid]
+
+    if len(valid) == 1:
+        loc = valid[0]
+        typer.echo(f"Using {loc.spec.name} config at {loc.spec.config_dirname}/")
+        return loc.config_dir, loc.spec
+
+    if valid:
+        if not is_interactive():
+            typer.secho(
+                "Error: multiple framework config directories found: "
+                + ", ".join(loc.spec.config_dirname for loc in valid),
+                fg=typer.colors.RED,
+                err=True,
+            )
+            typer.secho(
+                "Remediation: pass --tool (opencode | qwen) to choose one.",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+            raise typer.Exit(1)
+        typer.echo("Multiple framework config directories found:")
+        for loc in valid:
+            branch = get_current_branch(cwd=loc.config_dir)
+            suffix = f" ({branch})" if branch else ""
+            typer.echo(f"  {loc.spec.name} — {loc.spec.config_dirname}/{suffix}")
+        name = typer.prompt(
+            "Agent tool to launch", default=valid[0].spec.name, type=str
         )
+        spec = resolve_tool_or_exit(name, hint="Choose one of the listed tools.")
+        loc = _require_location(repo_root, locations, spec)
+        typer.echo(f"Using {spec.name} config at {spec.config_dirname}/")
+        return loc.config_dir, spec
+
+    if invalid:
+        if len(invalid) == 1:
+            _invalid_config_exit(invalid[0])
+        for loc in invalid:
+            typer.secho(
+                f"Error: {_describe_env_mismatch(loc)}.",
+                fg=typer.colors.RED,
+                err=True,
+            )
         typer.secho(
-            "Remediation: run 'ocframework init --force' to regenerate the "
-            "configuration, or set OCF_AGENT_TOOL (opencode | qwen).",
+            "Remediation: run 'ocframework init --force --tool <tool>' to "
+            "regenerate a config directory.",
             fg=typer.colors.YELLOW,
             err=True,
         )
         raise typer.Exit(1)
-    try:
-        return get_tool_spec(name)
-    except ValidationError as e:
-        typer.secho(f"Error: {e.message}", fg=typer.colors.RED, err=True)
-        typer.secho(f"Remediation: {e.remediation}", fg=typer.colors.YELLOW, err=True)
+
+    unqualified = sorted(
+        spec.config_dirname
+        for spec in SUPPORTED_TOOLS.values()
+        if (repo_root / spec.config_dirname).is_dir()
+    )
+    if unqualified:
+        for dirname in unqualified:
+            typer.secho(
+                f"Error: {dirname}/ exists but is not a framework config "
+                "directory (missing .env).",
+                fg=typer.colors.RED,
+                err=True,
+            )
         typer.secho(
-            "Fix OCF_AGENT_TOOL in .opencode/.env or re-run 'ocframework init'.",
+            "Remediation: run 'ocframework init --force' to generate the missing .env.",
             fg=typer.colors.YELLOW,
             err=True,
         )
-        raise typer.Exit(1) from None
+        raise typer.Exit(1)
+
+    searched = ", ".join(
+        spec.config_dirname
+        for spec in sorted(SUPPORTED_TOOLS.values(), key=lambda s: s.name)
+    )
+    typer.secho(
+        f"Error: no framework config directory found in this repository "
+        f"(searched {searched}).",
+        fg=typer.colors.RED,
+        err=True,
+    )
+    typer.secho(
+        "Remediation: run 'ocframework init' to create one.",
+        fg=typer.colors.YELLOW,
+        err=True,
+    )
+    raise typer.Exit(1)
 
 
 def _check_framework_repo() -> Optional[str]:
@@ -242,7 +402,7 @@ def init(
         False,
         "--force",
         "-f",
-        help="Force regeneration by backing up existing .opencode/",
+        help="Force regeneration by backing up the existing config worktree",
     ),
     tool: Optional[str] = typer.Option(
         None,
@@ -252,16 +412,21 @@ def init(
 ) -> None:
     """Initialize the framework in a Git repository.
 
-    Creates a .opencode/ directory with configuration for the selected
-    agent CLI tool (opencode or qwen).
+    Creates the selected agent CLI tool's config worktree (.opencode/ for
+    opencode, .qwen/ for qwen) with the framework configuration.
     """
     repo_path = Path.cwd()
 
-    if tool is not None:
-        resolve_tool_or_exit(tool)
+    if tool is None:
+        tool = typer.prompt(
+            "\nAgent CLI tool (opencode | qwen)",
+            default=DEFAULT_TOOL,
+            type=str,
+        )
+    spec = resolve_tool_or_exit(tool)
 
     typer.echo("Running preflight checks...")
-    result = run_preflight_checks(repo_path, force=force)
+    result = run_preflight_checks(repo_path, force=force, agent_tool=spec.name)
 
     if not result.success:
         typer.secho(f"Preflight failed: {result.error}", fg=typer.colors.RED, err=True)
@@ -271,19 +436,19 @@ def init(
 
     typer.secho("Preflight checks passed.", fg=typer.colors.GREEN)
 
-    opencode_dir = repo_path / ".opencode"
-    backup_path = None
+    config_dir = repo_path / spec.config_dirname
+    backup_path: Optional[Path] = None
 
-    if force and opencode_directory_exists(repo_path):
-        typer.echo("Backing up existing .opencode/...")
-        if is_worktree(opencode_dir):
+    if force and config_dir.exists():
+        typer.echo(f"Backing up existing {spec.config_dirname}/...")
+        if is_worktree(config_dir):
             timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-            backup_path = repo_path / f".opencode.backup-{timestamp}"
+            backup_path = repo_path / f"{spec.config_dirname}.backup-{timestamp}"
 
-            shutil.copytree(opencode_dir, backup_path, symlinks=True)
+            shutil.copytree(config_dir, backup_path, symlinks=True)
             typer.echo(f"Backup created at: {backup_path}")
 
-            if not remove_worktree(opencode_dir, cwd=repo_path):
+            if not remove_worktree(config_dir, cwd=repo_path):
                 typer.secho(
                     "Failed to remove existing worktree",
                     fg=typer.colors.RED,
@@ -291,16 +456,18 @@ def init(
                 )
                 raise typer.Exit(1)
         else:
-            backup_path = GenerationOrchestrator.backup_existing_opencode(repo_path)
+            backup_path = GenerationOrchestrator.backup_existing_config_dir(
+                repo_path, spec.name
+            )
             if backup_path:
                 typer.echo(f"Backup created at: {backup_path}")
 
     typer.echo("Running setup wizard...")
-    wizard_result = run_wizard(repo_path, result)
+    wizard_result = run_wizard(repo_path, result, agent_tool=spec.name)
 
     if wizard_result.create_global_config:
-        spec = resolve_tool_or_exit(wizard_result.agent_tool)
-        global_config_dir = expected_global_path(spec)
+        global_spec = resolve_tool_or_exit(wizard_result.agent_tool)
+        global_config_dir = expected_global_path(global_spec)
         typer.echo(f"Creating global config directory: {global_config_dir}")
         try:
             global_config_dir.mkdir(parents=True, exist_ok=True)
@@ -311,13 +478,13 @@ def init(
                 fg=typer.colors.RED,
                 err=True,
             )
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
 
     typer.echo(f"Setting up worktree on branch '{wizard_result.branch_name}'...")
     worktree_result = setup_opencode_worktree(
         repo_root=repo_path,
         branch_name=wizard_result.branch_name,
-        opencode_dir=opencode_dir,
+        config_dir=config_dir,
     )
 
     if not worktree_result.success:
@@ -328,11 +495,11 @@ def init(
         )
         raise typer.Exit(1)
 
-    typer.echo("Generating .opencode/ directory...")
+    typer.echo(f"Generating {spec.config_dirname}/ directory...")
     orchestrator = GenerationOrchestrator()
     orchestrator.generate(repo_path, wizard_result)
 
-    commands = DocumentationGenerator._get_launch_commands()
+    commands = DocumentationGenerator._get_launch_commands(wizard_result.agent_tool)
 
     typer.secho("Initialization complete!", fg=typer.colors.GREEN)
     typer.echo("\nCommands:")
@@ -641,14 +808,14 @@ def _remove_container(container_name: str, subprocess_env: dict) -> bool:
         return False
 
 
-def _build_image(opencode_dir: Path, repo_root: Path, subprocess_env: dict) -> str:
+def _build_image(config_dir: Path, repo_root: Path, subprocess_env: dict) -> str:
     # devcontainer build does not call initializeCommand https://github.com/devcontainers/cli/issues/190
     build_cmd = [
         "devcontainer",
         "up",
         "--remove-existing-container",
         "--config",
-        str(opencode_dir / "devcontainer.json"),
+        str(config_dir / "devcontainer.json"),
         "--workspace-folder",
         str(repo_root),
     ]
@@ -696,7 +863,7 @@ def launch(
         "--docker-context",
         help="Docker context to use",
     ),
-    env_file: Optional[Path] = typer.Option(
+    env_file: Optional[Path] = typer.Option(  # noqa: B008
         None,
         "--env-file",
         help="Path to environment override file (.env format)",
@@ -704,11 +871,16 @@ def launch(
         file_okay=True,
         dir_okay=False,
     ),
-    env_vars: Optional[List[str]] = typer.Option(
+    env_vars: Optional[List[str]] = typer.Option(  # noqa: B008
         None,
         "-e",
         "--env",
         help="Set environment variable (KEY=VALUE). Can be used multiple times.",
+    ),
+    tool: Optional[str] = typer.Option(
+        None,
+        "--tool",
+        help="Agent tool to launch (opencode | qwen); auto-detected when omitted",
     ),
     rebuild: bool = typer.Option(
         False,
@@ -725,14 +897,15 @@ def launch(
     """Launch the configured agent (opencode or qwen) in a container.
 
     Builds the devcontainer image (if needed) and runs the agent using
-    docker compose. The agent tool is read from OCF_AGENT_TOOL, which is
-    required; it is searched in -e/--env, then --env-file, then
-    .opencode/.env.
+    docker compose. The config worktree is chosen by --tool when given,
+    else by an OCF_AGENT_TOOL override from -e/--env or --env-file, else
+    by auto-detecting the single valid config directory (a prompt is
+    shown when several exist).
 
     Environment variables are loaded with precedence (lowest to highest):
     1. Global env file (~/.config/opencode/.env for opencode, ~/.qwen/.env
        for qwen; auto-loaded if present)
-    2. Base .opencode/.env file
+    2. Base <config-dir>/.env file
     3. Override file (--env-file)
     4. Command-line variables (-e KEY=VALUE)
 
@@ -746,6 +919,7 @@ def launch(
 
     Examples:
         ocframework launch
+        ocframework launch --tool qwen
         ocframework launch --rebuild
         ocframework launch --env-file prod.env
         ocframework launch -e API_KEY=$HOME/.key -e DEBUG=true
@@ -754,21 +928,32 @@ def launch(
     """
     cwd = Path.cwd()
 
-    valid, error = validate_runtime_context(cwd)
+    repo_root = get_repo_root(cwd)
+    if repo_root is None:
+        typer.secho(
+            "Error: Current directory is not inside a Git working tree",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    if repo_root != cwd.resolve():
+        typer.secho(
+            "Error: Current directory is not the repository root. "
+            f"Run from: {repo_root}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    config_dir, spec = _select_launch_target(repo_root, tool, env_file, env_vars)
+
+    valid, error = validate_runtime_context(cwd, spec.config_dirname)
     if not valid:
         typer.secho(f"Error: {error}", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
 
-    repo_root = get_repo_root(cwd)
-    if repo_root is None:
-        typer.secho(
-            "Error: Could not determine repository root", fg=typer.colors.RED, err=True
-        )
-        raise typer.Exit(1)
-
-    env_path = repo_root / ".opencode" / ".env"
-
-    spec = _resolve_agent_tool(env_path, env_file, env_vars)
+    env_path = config_dir / ".env"
     global_env_path = expected_global_env_path(spec)
     warnings: List[str] = []
 
@@ -782,13 +967,13 @@ def launch(
         )
     except EnvError as e:
         typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     except FileNotFoundError as e:
         typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     except Exception as e:
         typer.secho(f"Error loading environment: {e}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     # Print any warnings (e.g., global env file failed to parse)
     for warning in warnings:
@@ -796,8 +981,7 @@ def launch(
 
     subprocess_env = build_docker_env(final_env, docker_context)
 
-    opencode_dir = repo_root / ".opencode"
-    compose_path = opencode_dir / "docker-compose.yaml"
+    compose_path = config_dir / "docker-compose.yaml"
 
     if not compose_path.exists():
         typer.secho(
@@ -809,24 +993,24 @@ def launch(
 
     image_id = None
 
-    if force and remove_image_id(opencode_dir):
+    if force and remove_image_id(config_dir):
         typer.echo("Removed cached image ID; image will be rebuilt.")
 
     if rebuild:
-        if update_features(opencode_dir, repo_root.name):
+        if update_features(config_dir, repo_root.name, spec.name):
             typer.echo("Feature configuration changed; rebuilding image...")
         else:
             typer.echo("Building devcontainer image (--rebuild specified)...")
-        image_id = _build_image(opencode_dir, repo_root, subprocess_env)
+        image_id = _build_image(config_dir, repo_root, subprocess_env)
     else:
-        image_id = load_image_id(opencode_dir)
+        image_id = load_image_id(config_dir)
         if image_id:
             typer.echo(f"Using existing image: {image_id}")
         else:
             typer.echo("Building devcontainer image (no cached image ID found)...")
-            image_id = _build_image(opencode_dir, repo_root, subprocess_env)
+            image_id = _build_image(config_dir, repo_root, subprocess_env)
 
-    save_image_id(opencode_dir, image_id)
+    save_image_id(config_dir, image_id)
 
     subprocess_env["OCF_IMAGE_ID"] = image_id
     subprocess_env["PWD"] = str(repo_root)
@@ -863,8 +1047,9 @@ def launch(
             )
             attach_rc = attach_result.returncode
             if attach_rc < 128 and attach_rc != 0:
-                # Attach failure (not a signal). 128+N = killed by signal N (e.g. 130 = SIGINT/Ctrl+C),
-                # which is an intentional interrupt, not a failure.
+                # Attach failure (not a signal). 128+N = killed by signal N
+                # (e.g. 130 = SIGINT/Ctrl+C), which is an intentional interrupt,
+                # not a failure.
                 typer.secho(
                     f"Failed to attach to container '{container_name}' "
                     f"(exit code {attach_rc}).",
@@ -882,7 +1067,8 @@ def launch(
             # Stopped container (can't attach) or --force on any existing
             prefix = "Force-removing" if force else "Found stopped"
             typer.secho(
-                f"{prefix} container '{container_name}' (status: {status}). Removing...",
+                f"{prefix} container '{container_name}' "
+                f"(status: {status}). Removing...",
                 fg=typer.colors.YELLOW,
             )
             if _remove_container(container_name, subprocess_env):
@@ -955,7 +1141,7 @@ def launch(
             fg=typer.colors.YELLOW,
             err=True,
         )
-        raise typer.Exit(130)  # 130 is standard exit code for SIGINT
+        raise typer.Exit(130) from None  # 130 is standard exit code for SIGINT
     except Exception:
         # Re-raise any other exception
         raise

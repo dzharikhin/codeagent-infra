@@ -29,17 +29,17 @@ def _stub_reference(spec: ToolSpec, stub_path: Optional[str]) -> Optional[str]:
 
 
 class ConfigFilesGenerator(FileGenerator):
-    """Generates .opencode/.env and .opencode/.gitignore files."""
+    """Generates the config worktree's .env and .gitignore files."""
 
     def generate(self, ctx: GenerationContext) -> None:
         """Generate all configuration files."""
         self._generate_env_file(ctx)
         self._generate_gitignore(ctx)
-        ensure_project_layer(get_tool_spec(ctx.agent_tool), ctx.repo_root)
+        ensure_project_layer(get_tool_spec(ctx.agent_tool), ctx.config_dir)
 
     @staticmethod
     def _generate_env_file(ctx: GenerationContext) -> None:
-        """Generate .opencode/.env from template.
+        """Generate the config worktree's .env from template.
 
         Template contains defaults with placeholders; global-layer paths
         are resolved per the tool spec (dir + auth for opencode, settings
@@ -70,12 +70,12 @@ class ConfigFilesGenerator(FileGenerator):
         if ctx.editor_choice != "none":
             env_content += f"\nEDITOR={ctx.editor_choice}"
 
-        env_path = ctx.opencode_dir / ".env"
+        env_path = ctx.config_dir / ".env"
         env_path.write_text(env_content)
 
     @staticmethod
     def _generate_gitignore(ctx: GenerationContext) -> None:
-        """Generate .opencode/.gitignore."""
+        """Generate the config worktree's .gitignore."""
         gitignore_content = """# Runtime data - not intended for versioning
 runtime_data/
 
@@ -87,5 +87,5 @@ node_modules/
 *.local.json
 """
 
-        gitignore_path = ctx.opencode_dir / ".gitignore"
+        gitignore_path = ctx.config_dir / ".gitignore"
         gitignore_path.write_text(gitignore_content)

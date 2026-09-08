@@ -38,7 +38,7 @@ opencode_framework/
 │   ├── config.py        # Configuration discovery
 │   └── git.py           # Git operations
 ├── exceptions/          # Custom exception hierarchy
-├── generators/          # Shared generators/assemblers for .opencode/ (ctx, templates, env, docs)
+├── generators/          # Shared generators/assemblers for the active tool's config dir (ctx, templates, env, docs)
 ├── models/              # Data models (results, etc.)
 ├── services/            # Validation services
 ├── config.py            # Global settings, framework validation
@@ -96,7 +96,7 @@ from opencode_framework.exceptions import FrameworkError
 def run_command(args: List[str], cwd: Optional[Path] = None) -> GitResult:
     ...
 
-def validate_runtime_context(cwd: Path) -> Tuple[bool, str]:
+def validate_runtime_context(cwd: Path, config_dirname: str) -> Tuple[bool, str]:
     ...
 ```
 
@@ -133,14 +133,16 @@ class PreflightResult:
 Use Google-style docstrings for modules, classes, and public functions:
 
 ```python
-def ensure_qwen_project_layer(repo_root: Path) -> Optional[Path]:
-    """Create the qwen project layer (``.qwen/settings.json``) if absent.
+def ensure_qwen_project_layer(config_dir: Path) -> Optional[Path]:
+    """Create the qwen project layer (``<config_dir>/settings.json``) if absent.
 
-    Only-if-missing by design: an existing file is never overwritten,
-    so ``init --force`` preserves user edits.
+    The qwen config worktree root is the native ``.qwen/`` directory, so
+    the project settings file sits at the worktree root. Only-if-missing
+    by design: an existing file is never overwritten, so ``init --force``
+    preserves user edits.
 
     Args:
-        repo_root: project repository root.
+        config_dir: qwen config worktree directory (``.qwen/``).
 
     Returns:
         Path to the created settings file, or None when it already
@@ -245,8 +247,9 @@ from opencode_framework.generators.base import FileGenerator, GenerationContext
 
 class DevcontainerGenerator(FileGenerator):
     def generate(self, ctx: GenerationContext) -> None:
-        """Generate devcontainer.json in .opencode/."""
-        # Access: ctx.repo_root, ctx.opencode_dir, ctx.branch_name, etc.
+        """Generate devcontainer.json in the active tool's config dir."""
+        # Access: ctx.repo_root, ctx.config_dir, ctx.agent_tool,
+        # ctx.branch_name, etc.
         ...
 ```
 
@@ -285,10 +288,16 @@ poetry run pytest            # Run tests
 ### CLI Contract
 
 - `ocframework init [--tool opencode|qwen]` - Initialize framework in a Git repository
-- `ocframework launch` - Launch container with the configured agent
+- `ocframework launch [--tool opencode|qwen]` - Launch container with the configured agent
 - `ocframework --version` - Print version and configuration status
 
 All commands require a valid framework repository (installed via `pipx install -e <path>`).
+
+Launch target selection precedence: `--tool` flag > auto-detect (exactly one
+valid config dir) > interactive prompt (multiple valid, interactive TTY);
+non-interactive with multiple valid configs is a hard error. Pass-through
+args after `--` go to the agent binary; generated documentation commands
+include `--tool <name>` (e.g. `ocframework launch --tool qwen -- debug config`).
 
 ### init Preconditions
 
@@ -339,15 +348,32 @@ Rule: variables shared across parts/tools may be unprefixed; part- or tool-speci
 | agent defaults via env | `OCF_MAIN_MODEL`, `OCF_BUILD_MODEL`, `OCF_SMALL_MODEL`, `OCF_PLAN_MAX_BEFORE_RESPONSE_STEPS`, `OCF_BUILD_MAX_BEFORE_RESPONSE_STEPS` |
 | tool-native (agent's own contract, never OCF-prefixed) | `OPENCODE_*`, `QWEN_*` |
 
-Renamed keys are not migrated: stale `.opencode/.env` files regenerate via
-`ocframework init --force` (existing directory backed up first).
+Renamed keys are not migrated: a `.env` whose `OCF_AGENT_TOOL` is missing or
+contradicts its config directory (`.opencode/` = opencode, `.qwen/` = qwen) is
+a hard launch error with a re-init remediation — regenerate via
+`ocframework init --force --tool <tool>` (existing directory backed up first).
 
 ### Git Worktree Model
 
-- `.opencode/` is a nested linked Git worktree on a separate branch
-- Branch name suggested: `codeagent-{username}`
+- The config worktree lives in a per-tool native dir: `.opencode/`
+  (opencode) or `.qwen/` (qwen) — a nested linked Git worktree on a
+  separate branch
+- Branch name suggested: `codeagent-{username}` (opencode) /
+  `codeagent-{username}-qwen` (other tools; git refuses to check out one
+  branch in two worktrees, hence the suffix)
 - If branch exists, reuse it; otherwise create orphan branch
 - Framework never auto-commits; developer controls commits
+
+### Per-Tool Naming
+
+- Containers: `ocf_<repo>_<tool>` (e.g. `ocf_myrepo_qwen`)
+- Managed named volumes: `{kind}-{repo}-{tool}` (e.g. `venv-myrepo-qwen`,
+  `m2-myrepo-qwen`, `gradle-myrepo-qwen`, `docker-myrepo-qwen`) via
+  `managed_volume_name(prefix, repo_name, tool)` in `agent/registry.py` —
+  two agents can run concurrently on one repo without sharing mutable state
+- Containers created before the per-tool naming upgrade (`ocf_<repo>`) are
+  not auto-attached by `launch`; remove them (`docker rm -f ocf_<repo>`)
+  or run `launch --force` once
 
 ### Security Model
 
@@ -357,7 +383,7 @@ Read-only mounts:
 - qwen framework settings at `/home/$REMOTE_USER/.qwen/settings.json`
 
 Read-write mounts:
-- `.opencode/runtime_data/`
+- `<config_dir>/runtime_data/` (`.opencode/runtime_data/` or `.qwen/runtime_data/`)
 - Project source repository (including `.qwen/` for qwen)
 
 qwen has no auth file: API keys (`DASHSCOPE_API_KEY`, `OPENAI_API_KEY` + `OPENAI_BASE_URL`) are injected via the env layer.
@@ -371,4 +397,4 @@ When the `docker` optional feature is selected during `ocframework init`:
 - The `docker-in-docker:2` devcontainer feature installs Docker CE and `/usr/local/share/docker-init.sh`
 - Docker daemon **starts automatically** on container launch. The container entrypoint runs `/usr/local/share/docker-init.sh` before the agent binary, which starts dockerd with readiness checks.
 - Docker autodetects the storage driver: prefers `overlay2` where supported, falls back to `vfs` in sandboxed environments without overlayfs support.
-- A named volume `docker-<repo>` is mounted at `/var/lib/docker` to persist Docker data across container restarts. If you upgrade the daemon to a version incompatible with this volume, you may need to run `docker volume rm docker-<repo>` to recreate it.
+- A named volume `docker-<repo>-<tool>` is mounted at `/var/lib/docker` to persist Docker data across container restarts. If you upgrade the daemon to a version incompatible with this volume, you may need to run `docker volume rm docker-<repo>-<tool>` to recreate it.

@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from opencode_framework.agent.registry import get_tool_spec
 from opencode_framework.config import discover_global_settings
 from opencode_framework.wizard import WizardResult
 
@@ -14,7 +15,7 @@ from .documentation import DocumentationGenerator
 
 
 class GenerationOrchestrator:
-    """Coordinates the generation of all .opencode/ directory contents."""
+    """Coordinates the generation of the active tool's config worktree."""
 
     def __init__(self):
         """Initialize the orchestrator with all generators."""
@@ -29,20 +30,20 @@ class GenerationOrchestrator:
         self.compose_gen = ComposeGenerator()
 
     def generate(self, repo_root: Path, wizard_result: WizardResult) -> None:
-        """Generate the complete .opencode/ directory structure.
+        """Generate the complete config worktree for the selected tool.
 
         Args:
             repo_root: Root of the repository
             wizard_result: Results from the initialization wizard
         """
-        opencode_dir = repo_root / ".opencode"
+        config_dir = repo_root / get_tool_spec(wizard_result.agent_tool).config_dirname
 
-        if not opencode_dir.exists():
-            opencode_dir.mkdir(parents=True, exist_ok=True)
+        if not config_dir.exists():
+            config_dir.mkdir(parents=True, exist_ok=True)
 
         ctx = GenerationContext(
             repo_root=repo_root,
-            opencode_dir=opencode_dir,
+            config_dir=config_dir,
             branch_name=wizard_result.branch_name,
             optional_features=wizard_result.optional_features,
             editor_choice=wizard_result.editor_choice,
@@ -59,7 +60,7 @@ class GenerationOrchestrator:
         self.docs_gen.generate(ctx)
 
         # Create runtime_data directories
-        runtime_data = opencode_dir / "runtime_data"
+        runtime_data = config_dir / "runtime_data"
         runtime_data.mkdir(exist_ok=True)
         (runtime_data / ".cache").mkdir(exist_ok=True)
         (runtime_data / ".local" / "share").mkdir(parents=True, exist_ok=True)
@@ -69,28 +70,29 @@ class GenerationOrchestrator:
         framework_repo_path = ctx.global_settings.framework_repo_path
         if framework_repo_path:
             nuts_and_bolts_src = Path(framework_repo_path) / "framework-nuts-and-bolts"
-            nuts_and_bolts_link = opencode_dir / "framework-nuts-and-bolts"
+            nuts_and_bolts_link = config_dir / "framework-nuts-and-bolts"
             if nuts_and_bolts_src.is_dir() and not nuts_and_bolts_link.exists():
                 nuts_and_bolts_link.symlink_to(nuts_and_bolts_src)
 
     @staticmethod
-    def backup_existing_opencode(repo_root: Path) -> Optional[Path]:
-        """Backup existing .opencode/ directory.
+    def backup_existing_config_dir(repo_root: Path, agent_tool: str) -> Optional[Path]:
+        """Backup an existing config worktree directory.
 
-        Creates .opencode.backup-<timestamp> in project root.
+        Creates <dirname>.backup-<timestamp> in project root.
 
         Args:
             repo_root: Root of the repository
+            agent_tool: Agent tool name ("opencode" | "qwen")
 
         Returns:
             Path to backup directory, or None if nothing to backup
         """
-        opencode_dir = repo_root / ".opencode"
-        if not opencode_dir.exists():
+        config_dir = repo_root / get_tool_spec(agent_tool).config_dirname
+        if not config_dir.exists():
             return None
 
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        backup_path = repo_root / f".opencode.backup-{timestamp}"
+        backup_path = repo_root / f"{config_dir.name}.backup-{timestamp}"
 
-        shutil.move(str(opencode_dir), str(backup_path))
+        shutil.move(str(config_dir), str(backup_path))
         return backup_path

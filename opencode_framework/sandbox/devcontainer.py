@@ -84,7 +84,7 @@ def evaluate_compatibility(devcontainer_content: dict) -> tuple[bool, Optional[s
 
 
 class DevcontainerGenerator(FileGenerator):
-    """Generates .opencode/devcontainer.json for build configuration."""
+    """Generates devcontainer.json in the tool's config directory."""
 
     PLACEHOLDER_DOCKERFILE_INITIALIZER = "{{DOCKERFILE_INITIALIZER}}"
 
@@ -118,7 +118,7 @@ class DevcontainerGenerator(FileGenerator):
         """Generate devcontainer configuration (build-only)."""
         devcontainer = self._generate_scratch(ctx)
 
-        dc_path = ctx.opencode_dir / "devcontainer.json"
+        dc_path = ctx.config_dir / "devcontainer.json"
         dc_path.write_text(json.dumps(devcontainer, indent=2) + "\n")
 
     @staticmethod
@@ -171,7 +171,8 @@ class DevcontainerGenerator(FileGenerator):
 
         Loads the dockerfile template, injects the tool's install block
         into the {{AGENT_INSTALL}} slot, and formats it as an echo -e
-        command that writes the Dockerfile to .opencode/runtime_data/Dockerfile.
+        command that writes the Dockerfile into the tool's config
+        directory (workspace-relative at initializeCommand runtime).
 
         Args:
             agent_tool: Agent tool name ("opencode" | "qwen")
@@ -189,7 +190,10 @@ class DevcontainerGenerator(FileGenerator):
         else:
             dockerfile_content = dockerfile_content.replace("\n{{AGENT_INSTALL}}", "")
         escaped_content = DevcontainerGenerator._escape_for_echo_e(dockerfile_content)
-        return f'echo -e "{escaped_content}" > .opencode/runtime_data/Dockerfile'
+        return (
+            f'echo -e "{escaped_content}" > '
+            f"{spec.config_dirname}/runtime_data/Dockerfile"
+        )
 
     @staticmethod
     def _reconcile_java_build_tools(
@@ -199,7 +203,8 @@ class DevcontainerGenerator(FileGenerator):
 
         Args:
             features: The features dict (mutated in place)
-            java_build_tools: List of enabled tools (e.g. ["maven"], ["gradle"], ["maven","gradle"])
+            java_build_tools: List of enabled tools (e.g. ["maven"],
+                ["gradle"], ["maven", "gradle"])
         """
         java_url = DevcontainerGenerator.FEATURE_URL_MAP["java"]
         if java_url not in features:

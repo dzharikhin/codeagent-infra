@@ -31,7 +31,7 @@ def _make_generation_context(tmp_path: Path, **kwargs):
     """Create GenerationContext with defaults."""
     defaults = {
         "repo_root": tmp_path,
-        "opencode_dir": tmp_path / ".opencode",
+        "config_dir": tmp_path / ".opencode",
         "branch_name": "codeagent-test",
         "optional_features": [],
         "editor_choice": "none",
@@ -282,17 +282,17 @@ class TestLaunchCommands:
 
     def test_launch_command_is_cli(self):
         """Launch command should use ocframework CLI."""
-        commands = DocumentationGenerator._get_launch_commands()
-        assert commands["launch"] == "ocframework launch"
+        commands = DocumentationGenerator._get_launch_commands("opencode")
+        assert commands["launch"] == "ocframework launch --tool opencode"
 
     def test_debug_command_is_cli(self):
         """Debug command should use ocframework launch with debug subcommand."""
-        commands = DocumentationGenerator._get_launch_commands()
-        assert commands["debug"] == "ocframework launch -- debug config"
+        commands = DocumentationGenerator._get_launch_commands("opencode")
+        assert commands["debug"] == "ocframework launch --tool opencode -- debug config"
 
     def test_shell_command_is_docker_exec(self):
         """Shell command should use docker exec directly."""
-        commands = DocumentationGenerator._get_launch_commands()
+        commands = DocumentationGenerator._get_launch_commands("opencode")
         assert commands["shell"] == "docker exec -it <container_name> /bin/bash"
 
 
@@ -319,7 +319,7 @@ class TestReadmeLaunchCommand:
         gen.generate(ctx)
 
         readme_content = (tmp_path / ".opencode" / "README.md").read_text()
-        assert "launch -- debug config" in readme_content
+        assert "launch --tool opencode -- debug config" in readme_content
 
     def test_readme_has_shell_command(self, tmp_path: Path):
         """README should show shell command."""
@@ -510,7 +510,7 @@ class TestComposeGenerator:
         gen.generate(ctx)
 
         compose_content = (opencode_dir / "docker-compose.yaml").read_text()
-        assert "venv-myproject" in compose_content
+        assert "venv-myproject-opencode" in compose_content
         assert "volumes:" in compose_content
         assert "/myproject/.venv" in compose_content
 
@@ -605,7 +605,7 @@ class TestComposeGenerator:
         gen.generate(ctx)
 
         compose_content = (opencode_dir / "docker-compose.yaml").read_text()
-        assert "m2-myproject" in compose_content
+        assert "m2-myproject-opencode" in compose_content
         assert "volumes:" in compose_content
         assert "/home/${REMOTE_USER}/.m2" in compose_content
 
@@ -664,8 +664,8 @@ class TestComposeGenerator:
         gen.generate(ctx)
 
         compose_content = (opencode_dir / "docker-compose.yaml").read_text()
-        assert "venv-myproject" in compose_content
-        assert "m2-myproject" in compose_content
+        assert "venv-myproject-opencode" in compose_content
+        assert "m2-myproject-opencode" in compose_content
         assert "/myproject/.venv" in compose_content
         assert "/home/${REMOTE_USER}/.m2" in compose_content
         assert (

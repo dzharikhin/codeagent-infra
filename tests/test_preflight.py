@@ -15,9 +15,9 @@ from opencode_framework.preflight import (
     PreflightResult,
     check_docker_rootless_context,
     check_required_tools,
+    config_directory_exists,
     get_repo_root,
     is_inside_git_tree,
-    opencode_directory_exists,
     run_preflight_checks,
 )
 
@@ -71,17 +71,24 @@ class TestGitOperations:
         assert result is None
 
 
-class TestOpencodeDirectoryExists:
-    """Tests for .opencode/ directory detection."""
+class TestConfigDirectoryExists:
+    """Tests for agent tool config directory detection."""
 
     def test_returns_false_when_not_exists(self, tmp_path: Path):
         """Should return False when .opencode/ doesn't exist."""
-        assert opencode_directory_exists(tmp_path) is False
+        assert config_directory_exists(tmp_path) is False
 
     def test_returns_true_when_exists(self, tmp_path: Path):
         """Should return True when .opencode/ exists."""
         (tmp_path / ".opencode").mkdir()
-        assert opencode_directory_exists(tmp_path) is True
+        assert config_directory_exists(tmp_path) is True
+
+    def test_qwen_tool_checks_qwen_dir(self, tmp_path: Path):
+        """agent_tool='qwen' should check .qwen/, not .opencode/."""
+        (tmp_path / ".opencode").mkdir()
+        assert config_directory_exists(tmp_path, agent_tool="qwen") is False
+        (tmp_path / ".qwen").mkdir()
+        assert config_directory_exists(tmp_path, agent_tool="qwen") is True
 
 
 class TestDetectFrameworkRepoPath:

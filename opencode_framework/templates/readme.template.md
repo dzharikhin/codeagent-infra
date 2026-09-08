@@ -29,7 +29,7 @@ This directory contains the project-level configuration for the OpenCode Framewo
 {{SHELL_COMMAND}}
 ```
 
-Find container name with: `docker ps | grep ocf-`
+Find container name with: `docker ps | grep ocf_`
 
 {{AGENT_MODELS_SECTION}}
 ## How It Works
@@ -60,12 +60,12 @@ context the prompt is skipped.
 This directory is a linked Git worktree on branch `{{BRANCH_NAME}}`.
 
 To save configuration changes:
-1. `cd .opencode`
+1. `cd {{CONFIG_DIR}}`
 2. `git add . && git commit -m "Update config"`
 3. `git push origin {{BRANCH_NAME}}`
 
-The `.opencode/` directory is a linked Git worktree. Git commands must run
-from inside `.opencode/` to affect the configuration branch.
+The `{{CONFIG_DIR}}/` directory is a linked Git worktree. Git commands must run
+from inside `{{CONFIG_DIR}}/` to affect the configuration branch.
 
 ## Documentation
 

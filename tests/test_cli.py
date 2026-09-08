@@ -94,7 +94,7 @@ class TestInitCommand:
     def test_init_requires_git_repo(self, tmp_path: Path):
         """init should fail outside a git repo or when preflight fails."""
         result = subprocess.run(
-            [sys.executable, "-m", "opencode_framework", "init"],
+            [sys.executable, "-m", "opencode_framework", "init", "--tool", "opencode"],
             cwd=tmp_path,
             capture_output=True,
             text=True,
@@ -194,7 +194,7 @@ class TestLaunchCommand:
             timeout=30,
         )
         assert result.returncode != 0
-        assert ".opencode/" in result.stdout or ".opencode/" in result.stderr
+        assert ".opencode" in result.stdout or ".opencode" in result.stderr
 
     def test_launch_requires_devcontainer_json(self, tmp_path: Path):
         """launch should fail when devcontainer.json doesn't exist."""
@@ -219,6 +219,7 @@ class TestLaunchCommand:
         )
 
         (tmp_path / ".opencode").mkdir()
+        (tmp_path / ".opencode" / ".env").write_text("OCF_AGENT_TOOL=opencode\n")
 
         result = subprocess.run(
             [sys.executable, "-m", "opencode_framework", "launch"],
@@ -302,7 +303,9 @@ class TestLaunchRebuildFeaturePrompt:
             return result
 
         monkeypatch.setattr(
-            app_module, "validate_runtime_context", lambda cwd: (True, "")
+            app_module,
+            "validate_runtime_context",
+            lambda cwd, config_dirname: (True, ""),
         )
         monkeypatch.setattr(app_module, "get_repo_root", lambda cwd: tmp_path.resolve())
         monkeypatch.setattr(app_module, "load_env_with_overrides", lambda **kw: {})
@@ -311,6 +314,7 @@ class TestLaunchRebuildFeaturePrompt:
         monkeypatch.setattr(app_module, "_build_image", lambda *a, **kw: "sha256:fake")
         monkeypatch.setattr(app_module, "save_image_id", lambda *a, **kw: None)
         monkeypatch.setattr(app_module.subprocess, "run", mock_run)
+        monkeypatch.chdir(tmp_path)
         return app_module
 
     def test_rebuild_invokes_update_features(self, tmp_path: Path, monkeypatch):
@@ -320,8 +324,8 @@ class TestLaunchRebuildFeaturePrompt:
 
         calls = {}
 
-        def fake_update(opencode_dir, repo_name):
-            calls["args"] = (opencode_dir, repo_name)
+        def fake_update(config_dir, repo_name, agent_tool):
+            calls["args"] = (config_dir, repo_name, agent_tool)
             return False
 
         monkeypatch.setattr(app_module, "update_features", fake_update)
@@ -334,6 +338,7 @@ class TestLaunchRebuildFeaturePrompt:
         assert "args" in calls
         assert calls["args"][0].name == ".opencode"
         assert calls["args"][1] == tmp_path.name
+        assert calls["args"][2] == "opencode"
 
     def test_rebuild_changed_message(self, tmp_path: Path, monkeypatch):
         """When features change, the changed message is shown."""
@@ -383,7 +388,7 @@ class TestLaunchRebuildFeaturePrompt:
     def test_launch_handles_keyboard_interrupt_in_attach(
         self, tmp_path: Path, monkeypatch
     ):
-        """launch must exit silently with code 130 when attach is interrupted with SIGINT."""
+        """launch must exit silently with code 130 on SIGINT during attach."""
         self._setup_repo(tmp_path)
         attach_rc = 130
         app_module = self._patch_launch_deps(monkeypatch, tmp_path, attach_rc=attach_rc)
@@ -466,7 +471,9 @@ class TestLaunchAttachRemoveFeature:
             return result
 
         monkeypatch.setattr(
-            app_module, "validate_runtime_context", lambda cwd: (True, "")
+            app_module,
+            "validate_runtime_context",
+            lambda cwd, config_dirname: (True, ""),
         )
         monkeypatch.setattr(app_module, "get_repo_root", lambda cwd: tmp_path.resolve())
         monkeypatch.setattr(app_module, "load_env_with_overrides", lambda **kw: {})
@@ -475,6 +482,7 @@ class TestLaunchAttachRemoveFeature:
         monkeypatch.setattr(app_module, "_build_image", lambda *a, **kw: "sha256:fake")
         monkeypatch.setattr(app_module, "save_image_id", lambda *a, **kw: None)
         monkeypatch.setattr(app_module.subprocess, "run", mock_run)
+        monkeypatch.chdir(tmp_path)
         return app_module
 
     def test_launch_attaches_when_running(self, tmp_path: Path, monkeypatch):
@@ -612,7 +620,7 @@ class TestLaunchAttachRemoveFeature:
         assert result.exit_code == 0
 
     def test_launch_attach_prints_port_mappings(self, tmp_path: Path, monkeypatch):
-        """Port mappings must be shown when attaching to an already-running container."""
+        """Port mappings must be shown when attaching to a running container."""
         self._setup_repo(tmp_path)
         port_output = "4096/tcp -> 0.0.0.0:4096\n8080/tcp -> 0.0.0.0:8080"
         app_module = self._patch_launch_deps(
@@ -684,7 +692,9 @@ class TestLaunchServer:
             return result
 
         monkeypatch.setattr(
-            app_module, "validate_runtime_context", lambda cwd: (True, "")
+            app_module,
+            "validate_runtime_context",
+            lambda cwd, config_dirname: (True, ""),
         )
         monkeypatch.setattr(app_module, "get_repo_root", lambda cwd: tmp_path.resolve())
         monkeypatch.setattr(app_module, "load_env_with_overrides", lambda **kw: {})
@@ -693,6 +703,7 @@ class TestLaunchServer:
         monkeypatch.setattr(app_module, "_build_image", lambda *a, **kw: "sha256:fake")
         monkeypatch.setattr(app_module, "save_image_id", lambda *a, **kw: None)
         monkeypatch.setattr(app_module.subprocess, "run", mock_run)
+        monkeypatch.chdir(tmp_path)
         return app_module, captured
 
     def test_launch_without_server_uses_opencode_tui(self, tmp_path: Path, monkeypatch):
@@ -855,7 +866,7 @@ class TestLaunchServer:
     def test_launch_server_without_wizard_ports_emits_only_server_publish(
         self, tmp_path: Path, monkeypatch
     ):
-        """--server with no wizard ports emits only the server --publish, no --service-ports."""
+        """--server with no wizard ports emits only the server --publish."""
         self._setup_repo(tmp_path)
         app_module, captured = self._patch_launch_deps(monkeypatch, tmp_path)
 
@@ -1013,13 +1024,14 @@ class TestLaunchToolSpec:
     """Tests for per-tool launch behavior driven by OCF_AGENT_TOOL."""
 
     def _setup_repo(self, tmp_path: Path, service: str = "opencode") -> Path:
-        opencode = tmp_path / ".opencode"
-        opencode.mkdir()
-        (opencode / "docker-compose.yaml").write_text(
+        dirname = ".qwen" if service == "qwen" else ".opencode"
+        config = tmp_path / dirname
+        config.mkdir()
+        (config / "docker-compose.yaml").write_text(
             f"services:\n  {service}:\n    container_name: ocf_repo\n"
         )
-        (opencode / ".env").write_text(f"REMOTE_USER=root\nOCF_AGENT_TOOL={service}\n")
-        return opencode
+        (config / ".env").write_text(f"REMOTE_USER=root\nOCF_AGENT_TOOL={service}\n")
+        return config
 
     def _patch_launch_deps(self, monkeypatch, tmp_path: Path, tool_env=None):
         import importlib
@@ -1038,7 +1050,9 @@ class TestLaunchToolSpec:
             return result
 
         monkeypatch.setattr(
-            app_module, "validate_runtime_context", lambda cwd: (True, "")
+            app_module,
+            "validate_runtime_context",
+            lambda cwd, config_dirname: (True, ""),
         )
         monkeypatch.setattr(app_module, "get_repo_root", lambda cwd: tmp_path.resolve())
         monkeypatch.setattr(
@@ -1051,6 +1065,7 @@ class TestLaunchToolSpec:
         monkeypatch.setattr(app_module, "_build_image", lambda *a, **kw: "sha256:fake")
         monkeypatch.setattr(app_module, "save_image_id", lambda *a, **kw: None)
         monkeypatch.setattr(app_module.subprocess, "run", mock_run)
+        monkeypatch.chdir(tmp_path)
         return app_module, captured
 
     @staticmethod
@@ -1144,7 +1159,7 @@ class TestLaunchToolSpec:
         assert "Web Shell token" not in result.output
 
     def test_invalid_agent_tool_env_exits(self, tmp_path: Path, monkeypatch):
-        """An unsupported OCF_AGENT_TOOL value exits 1 with remediation."""
+        """A .env contradicting its directory exits 1 with a re-init remediation."""
         self._setup_repo(tmp_path)
         opencode = tmp_path / ".opencode"
         (opencode / ".env").write_text("REMOTE_USER=root\nOCF_AGENT_TOOL=nope\n")
@@ -1153,11 +1168,13 @@ class TestLaunchToolSpec:
         result = self._invoke(app_module, ["launch"])
 
         assert result.exit_code == 1
-        assert "Unsupported agent tool" in result.output
+        assert "OCF_AGENT_TOOL='nope'" in result.output
+        assert ".opencode/ is the opencode config directory" in result.output
+        assert "init --force --tool opencode" in result.output
         assert captured == []
 
     def test_missing_agent_tool_env_exits(self, tmp_path: Path, monkeypatch):
-        """Absent OCF_AGENT_TOOL exits 1 with a re-init remediation."""
+        """A .env without OCF_AGENT_TOOL exits 1 with a re-init remediation."""
         self._setup_repo(tmp_path)
         opencode = tmp_path / ".opencode"
         (opencode / ".env").write_text("REMOTE_USER=root\n")
@@ -1166,8 +1183,8 @@ class TestLaunchToolSpec:
         result = self._invoke(app_module, ["launch"])
 
         assert result.exit_code == 1
-        assert "OCF_AGENT_TOOL is not set" in result.output
-        assert "init --force" in result.output
+        assert "does not set OCF_AGENT_TOOL" in result.output
+        assert "init --force --tool opencode" in result.output
         assert captured == []
 
     def test_global_env_path_follows_opencode_tool(self, tmp_path: Path, monkeypatch):
@@ -1217,3 +1234,134 @@ class TestLaunchToolSpec:
 
         assert result.exit_code == 0
         assert "qwen serve will be available at http://127.0.0.1:5000" in result.output
+
+
+class TestLaunchToolSelection:
+    """Tests for launch config-directory selection (--tool / auto-detect)."""
+
+    def _make_config(self, tmp_path: Path, tool: str) -> Path:
+        dirname = ".qwen" if tool == "qwen" else ".opencode"
+        config = tmp_path / dirname
+        config.mkdir()
+        (config / "docker-compose.yaml").write_text(
+            f"services:\n  {tool}:\n    container_name: ocf_repo\n"
+        )
+        (config / ".env").write_text(f"REMOTE_USER=root\nOCF_AGENT_TOOL={tool}\n")
+        return config
+
+    def _patch_launch_deps(self, monkeypatch, tmp_path: Path):
+        import importlib
+
+        app_module = importlib.import_module("opencode_framework.cli.app")
+        captured: list = []
+
+        def mock_run(*args, **kw):
+            cmd = list(args[0]) if args else args[1].get("args", [])
+            result = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            if cmd[:2] == ["docker", "inspect"] and "--format" in cmd:
+                result.stdout = ""  # no container
+            elif cmd[:2] == ["docker", "compose"] and "run" in cmd:
+                captured.append(cmd)
+                result.returncode = 0
+            return result
+
+        monkeypatch.setattr(
+            app_module,
+            "validate_runtime_context",
+            lambda cwd, config_dirname: (True, ""),
+        )
+        monkeypatch.setattr(app_module, "get_repo_root", lambda cwd: tmp_path.resolve())
+        monkeypatch.setattr(app_module, "load_env_with_overrides", lambda **kw: {})
+        monkeypatch.setattr(app_module, "build_docker_env", lambda env, ctx: {})
+        monkeypatch.setattr(app_module, "load_image_id", lambda d: "sha256:cached")
+        monkeypatch.setattr(app_module, "_build_image", lambda *a, **kw: "sha256:fake")
+        monkeypatch.setattr(app_module, "save_image_id", lambda *a, **kw: None)
+        monkeypatch.setattr(app_module.subprocess, "run", mock_run)
+        monkeypatch.chdir(tmp_path)
+        return app_module, captured
+
+    def _invoke(self, app_module, args: list):
+        from typer.testing import CliRunner
+
+        return CliRunner().invoke(app_module.app, args)
+
+    def test_tool_flag_wins_over_auto_detect(self, tmp_path: Path, monkeypatch):
+        """--tool qwen selects .qwen/ even when .opencode/ is also valid."""
+        self._make_config(tmp_path, "opencode")
+        self._make_config(tmp_path, "qwen")
+        app_module, captured = self._patch_launch_deps(monkeypatch, tmp_path)
+
+        result = self._invoke(app_module, ["launch", "--tool", "qwen"])
+
+        assert result.exit_code == 0
+        assert "Using qwen config at .qwen/" in result.output
+        assert captured[0][-1] == "qwen"
+
+    def test_auto_selects_single_valid_config(self, tmp_path: Path, monkeypatch):
+        """With only .opencode/ valid, launch auto-selects it without --tool."""
+        self._make_config(tmp_path, "opencode")
+        app_module, _ = self._patch_launch_deps(monkeypatch, tmp_path)
+
+        result = self._invoke(app_module, ["launch"])
+
+        assert result.exit_code == 0
+        assert "Using opencode config at .opencode/" in result.output
+
+    def test_multiple_valid_configs_non_interactive_error(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """Two valid configs without --tool exit 1 in non-interactive mode."""
+        self._make_config(tmp_path, "opencode")
+        self._make_config(tmp_path, "qwen")
+        app_module, captured = self._patch_launch_deps(monkeypatch, tmp_path)
+
+        result = self._invoke(app_module, ["launch"])
+
+        assert result.exit_code == 1
+        assert "multiple framework config directories found" in result.output
+        assert ".opencode, .qwen" in result.output
+        assert "pass --tool (opencode | qwen)" in result.output
+        assert captured == []
+
+    def test_tool_flag_with_missing_config_errors(self, tmp_path: Path, monkeypatch):
+        """--tool qwen without .qwen/ exits 1 with an init remediation."""
+        self._make_config(tmp_path, "opencode")
+        app_module, captured = self._patch_launch_deps(monkeypatch, tmp_path)
+
+        result = self._invoke(app_module, ["launch", "--tool", "qwen"])
+
+        assert result.exit_code == 1
+        assert "no .qwen/ framework config directory" in result.output
+        assert "init --tool qwen" in result.output
+        assert captured == []
+
+    def test_mismatched_env_tool_never_launched(self, tmp_path: Path, monkeypatch):
+        """.opencode/.env naming another tool blocks launch with re-init remediation."""
+        self._make_config(tmp_path, "opencode")
+        (tmp_path / ".opencode" / ".env").write_text(
+            "REMOTE_USER=root\nOCF_AGENT_TOOL=qwen\n"
+        )
+        app_module, captured = self._patch_launch_deps(monkeypatch, tmp_path)
+
+        result = self._invoke(app_module, ["launch"])
+
+        assert result.exit_code == 1
+        assert "OCF_AGENT_TOOL='qwen'" in result.output
+        assert ".opencode/ is the opencode config directory" in result.output
+        assert "init --force --tool opencode" in result.output
+        assert captured == []
+
+    def test_env_override_conflicting_with_tool_flag_warns(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """-e OCF_AGENT_TOOL conflicting with --tool launches but warns."""
+        self._make_config(tmp_path, "opencode")
+        app_module, captured = self._patch_launch_deps(monkeypatch, tmp_path)
+
+        result = self._invoke(
+            app_module, ["launch", "--tool", "opencode", "-e", "OCF_AGENT_TOOL=qwen"]
+        )
+
+        assert result.exit_code == 0
+        assert "Using opencode config at .opencode/" in result.output
+        assert "Warning: OCF_AGENT_TOOL='qwen'" in result.output

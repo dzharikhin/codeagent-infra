@@ -3,25 +3,29 @@
 import re
 from typing import List, Optional
 
-from opencode_framework.agent.registry import DEFAULT_TOOL, get_tool_spec
+from opencode_framework.agent.registry import (
+    DEFAULT_TOOL,
+    get_tool_spec,
+    managed_volume_name,
+)
 from opencode_framework.generators.base import FileGenerator, GenerationContext
 from opencode_framework.generators.templates import TemplateHandler
 
 
 class ComposeGenerator(FileGenerator):
-    """Generates .opencode/docker-compose.yaml for runtime."""
+    """Generates docker-compose.yaml for the tool's config directory."""
 
     def generate(self, ctx: GenerationContext) -> None:
         """Generate docker-compose.yaml from template.
 
         The template uses environment variable interpolation:
         - PWD: Set at launch time to repo root
-        - Other vars: Loaded from .opencode/.env
+        - Other vars: Loaded from the config dir's .env
 
         Args:
             ctx: Generation context with repo_root, optional_features, etc.
         """
-        compose_path = ctx.opencode_dir / "docker-compose.yaml"
+        compose_path = ctx.config_dir / "docker-compose.yaml"
         compose_content = TemplateHandler.render_compose_template(
             repo_root_name=ctx.repo_root.name,
             optional_features=ctx.optional_features,
@@ -96,19 +100,31 @@ class ComposeGenerator(FileGenerator):
             Updated compose file content
         """
         spec = get_tool_spec(agent_tool)
-        venv_mount = f"      - venv-{repo_name}:/{repo_name}/.venv"
-        m2_mount = f"      - m2-{repo_name}:/home/${{REMOTE_USER}}/.m2"
-        gradle_mount = f"      - gradle-{repo_name}:/home/${{REMOTE_USER}}/.gradle"
-        docker_mount = f"      - docker-{repo_name}:/var/lib/docker"
+        venv_mount = (
+            f"      - {managed_volume_name('venv', repo_name, spec.name)}:"
+            f"/{repo_name}/.venv"
+        )
+        m2_mount = (
+            f"      - {managed_volume_name('m2', repo_name, spec.name)}:"
+            f"/home/${{REMOTE_USER}}/.m2"
+        )
+        gradle_mount = (
+            f"      - {managed_volume_name('gradle', repo_name, spec.name)}:"
+            f"/home/${{REMOTE_USER}}/.gradle"
+        )
+        docker_mount = (
+            f"      - {managed_volume_name('docker', repo_name, spec.name)}:"
+            f"/var/lib/docker"
+        )
         managed_lines = {
             venv_mount,
             m2_mount,
             gradle_mount,
             docker_mount,
-            f"  venv-{repo_name}:",
-            f"  m2-{repo_name}:",
-            f"  gradle-{repo_name}:",
-            f"  docker-{repo_name}:",
+            f"  {managed_volume_name('venv', repo_name, spec.name)}:",
+            f"  {managed_volume_name('m2', repo_name, spec.name)}:",
+            f"  {managed_volume_name('gradle', repo_name, spec.name)}:",
+            f"  {managed_volume_name('docker', repo_name, spec.name)}:",
             "    privileged: true",
         }
 
@@ -170,14 +186,16 @@ class ComposeGenerator(FileGenerator):
 
         vol_keys: List[str] = []
         if "python" in optional_features:
-            vol_keys.append(f"  venv-{repo_name}:")
+            vol_keys.append(f"  {managed_volume_name('venv', repo_name, spec.name)}:")
         if has_docker:
-            vol_keys.append(f"  docker-{repo_name}:")
+            vol_keys.append(f"  {managed_volume_name('docker', repo_name, spec.name)}:")
         if "java" in optional_features:
             if has_maven:
-                vol_keys.append(f"  m2-{repo_name}:")
+                vol_keys.append(f"  {managed_volume_name('m2', repo_name, spec.name)}:")
             if has_gradle:
-                vol_keys.append(f"  gradle-{repo_name}:")
+                vol_keys.append(
+                    f"  {managed_volume_name('gradle', repo_name, spec.name)}:"
+                )
         if vol_keys:
             lines = ComposeGenerator._ensure_volumes_block_lines(lines, vol_keys)
 

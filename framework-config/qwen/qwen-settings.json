@@ -1,0 +1,12 @@
+{
+  "model": {
+    "name": "${OCF_MAIN_MODEL}"
+  },
+  "tools": {
+    "approvalMode": "default"
+  },
+  "telemetry": {
+    "enabled": false
+  },
+  "mcpServers": {}
+}

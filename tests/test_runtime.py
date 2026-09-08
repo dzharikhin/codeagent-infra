@@ -24,7 +24,7 @@ class TestValidateRuntimeContext:
 
     def test_fails_outside_git_tree(self, tmp_path: Path):
         """Should fail when not inside a Git tree."""
-        valid, error = validate_runtime_context(tmp_path)
+        valid, error = validate_runtime_context(tmp_path, ".opencode")
         assert valid is False
         assert "not inside a Git working tree" in error
 
@@ -55,7 +55,7 @@ class TestValidateRuntimeContext:
         subdir = tmp_path / "subdir"
         subdir.mkdir()
 
-        valid, error = validate_runtime_context(subdir)
+        valid, error = validate_runtime_context(subdir, ".opencode")
         assert valid is False
         assert "not the repository root" in error
 
@@ -83,7 +83,7 @@ class TestValidateRuntimeContext:
             capture_output=True,
         )
 
-        valid, error = validate_runtime_context(tmp_path)
+        valid, error = validate_runtime_context(tmp_path, ".opencode")
         assert valid is False
         assert ".opencode/" in error
 
@@ -113,7 +113,7 @@ class TestValidateRuntimeContext:
 
         (tmp_path / ".opencode").mkdir()
 
-        valid, error = validate_runtime_context(tmp_path)
+        valid, error = validate_runtime_context(tmp_path, ".opencode")
         assert valid is False
         assert "devcontainer.json" in error
 
@@ -145,7 +145,7 @@ class TestValidateRuntimeContext:
         opencode_dir.mkdir()
         (opencode_dir / "devcontainer.json").write_text("{}")
 
-        valid, error = validate_runtime_context(tmp_path)
+        valid, error = validate_runtime_context(tmp_path, ".opencode")
         assert valid is False
         assert ".env" in error
 
@@ -178,7 +178,7 @@ class TestValidateRuntimeContext:
         (opencode_dir / "devcontainer.json").write_text("{}")
         (opencode_dir / ".env").write_text("REMOTE_USER=root\n")
 
-        valid, error = validate_runtime_context(tmp_path)
+        valid, error = validate_runtime_context(tmp_path, ".opencode")
         assert valid is False
         assert "OCF_LOCAL_FRAMEWORK_PATH" in error
 
@@ -214,7 +214,7 @@ class TestValidateRuntimeContext:
             "OCF_LOCAL_FRAMEWORK_PATH=/nonexistent/path/to/framework\n"
         )
 
-        valid, error = validate_runtime_context(tmp_path)
+        valid, error = validate_runtime_context(tmp_path, ".opencode")
         assert valid is False
         assert "Framework repository no longer exists" in error
 
@@ -252,7 +252,7 @@ class TestValidateRuntimeContext:
             f"REMOTE_USER=root\nOCF_LOCAL_FRAMEWORK_PATH={framework_repo}\n"
         )
 
-        valid, error = validate_runtime_context(tmp_path)
+        valid, error = validate_runtime_context(tmp_path, ".opencode")
         assert valid is True
         assert error == ""
 
@@ -291,7 +291,7 @@ class TestValidateRuntimeContext:
             f"REMOTE_USER=root\nOCF_LOCAL_FRAMEWORK_PATH={framework_repo}\n"
         )
 
-        valid, error = validate_runtime_context(tmp_path)
+        valid, error = validate_runtime_context(tmp_path, ".opencode")
         assert valid is True
         assert error == ""
 
@@ -636,11 +636,8 @@ class TestIntegrationScenarios:
 
         override_env = tmp_path / "missing.env"
 
-        try:
+        with pytest.raises(FileNotFoundError, match="missing.env"):
             load_env_with_overrides(base_env, override_env)
-            assert False, "Should have raised FileNotFoundError"
-        except FileNotFoundError as e:
-            assert "missing.env" in str(e)
 
 
 class TestGlobalEnvFile:

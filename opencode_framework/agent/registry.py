@@ -26,10 +26,13 @@ def _env_line(key: str, value: str) -> str:
     return f"{_INDENT}- {key}={value}"
 
 
-def _nuts_mount(subdir: str) -> str:
+def _nuts_mount(subdir: str, config_dirname: str) -> str:
     """Build the nuts-and-bolts per-tool subdir mount line."""
     source = f"${{OCF_LOCAL_FRAMEWORK_PATH}}/framework-nuts-and-bolts/{subdir}"
-    target = f"/{{{{OCF_REPO_ROOT_NAME}}}}/.opencode/framework-nuts-and-bolts/{subdir}"
+    target = (
+        f"/{{{{OCF_REPO_ROOT_NAME}}}}/{config_dirname}"
+        f"/framework-nuts-and-bolts/{subdir}"
+    )
     return _mount(f"{source}:{target}")
 
 
@@ -85,6 +88,7 @@ class ToolSpec:
 
     name: str
     binary: str
+    config_dirname: str
     serve: ServeSpec
     install: InstallSpec
     compose_env_fragment: str
@@ -99,6 +103,9 @@ class ToolSpec:
     stub_relpath: Tuple[str, ...]
     context_files: Tuple[str, ...]
 
+
+_OPENCODE_CONFIG_DIRNAME = ".opencode"
+_QWEN_CONFIG_DIRNAME = ".qwen"
 
 _QWEN_DOCKERFILE_INSTALL = (
     "# qwen (Qwen Code) CLI: Node 22 (nodesource) + npm install\n"
@@ -137,6 +144,7 @@ _QWEN_FRAMEWORK_SETTINGS_MOUNT = (
 OPENCODE_TOOL_SPEC = ToolSpec(
     name="opencode",
     binary="opencode",
+    config_dirname=_OPENCODE_CONFIG_DIRNAME,
     serve=ServeSpec(
         port=4096,
         token_env="OPENCODE_SERVER_PASSWORD",
@@ -167,8 +175,8 @@ OPENCODE_TOOL_SPEC = ToolSpec(
         [
             _mount(_OPENCODE_AUTH_MOUNT),
             _mount(_OPENCODE_GLOBAL_DIR_MOUNT),
-            _nuts_mount("common"),
-            _nuts_mount("opencode"),
+            _nuts_mount("common", _OPENCODE_CONFIG_DIRNAME),
+            _nuts_mount("opencode", _OPENCODE_CONFIG_DIRNAME),
         ]
     ),
     env_template_fragment=(
@@ -189,6 +197,7 @@ OPENCODE_TOOL_SPEC = ToolSpec(
 QWEN_TOOL_SPEC = ToolSpec(
     name="qwen",
     binary="qwen",
+    config_dirname=_QWEN_CONFIG_DIRNAME,
     serve=ServeSpec(
         port=4170,
         token_env="QWEN_SERVER_TOKEN",
@@ -209,8 +218,8 @@ QWEN_TOOL_SPEC = ToolSpec(
         [
             _mount(_QWEN_GLOBAL_FILE_MOUNT),
             _mount(_QWEN_FRAMEWORK_SETTINGS_MOUNT),
-            _nuts_mount("common"),
-            _nuts_mount("qwen"),
+            _nuts_mount("common", _QWEN_CONFIG_DIRNAME),
+            _nuts_mount("qwen", _QWEN_CONFIG_DIRNAME),
         ]
     ),
     env_template_fragment=(
@@ -232,6 +241,16 @@ SUPPORTED_TOOLS: Dict[str, ToolSpec] = {
 }
 
 DEFAULT_TOOL = "opencode"
+
+
+def managed_volume_name(prefix: str, repo_name: str, tool: str) -> str:
+    """Compose managed volume name, tool-suffixed.
+
+    Each tool gets its own volumes so two agents can run concurrently
+    on the same repo without sharing mutable state (docker-in-docker
+    in particular must never share a /var/lib/docker volume).
+    """
+    return f"{prefix}-{repo_name}-{tool}"
 
 
 def get_tool_spec(name: str) -> ToolSpec:

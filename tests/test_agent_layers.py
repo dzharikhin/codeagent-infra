@@ -130,16 +130,18 @@ class TestQwenProjectLayer:
     """Tests for .qwen/ project stub generation."""
 
     def test_creates_settings_stub_when_missing(self, tmp_path):
-        created = ensure_qwen_project_layer(tmp_path)
-        assert created == tmp_path / ".qwen" / "settings.json"
+        config_dir = tmp_path / ".qwen"
+        created = ensure_qwen_project_layer(config_dir)
+        assert created == config_dir / "settings.json"
         assert created is not None
         assert json.loads(created.read_text()) == {}
         assert created.read_text() == QWEN_PROJECT_SETTINGS_STUB
 
     def test_never_overwrites_existing_settings(self, tmp_path):
-        settings = tmp_path / ".qwen" / "settings.json"
-        settings.parent.mkdir(parents=True)
+        config_dir = tmp_path / ".qwen"
+        config_dir.mkdir(parents=True)
+        settings = config_dir / "settings.json"
         settings.write_text('{"custom": true}')
-        created = ensure_qwen_project_layer(tmp_path)
+        created = ensure_qwen_project_layer(config_dir)
         assert created is None
         assert settings.read_text() == '{"custom": true}'

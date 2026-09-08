@@ -4,7 +4,11 @@ import json
 from importlib.resources import files
 from typing import Dict, List, Optional
 
-from opencode_framework.agent.registry import DEFAULT_TOOL, get_tool_spec
+from opencode_framework.agent.registry import (
+    DEFAULT_TOOL,
+    get_tool_spec,
+    managed_volume_name,
+)
 
 # Per-tool README sections. Each *_SECTION value is a self-contained
 # Markdown block ending in a newline; it may embed {{LAUNCH_COMMAND}},
@@ -84,7 +88,7 @@ _README_SECTIONS: Dict[str, Dict[str, str]] = {
             "`QWEN_CODE_SYSTEM_DEFAULTS_PATH` |\n"
             "| Framework | framework `qwen-settings.json` mounted at "
             "`~/.qwen/settings.json` in the container |\n"
-            "| Project | `.qwen/settings.json` at the repo root |\n"
+            "| Project | this `.qwen/` worktree (`settings.json`) |\n"
             "\n"
             "qwen has no auth file: API keys (`DASHSCOPE_API_KEY`, or "
             "`OPENAI_API_KEY` + `OPENAI_BASE_URL`) are provided via the env "
@@ -276,6 +280,8 @@ class TemplateHandler:
         """
         template = cls.load_compose_template()
         spec = get_tool_spec(agent_tool)
+        repo_name = repo_root_name
+        tool = spec.name
 
         additional_volume_mounts = ""
         docker_privileged = ""
@@ -283,7 +289,8 @@ class TemplateHandler:
 
         if optional_features and "python" in optional_features:
             additional_volume_mounts += (
-                f"\n      - venv-{repo_root_name}:/{repo_root_name}/.venv"
+                f"\n      - {managed_volume_name('venv', repo_name, tool)}:"
+                f"/{repo_name}/.venv"
             )
 
         # Java build tools: maven or gradle, or both
@@ -291,31 +298,36 @@ class TemplateHandler:
             tools = java_build_tools or []
             if "maven" in tools:
                 additional_volume_mounts += (
-                    f"\n      - m2-{repo_root_name}:/home/${{REMOTE_USER}}/.m2"
+                    f"\n      - {managed_volume_name('m2', repo_name, tool)}:"
+                    f"/home/${{REMOTE_USER}}/.m2"
                 )
             if "gradle" in tools:
                 additional_volume_mounts += (
-                    f"\n      - gradle-{repo_root_name}:/home/${{REMOTE_USER}}/.gradle"
+                    f"\n      - {managed_volume_name('gradle', repo_name, tool)}:"
+                    f"/home/${{REMOTE_USER}}/.gradle"
                 )
 
         if optional_features and "docker" in optional_features:
             docker_privileged = "    privileged: true\n"
             entrypoint = f'["/usr/local/share/docker-init.sh", "{spec.binary}"]'
             additional_volume_mounts += (
-                f"\n      - docker-{repo_root_name}:/var/lib/docker"
+                f"\n      - {managed_volume_name('docker', repo_name, tool)}:"
+                f"/var/lib/docker"
             )
 
         volume_keys = []
         if optional_features and "python" in optional_features:
-            volume_keys.append(f"  venv-{repo_root_name}:")
+            volume_keys.append(f"  {managed_volume_name('venv', repo_name, tool)}:")
         if optional_features and "docker" in optional_features:
-            volume_keys.append(f"  docker-{repo_root_name}:")
+            volume_keys.append(f"  {managed_volume_name('docker', repo_name, tool)}:")
         if optional_features and "java" in optional_features:
             tools = java_build_tools or []
             if "maven" in tools:
-                volume_keys.append(f"  m2-{repo_root_name}:")
+                volume_keys.append(f"  {managed_volume_name('m2', repo_name, tool)}:")
             if "gradle" in tools:
-                volume_keys.append(f"  gradle-{repo_root_name}:")
+                volume_keys.append(
+                    f"  {managed_volume_name('gradle', repo_name, tool)}:"
+                )
 
         top_level_volumes_section = ""
         if volume_keys:
@@ -330,6 +342,7 @@ class TemplateHandler:
             # Agent fragments first: they contain {{OCF_REPO_ROOT_NAME}}
             # which the later pass must still resolve.
             "{{SERVICE_NAME}}": spec.name,
+            "{{OCF_CONFIG_DIR}}": spec.config_dirname,
             "{{AGENT_ENV}}": spec.compose_env_fragment,
             "{{AGENT_MOUNTS}}": spec.compose_mount_fragment,
             "{{OCF_REPO_ROOT_NAME}}": repo_root_name,
@@ -368,7 +381,8 @@ class TemplateHandler:
             Rendered README content
         """
         template = cls.load_readme_template()
-        sections = _README_SECTIONS[get_tool_spec(agent_tool).name]
+        spec = get_tool_spec(agent_tool)
+        sections = _README_SECTIONS[spec.name]
 
         replacements = {
             # Tool sections first: their text embeds {{LAUNCH_COMMAND}},
@@ -382,6 +396,7 @@ class TemplateHandler:
             "{{DEBUG_COMMAND}}": debug_command,
             "{{SHELL_COMMAND}}": shell_command,
             "{{BRANCH_NAME}}": branch_name,
+            "{{CONFIG_DIR}}": spec.config_dirname,
         }
 
         return cls.render_template(template, replacements)

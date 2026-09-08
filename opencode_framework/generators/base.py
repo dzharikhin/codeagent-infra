@@ -11,10 +11,10 @@ from opencode_framework.config import GlobalSettings
 
 @dataclass
 class GenerationContext:
-    """Context for generating .opencode/ contents."""
+    """Context for generating the active tool's config directory contents."""
 
     repo_root: Path
-    opencode_dir: Path
+    config_dir: Path
     branch_name: str
     optional_features: List[str]
     editor_choice: str

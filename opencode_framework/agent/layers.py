@@ -125,40 +125,42 @@ def discover_global_layer(
     )
 
 
-def ensure_project_layer(spec: ToolSpec, repo_root: Path) -> Optional[Path]:
-    """Create the tool's project layer at the repo root, if it has one.
+def ensure_project_layer(spec: ToolSpec, config_dir: Path) -> Optional[Path]:
+    """Create the tool's project layer inside its config worktree, if it has one.
 
     Only-if-missing by design: existing files are never overwritten, so
     ``init --force`` preserves user edits. Tools without a generated
-    project layer (opencode uses the .opencode/ worktree) are no-ops.
+    project layer (opencode uses its worktree files directly) are no-ops.
 
     Args:
         spec: tool spec identifying the tool.
-        repo_root: project repository root.
+        config_dir: the tool's config worktree directory.
 
     Returns:
         Path to the created settings file, or None when it already
         existed or the tool has no project layer.
     """
     if spec.name == "qwen":
-        return ensure_qwen_project_layer(repo_root)
+        return ensure_qwen_project_layer(config_dir)
     return None
 
 
-def ensure_qwen_project_layer(repo_root: Path) -> Optional[Path]:
-    """Create the qwen project layer (``.qwen/settings.json``) if absent.
+def ensure_qwen_project_layer(config_dir: Path) -> Optional[Path]:
+    """Create the qwen project layer (``<config_dir>/settings.json``) if absent.
 
-    Only-if-missing by design: an existing file is never overwritten,
-    so ``init --force`` preserves user edits.
+    The qwen config worktree root is the native ``.qwen/`` directory, so
+    the project settings file sits at the worktree root. Only-if-missing
+    by design: an existing file is never overwritten, so ``init --force``
+    preserves user edits.
 
     Args:
-        repo_root: project repository root.
+        config_dir: qwen config worktree directory (``.qwen/``).
 
     Returns:
         Path to the created settings file, or None when it already
         existed.
     """
-    settings_path = repo_root / ".qwen" / "settings.json"
+    settings_path = config_dir / "settings.json"
     if settings_path.exists():
         return None
     settings_path.parent.mkdir(parents=True, exist_ok=True)

@@ -382,19 +382,19 @@ class GitOperations:
     def setup_opencode_worktree(
         repo_root: Path,
         branch_name: str,
-        opencode_dir: Path,
+        config_dir: Path,
     ) -> WorktreeResult:
-        """Set up the .opencode directory as a worktree.
+        """Set up the config directory as a linked git worktree.
 
         This function:
-        1. Creates the worktree at .opencode/
+        1. Creates the worktree at config_dir (e.g. .opencode/ or .qwen/)
         2. Uses an orphan branch if it doesn't exist
         3. Creates an initial empty commit
 
         Args:
             repo_root: Repository root
             branch_name: Branch name for worktree
-            opencode_dir: Path to .opencode directory
+            config_dir: Path to the config worktree directory
 
         Returns:
             WorktreeResult with success status
@@ -402,7 +402,7 @@ class GitOperations:
         existing_branch = GitOperations.branch_exists(branch_name, cwd=repo_root)
 
         result = GitOperations.create_worktree(
-            opencode_dir,
+            config_dir,
             branch_name,
             cwd=repo_root,
         )
@@ -413,11 +413,11 @@ class GitOperations:
         if not existing_branch:
             success = GitOperations.make_initial_commit(
                 message="Initial OpenCode framework configuration",
-                cwd=opencode_dir,
+                cwd=config_dir,
                 allow_empty=True,
             )
             if not success:
-                GitOperations.remove_worktree(opencode_dir, cwd=repo_root)
+                GitOperations.remove_worktree(config_dir, cwd=repo_root)
                 return WorktreeResult(
                     success=False,
                     error="Failed to create initial commit",

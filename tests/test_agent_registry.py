@@ -194,15 +194,15 @@ class TestComposeMountFragment:
         assert "/home/${REMOTE_USER}/.qwen/settings.json:ro" in fragment
 
     def test_both_tools_mount_nuts_subdirs(self):
-        for spec, tool_dir in (
-            (OPENCODE_TOOL_SPEC, "opencode"),
-            (QWEN_TOOL_SPEC, "qwen"),
-        ):
+        for spec in (OPENCODE_TOOL_SPEC, QWEN_TOOL_SPEC):
             fragment = spec.compose_mount_fragment
             source = "${OCF_LOCAL_FRAMEWORK_PATH}/framework-nuts-and-bolts"
-            target = "/{{OCF_REPO_ROOT_NAME}}/.opencode/framework-nuts-and-bolts"
+            target = (
+                f"/{{{{OCF_REPO_ROOT_NAME}}}}/{spec.config_dirname}"
+                "/framework-nuts-and-bolts"
+            )
             assert f"{source}/common:{target}/common:ro" in fragment
-            assert f"{source}/{tool_dir}:{target}/{tool_dir}:ro" in fragment
+            assert f"{source}/{spec.name}:{target}/{spec.name}:ro" in fragment
 
 
 class TestEnvTemplateFragment:

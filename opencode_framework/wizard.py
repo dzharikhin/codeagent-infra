@@ -35,10 +35,16 @@ class WizardResult:
     agent_tool: str = DEFAULT_TOOL
 
 
-def suggest_branch_name() -> str:
-    """Suggest a branch name based on username."""
+def suggest_branch_name(agent_tool: str = DEFAULT_TOOL) -> str:
+    """Suggest a config branch name based on username and tool.
+
+    The default tool keeps the plain ``codeagent-<user>`` name; other
+    tools get a ``-<tool>`` suffix because git refuses to check out one
+    branch in two worktrees.
+    """
     username = getpass.getuser() or "user"
-    return f"codeagent-{username}"
+    suffix = "" if agent_tool == DEFAULT_TOOL else f"-{agent_tool}"
+    return f"codeagent-{username}{suffix}"
 
 
 def resolve_tool_or_exit(tool: str, hint: Optional[str] = None) -> ToolSpec:
@@ -108,7 +114,7 @@ def run_wizard(
                 default=True,
             )
 
-    suggested_branch = suggest_branch_name()
+    suggested_branch = suggest_branch_name(spec.name)
 
     branch_name = typer.prompt(
         "\nConfig branch name",
@@ -122,16 +128,10 @@ def run_wizard(
 
     port_mappings = prompt_port_mappings()
 
-    if check_gitignore_needs(repo_root, ".opencode"):
+    if check_gitignore_needs(repo_root, spec.config_dirname):
         typer.secho(
-            "\nNote: .opencode/ is not in .gitignore. Consider adding it to avoid committing framework files.",
-            fg=typer.colors.YELLOW,
-        )
-
-    if spec.name == "qwen" and check_gitignore_needs(repo_root, ".qwen"):
-        typer.secho(
-            "\nNote: .qwen/ is not in .gitignore. "
-            "Add it to avoid committing qwen settings.",
+            f"\nNote: {spec.config_dirname}/ is not in .gitignore. "
+            "Consider adding it to avoid committing framework files.",
             fg=typer.colors.YELLOW,
         )
 

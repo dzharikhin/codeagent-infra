@@ -3,7 +3,7 @@
 
 services:
   {{SERVICE_NAME}}:
-    container_name: ocf_{{OCF_REPO_ROOT_NAME}}
+    container_name: ocf_{{OCF_REPO_ROOT_NAME}}_{{SERVICE_NAME}}
     image: "${OCF_IMAGE_ID}"
     working_dir: /{{OCF_REPO_ROOT_NAME}}
 {{PORTS_SECTION}}
@@ -25,7 +25,7 @@ services:
       - XDG_CACHE_HOME=${XDG_CACHE_HOME:-/${REMOTE_USER}/.cache}
     volumes:
       - ${PWD}:/{{OCF_REPO_ROOT_NAME}}
-      - ${PWD}/.opencode/runtime_data:/home/${REMOTE_USER}
+      - ${PWD}/{{OCF_CONFIG_DIR}}/runtime_data:/home/${REMOTE_USER}
 {{AGENT_MOUNTS}}
       - ${OCF_LOCAL_FRAMEWORK_PATH}/framework-config:${OCF_REMOTE_FRAMEWORK_CONFIG_PATH}:ro{{ADDITIONAL_VOLUME_MOUNTS}}
     entrypoint: {{ENTRYPOINT}}

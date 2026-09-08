@@ -86,8 +86,8 @@ class ValidationService:
         if not settings.framework_repo_path:
             errors.append(
                 "Framework repository not found. "
-                "The framework must be installed as an editable package from a git clone: "
-                "pipx install -e <path-to-framework-git-clone>"
+                "The framework must be installed as an editable package "
+                "from a git clone: pipx install -e <path-to-framework-git-clone>"
             )
             return ValidationResult(valid=False, errors=errors, warnings=warnings)
 

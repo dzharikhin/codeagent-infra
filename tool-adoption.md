@@ -71,7 +71,7 @@ mounts, networks, ports, and the env vars of this layer.
 | compose env | `OPENCODE_CONFIG`, `OPENCODE_TUI_CONFIG` | `QWEN_CODE_SYSTEM_DEFAULTS_PATH` |
 | framework payload | `framework-config/opencode/{config.json,tui.json,cost-guard.config.json}` | `framework-config/qwen/qwen-settings.json` |
 | global layer source | `~/.config/opencode` (dir) + `auth.json` | `~/.qwen/settings.json` (file) |
-| project layer | `.opencode/` worktree config | `.qwen/` at project root (generated) |
+| config worktree / project layer | `.opencode/` worktree (config files at root) | `.qwen/` worktree (native dir; `settings.json` at worktree root) |
 | auth | `OCF_GLOBAL_AUTH_PATH` (auth.json or stub) | none — API keys via env |
 | serve | port 4096, `OPENCODE_SERVER_PASSWORD` optional | port 4170, `QWEN_SERVER_TOKEN` auto-generated |
 | context files | `AGENTS.md` | `QWEN.md`, `AGENTS.md` |
@@ -148,9 +148,11 @@ Renames: `OPENCODE_VERSION` → `OCF_AGENT_VERSION`;
 
 1. Configurable ToolSpec registry (`opencode` | `qwen`) — not a hard replace.
 2. Tool chosen at `init` (wizard prompt + `--tool` flag), persisted as
-   `OCF_AGENT_TOOL` in `.opencode/.env`; at `launch` the key is required
-   (searched `-e/--env` > `--env-file` > `.opencode/.env`; absent ⇒ error
-   with re-init remediation); switching tools = re-init.
+   `OCF_AGENT_TOOL` in `<config_dir>/.env` (`.opencode/.env` or
+   `.qwen/.env`); at `launch` the key is required and must match its
+   config directory (searched `-e/--env` > `--env-file` >
+   `<config_dir>/.env`; missing or contradicting ⇒ hard error with
+   re-init remediation); switching tools = re-init.
 3. qwen install via Dockerfile (Node 22 + npm, `OCF_AGENT_VERSION` build arg) —
    no devcontainer feature exists.
 4. Layer precedence global < framework < project, wired through qwen's native
@@ -168,6 +170,32 @@ Renames: `OPENCODE_VERSION` → `OCF_AGENT_VERSION`;
 13. No implicit Maven default: empty Java build-tool selection = JDK only
     (no m2/gradle volumes, `installMaven`/`installGradle` false); fresh-init
     wizard prompts default to No — build tools are explicit opt-in.
+14. Per-tool config worktree dirs: `.opencode/` (opencode) and `.qwen/`
+    (qwen). The qwen worktree root IS qwen's native project dir, so
+    `ensure_qwen_project_layer(config_dir)` (agent/layers.py) writes
+    `<config_dir>/settings.json` directly at the worktree root — no nested
+    project subdir; dispatched per-tool via `ensure_project_layer(spec,
+    config_dir)`.
+15. Per-tool naming: containers `ocf_<repo>_<tool>` and managed named
+    volumes `{kind}-{repo}-{tool}` (`managed_volume_name(prefix, repo_name,
+    tool)` in agent/registry.py) so two agents can run concurrently on one
+    repo without sharing mutable state (docker-in-docker must never share
+    `/var/lib/docker`). Containers from before this upgrade (`ocf_<repo>`)
+    are not auto-attached by `launch` — remove them or run
+    `launch --force` once.
+16. Launch target selection precedence: `--tool` flag > auto-detect
+    (exactly one valid config dir) > interactive prompt (multiple valid,
+    interactive TTY); non-interactive with multiple valid configs is a
+    hard error.
+17. Legacy `.env` mismatch = hard launch error, no migration: a `.env`
+    whose `OCF_AGENT_TOOL` is missing or contradicts its config directory
+    (`.opencode/` = opencode, `.qwen/` = qwen) exits 1 with a re-init
+    remediation (`ocframework init --force --tool <tool>`; existing
+    directory backed up first).
+18. Branch defaults: `codeagent-<user>` (opencode) /
+    `codeagent-<user>-qwen` (other tools; git refuses to check out one
+    branch in two worktrees). Generated docs emit
+    `ocframework launch --tool <name>` commands.
 
 ## Changes by file
 
@@ -192,8 +220,11 @@ Renames: `OPENCODE_VERSION` → `OCF_AGENT_VERSION`;
   tool-conditional sections incl. the config-layers table.
 
 **CLI**
-- `cli/app.py`: `init --tool`; `launch` per-spec service name, serve command,
+- `cli/app.py`: `init --tool`; `launch --tool` target selection (flag >
+  auto-detect > interactive), per-spec service name, serve command,
   container port (4096/4170), token generation/injection; tool-aware wording.
+- `generators/documentation.py`: generated launch commands include
+  `--tool <name>`.
 
 **Config discovery**
 - `config.py` / `core/config.py`: `GlobalSettings` gains qwen global settings
@@ -217,12 +248,14 @@ Renames: `OPENCODE_VERSION` → `OCF_AGENT_VERSION`;
 ## Migration & backward compatibility
 
 - No `.env` key migration: renamed keys in existing `.opencode/.env` are
-  simply ignored (defaults apply); users re-run `ocframework init --force`
-  to regenerate (existing `.opencode/` is backed up first). Compose is
-  regenerated with new references
+  simply ignored (defaults apply); a missing or contradicting
+  `OCF_AGENT_TOOL` is a hard launch error (decision 17) — users re-run
+  `ocframework init --force --tool <tool>` to regenerate (existing
+  directory backed up first). Compose is regenerated with new references
   (`/opt/ocframework/config/opencode/…` subpaths, two nuts mounts).
-- `OCF_AGENT_TOOL` absent ⇒ opencode; entrypoint and mounts unchanged for
-  existing opencode projects.
+- Containers created before the per-tool naming upgrade (`ocf_<repo>`) are
+  not auto-attached by `launch`; remove them (`docker rm -f ocf_<repo>`)
+  or run `launch --force` once (decision 15).
 - Tool switch after init requires re-init (documented).
 - Framework repo restructure ⇒ each existing project needs one reconciliation
   pass (automatic via the normal update path).

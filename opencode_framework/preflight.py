@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
+from opencode_framework.agent.registry import DEFAULT_TOOL, get_tool_spec
+
 
 @dataclass
 class PreflightResult:
@@ -107,12 +109,14 @@ def has_staged_changes(path: Path) -> bool:
     return returncode != 0
 
 
-def opencode_directory_exists(repo_root: Path) -> bool:
-    """Check if .opencode/ directory already exists."""
-    return (repo_root / ".opencode").exists()
+def config_directory_exists(repo_root: Path, agent_tool: str = DEFAULT_TOOL) -> bool:
+    """Check if the agent tool's config worktree directory already exists."""
+    return (repo_root / get_tool_spec(agent_tool).config_dirname).exists()
 
 
-def run_preflight_checks(cwd: Path, force: bool = False) -> PreflightResult:
+def run_preflight_checks(
+    cwd: Path, force: bool = False, agent_tool: str = DEFAULT_TOOL
+) -> PreflightResult:
     """Run all preflight checks.
 
     Validates:
@@ -122,8 +126,10 @@ def run_preflight_checks(cwd: Path, force: bool = False) -> PreflightResult:
     - Current directory is the repository root
     - Repository is not bare
     - Git index has no staged changes
-    - .opencode/ doesn't exist (unless --force)
+    - The agent tool's config directory doesn't exist (unless --force)
     """
+    spec = get_tool_spec(agent_tool)
+    config_dirname = spec.config_dirname
     missing_tools = check_required_tools()
     if missing_tools:
         return PreflightResult(
@@ -191,12 +197,14 @@ def run_preflight_checks(cwd: Path, force: bool = False) -> PreflightResult:
             framework_repo_path=framework_repo_path,
         )
 
-    if opencode_directory_exists(repo_root):
+    if config_directory_exists(repo_root, agent_tool):
         if not force:
             return PreflightResult(
                 success=False,
-                error=".opencode/ already exists",
-                remediation="Use --force to backup and regenerate, or remove it manually",
+                error=f"{config_dirname}/ already exists",
+                remediation=(
+                    "Use --force to backup and regenerate, or remove it manually"
+                ),
                 framework_repo_path=framework_repo_path,
             )
 

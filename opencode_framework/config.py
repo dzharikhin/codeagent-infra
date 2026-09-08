@@ -82,7 +82,8 @@ def discover_global_settings() -> GlobalSettings:
 
     Looks for:
     - $XDG_CONFIG_HOME/opencode or ~/.config/opencode - global config directory
-    - $XDG_DATA_HOME/opencode/auth.json or ~/.local/share/opencode/auth.json - global auth file
+    - $XDG_DATA_HOME/opencode/auth.json or ~/.local/share/opencode/auth.json
+      - global auth file
     - framework config/ directory
 
     Uses local user context (respects SUDO_USER, HOME env) for host-side paths.
