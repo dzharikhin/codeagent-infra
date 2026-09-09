@@ -27,7 +27,6 @@ class WizardResult:
 
     branch_name: str
     optional_features: List[str]
-    editor_choice: str  # "none", "vi", or "nano"
     should_add_to_gitignore: bool
     create_global_config: bool = False
     port_mappings: List[str] = field(default_factory=list)
@@ -94,7 +93,6 @@ def run_wizard(
     - Global config creation (dir-based tools, if missing)
     - Branch name with suggested default
     - Optional feature selection
-    - Editor preference
     """
     if agent_tool is None:
         agent_tool = typer.prompt(
@@ -124,9 +122,7 @@ def run_wizard(
         type=str,
     )
 
-    optional_features, editor_choice, java_build_tools = prompt_feature_changes(
-        [], "none", None
-    )
+    optional_features, java_build_tools = prompt_feature_changes([], None)
 
     port_mappings = prompt_port_mappings()
 
@@ -140,7 +136,6 @@ def run_wizard(
     return WizardResult(
         branch_name=branch_name,
         optional_features=optional_features,
-        editor_choice=editor_choice,
         should_add_to_gitignore=True,
         create_global_config=create_global_config,
         port_mappings=port_mappings,

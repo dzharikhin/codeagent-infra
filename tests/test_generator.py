@@ -34,7 +34,6 @@ def _make_generation_context(tmp_path: Path, **kwargs):
         "config_dir": tmp_path / ".opencode",
         "branch_name": "codeagent-test",
         "optional_features": [],
-        "editor_choice": "none",
         "global_settings": _make_global_settings(),
     }
     defaults.update(kwargs)
@@ -54,7 +53,6 @@ class TestGenerateOpencodeDirectory:
         wizard_result = WizardResult(
             branch_name="codeagent-test",
             optional_features=[],
-            editor_choice="none",
             should_add_to_gitignore=True,
         )
 
@@ -77,7 +75,6 @@ class TestGenerateOpencodeDirectory:
         wizard_result = WizardResult(
             branch_name="codeagent-test",
             optional_features=[],
-            editor_choice="none",
             should_add_to_gitignore=True,
         )
 
@@ -95,49 +92,26 @@ class TestAddOptionalFeatures:
     def test_docker_feature(self):
         """Docker feature should add DinD feature."""
         features = {}
-        DevcontainerGenerator._add_optional_features(features, ["docker"], "none")
+        DevcontainerGenerator._add_optional_features(features, ["docker"])
         assert "ghcr.io/devcontainers/features/docker-in-docker:2" in features
 
     def test_python_feature(self):
         """Python feature should add Python feature."""
         features = {}
-        DevcontainerGenerator._add_optional_features(features, ["python"], "none")
+        DevcontainerGenerator._add_optional_features(features, ["python"])
         assert "ghcr.io/devcontainers/features/python:1" in features
 
     def test_nodejs_feature(self):
         """Node.js feature should add Node feature."""
         features = {}
-        DevcontainerGenerator._add_optional_features(features, ["nodejs"], "none")
+        DevcontainerGenerator._add_optional_features(features, ["nodejs"])
         assert "ghcr.io/devcontainers/features/node:1" in features
 
     def test_java_feature(self):
         """Java feature should add Java feature."""
         features = {}
-        DevcontainerGenerator._add_optional_features(features, ["java"], "none")
+        DevcontainerGenerator._add_optional_features(features, ["java"])
         assert "ghcr.io/devcontainers/features/java:1" in features
-
-    def test_vi_editor_choice(self):
-        """vi editor choice should add vim to common-utils packages."""
-        features = {"ghcr.io/devcontainers/features/common-utils:2": {}}
-        DevcontainerGenerator._add_optional_features(features, [], "vi")
-        common_utils = features["ghcr.io/devcontainers/features/common-utils:2"]
-        assert "installPackages" in common_utils
-        assert "vim" in common_utils["installPackages"]
-
-    def test_nano_editor_choice(self):
-        """nano editor choice should add nano to common-utils packages."""
-        features = {"ghcr.io/devcontainers/features/common-utils:2": {}}
-        DevcontainerGenerator._add_optional_features(features, [], "nano")
-        common_utils = features["ghcr.io/devcontainers/features/common-utils:2"]
-        assert "installPackages" in common_utils
-        assert "nano" in common_utils["installPackages"]
-
-    def test_none_editor_choice(self):
-        """none editor choice should not add any editor packages."""
-        features = {"ghcr.io/devcontainers/features/common-utils:2": {}}
-        DevcontainerGenerator._add_optional_features(features, [], "none")
-        common_utils = features["ghcr.io/devcontainers/features/common-utils:2"]
-        assert "installPackages" not in common_utils
 
 
 class TestDevcontainerGenerator:
@@ -253,28 +227,6 @@ class TestEnvFileGeneration:
         assert "OCF_MAIN_MODEL" in env_content
         assert "OCF_BUILD_MODEL" in env_content
         assert "OCF_SMALL_MODEL" in env_content
-
-    def test_env_contains_editor_when_selected(self, tmp_path: Path):
-        """Generated .env should contain EDITOR when editor_choice is not 'none'."""
-        (tmp_path / ".opencode").mkdir()
-        ctx = _make_generation_context(tmp_path, editor_choice="vi")
-
-        gen = ConfigFilesGenerator()
-        gen.generate(ctx)
-
-        env_content = (tmp_path / ".opencode" / ".env").read_text()
-        assert "EDITOR=vi" in env_content
-
-    def test_env_omits_editor_when_none(self, tmp_path: Path):
-        """Generated .env should not contain EDITOR when editor_choice is 'none'."""
-        (tmp_path / ".opencode").mkdir()
-        ctx = _make_generation_context(tmp_path, editor_choice="none")
-
-        gen = ConfigFilesGenerator()
-        gen.generate(ctx)
-
-        env_content = (tmp_path / ".opencode" / ".env").read_text()
-        assert "EDITOR=" not in env_content
 
 
 class TestLaunchCommands:
@@ -417,7 +369,6 @@ class TestRuntimeDataStructure:
         wizard_result = WizardResult(
             branch_name="codeagent-test",
             optional_features=[],
-            editor_choice="none",
             should_add_to_gitignore=True,
         )
 
@@ -441,7 +392,6 @@ class TestRuntimeDataStructure:
         wizard_result = WizardResult(
             branch_name="codeagent-test",
             optional_features=[],
-            editor_choice="none",
             should_add_to_gitignore=True,
         )
 
@@ -464,7 +414,6 @@ class TestRuntimeDataStructure:
         wizard_result = WizardResult(
             branch_name="codeagent-test",
             optional_features=[],
-            editor_choice="none",
             should_add_to_gitignore=True,
         )
 

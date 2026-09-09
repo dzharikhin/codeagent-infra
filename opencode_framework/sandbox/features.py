@@ -20,8 +20,6 @@ AVAILABLE_FEATURES: List[Tuple[str, str]] = [
 
 JAVA_BUILD_TOOLS = ["maven", "gradle"]
 
-EDITOR_CHOICES = ["none", "vi", "nano"]
-
 _DOCKER_ROOTLESS_HINT = (
     "    Create it with: docker context create rootless "
     "--docker 'host=unix:///run/user/$(id -u)/docker.sock'"
@@ -89,47 +87,23 @@ def _prompt_java_build_tools(current_tools: Optional[List[str]] = None) -> List[
     return tools
 
 
-def _prompt_editor_choice(default: str) -> str:
-    """Prompt for editor choice with validation.
-
-    Args:
-        default: The default value to suggest
-
-    Returns:
-        The validated editor choice (lowercase)
-    """
-    typer.echo(f"\nEditor preference (one of: {', '.join(EDITOR_CHOICES)}):")
-    while True:
-        choice = typer.prompt("Editor", default=default)
-        choice_lower = choice.lower()
-        if choice_lower in EDITOR_CHOICES:
-            return choice_lower
-        typer.secho(
-            "Invalid choice. Please select one of: none, vi, or nano.",
-            fg=typer.colors.RED,
-        )
-
-
 def prompt_feature_changes(
     current_features: List[str],
-    current_editor: str,
     current_java_build_tools: Optional[List[str]] = None,
-) -> Tuple[List[str], str, List[str]]:
+) -> Tuple[List[str], List[str]]:
     """Show the feature selection menu, pre-filled with the current state.
 
     Args:
         current_features: Currently-enabled feature keys
-        current_editor: Current editor choice ("none", "vi", "nano")
         current_java_build_tools: Currently enabled Java build tools (for defaults)
 
     Returns:
-        Tuple of (selected_features, editor_choice, java_build_tools)
+        Tuple of (selected_features, java_build_tools)
     """
     typer.echo("\nCurrent feature configuration:")
     typer.echo(
         f"  Features: {', '.join(current_features) if current_features else '(none)'}"
     )
-    typer.echo(f"  Editor: {current_editor}")
     typer.echo("\nSelect features:")
 
     selected: List[str] = []
@@ -143,9 +117,7 @@ def prompt_feature_changes(
         elif key == "java":
             java_build_tools = []
 
-    editor_choice = _prompt_editor_choice(current_editor)
-
-    return selected, editor_choice, java_build_tools
+    return selected, java_build_tools
 
 
 def parse_port_mappings(raw: str) -> List[str]:
@@ -218,10 +190,10 @@ def update_features(config_dir: Path, repo_name: str, agent_tool: str) -> bool:
         )
         return False
 
-    current_features, current_editor = DevcontainerGenerator.detect(devcontainer)
+    current_features = DevcontainerGenerator.detect(devcontainer)
     current_java_build_tools = DevcontainerGenerator.detect_build_tools(devcontainer)
-    new_features, new_editor, new_java_build_tools = prompt_feature_changes(
-        current_features, current_editor, current_java_build_tools
+    new_features, new_java_build_tools = prompt_feature_changes(
+        current_features, current_java_build_tools
     )
 
     compose_path = config_dir / "docker-compose.yaml"
@@ -234,13 +206,11 @@ def update_features(config_dir: Path, repo_name: str, agent_tool: str) -> bool:
     else:
         new_ports = []
 
-    features_changed = (
-        set(new_features) != set(current_features)
-        or new_editor != current_editor
-        or set(new_java_build_tools) != set(current_java_build_tools)
-    )
+    features_changed = set(new_features) != set(current_features) or set(
+        new_java_build_tools
+    ) != set(current_java_build_tools)
 
-    # Always rewrite devcontainer.json when features/editor/build-tools changed.
+    # Always rewrite devcontainer.json when features/build-tools changed.
     if features_changed:
         add = [f for f in new_features if f not in current_features]
         remove = [f for f in current_features if f not in new_features]
@@ -248,7 +218,6 @@ def update_features(config_dir: Path, repo_name: str, agent_tool: str) -> bool:
             devcontainer,
             add=add,
             remove=remove,
-            editor=new_editor,
             java_build_tools=new_java_build_tools,
         )
         devcontainer_path.write_text(json.dumps(devcontainer, indent=2) + "\n")

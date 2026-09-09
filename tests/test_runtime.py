@@ -718,10 +718,14 @@ class TestGlobalEnvFile:
         )
         assert final_env == {"KEY": "base_value"}  # Base overrides global
 
-    def test_global_malformed_warns_and_skips(self, tmp_path: Path):
-        """Should skip global file on parse error and append warning."""
+    def test_global_malformed_lines_skipped(self, tmp_path: Path):
+        """python-dotenv drops malformed lines and still parses valid ones.
+
+        python-dotenv never raises on syntax errors - it logs a warning and
+        skips the offending statement - so no entry lands in `warnings`.
+        """
         global_env = tmp_path / "global.env"
-        global_env.write_text("INVALID_SYNTAX {{{ KEY=value")
+        global_env.write_text("INVALID_SYNTAX {{{ KEY=value\nGOOD_KEY=good_value\n")
 
         warnings: List[str] = []
         final_env = load_env_with_overrides(
@@ -729,8 +733,30 @@ class TestGlobalEnvFile:
             global_env_path=global_env,
             warnings=warnings,
         )
+        assert warnings == []
+        assert final_env == {"GOOD_KEY": "good_value"}
+
+    def test_global_unreadable_warns_and_skips(self, tmp_path: Path, monkeypatch):
+        """A read failure on the global file appends a warning and is skipped."""
+
+        def _raise_unreadable(path, interpolate):
+            raise OSError(f"unreadable: {path}")
+
+        monkeypatch.setattr(
+            "opencode_framework.sandbox.runtime.dotenv_values", _raise_unreadable
+        )
+        global_env = tmp_path / "global.env"
+        global_env.write_text("KEY=value\n")
+
+        warnings: List[str] = []
+        final_env = load_env_with_overrides(
+            base_env_path=Path("/nonexistent"),
+            global_env_path=global_env,
+            warnings=warnings,
+        )
+        assert len(warnings) == 1
         assert "Skipping global env file" in warnings[0]
-        assert "INVALID_SYNTAX" in warnings[0]
+        assert str(global_env) in warnings[0]
         assert final_env == {}
 
     def test_global_interpolation_with_base(self, tmp_path: Path):

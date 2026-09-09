@@ -67,9 +67,6 @@ class ConfigFilesGenerator(FileGenerator):
             agent_tool=ctx.agent_tool,
         )
 
-        if ctx.editor_choice != "none":
-            env_content += f"\nEDITOR={ctx.editor_choice}"
-
         env_path = ctx.config_dir / ".env"
         env_path.write_text(env_content)
 

@@ -9,16 +9,13 @@ import pytest
 from opencode_framework.generators.templates import TemplateHandler
 from opencode_framework.sandbox import features
 from opencode_framework.sandbox.compose import ComposeGenerator
-from opencode_framework.sandbox.devcontainer import (
-    COMMON_UTILS_URL,
-    DevcontainerGenerator,
-)
+from opencode_framework.sandbox.devcontainer import DevcontainerGenerator
 
 
-def _dc_with_features(*features: str, editor: str = "none") -> dict:
+def _dc_with_features(*features: str) -> dict:
     """Build a devcontainer dict with the given optional features."""
     dc = {"features": {}}
-    DevcontainerGenerator._add_optional_features(dc["features"], list(features), editor)
+    DevcontainerGenerator._add_optional_features(dc["features"], list(features))
     return dc
 
 
@@ -38,40 +35,24 @@ class TestDetect:
 
     def test_detects_no_features(self):
         dc = _dc_with_features()
-        features, editor = DevcontainerGenerator.detect(dc)
-        assert features == []
-        assert editor == "none"
+        detected = DevcontainerGenerator.detect(dc)
+        assert detected == []
 
     def test_detects_single_feature(self):
         for key in ("docker", "python", "nodejs", "java"):
             dc = _dc_with_features(key)
-            detected, _ = DevcontainerGenerator.detect(dc)
+            detected = DevcontainerGenerator.detect(dc)
             assert detected == [key]
 
     def test_detects_all_features(self):
         dc = _dc_with_features("docker", "python", "nodejs", "java")
-        detected, _ = DevcontainerGenerator.detect(dc)
+        detected = DevcontainerGenerator.detect(dc)
         assert detected == ["docker", "python", "nodejs", "java"]
 
     def test_detect_order_follows_catalog(self):
         dc = _dc_with_features("java", "python", "docker")
-        detected, _ = DevcontainerGenerator.detect(dc)
+        detected = DevcontainerGenerator.detect(dc)
         assert detected == ["docker", "python", "java"]
-
-    def test_detect_vi_editor(self):
-        dc = _dc_with_features(editor="vi")
-        _, editor = DevcontainerGenerator.detect(dc)
-        assert editor == "vi"
-
-    def test_detect_nano_editor(self):
-        dc = _dc_with_features(editor="nano")
-        _, editor = DevcontainerGenerator.detect(dc)
-        assert editor == "nano"
-
-    def test_detect_none_editor(self):
-        dc = _dc_with_features()
-        _, editor = DevcontainerGenerator.detect(dc)
-        assert editor == "none"
 
     def test_detect_preserves_unknown_features(self):
         """Detect should ignore features it doesn't manage."""
@@ -81,19 +62,16 @@ class TestDetect:
                 DevcontainerGenerator.FEATURE_URL_MAP["python"]: {},
             }
         }
-        detected, editor = DevcontainerGenerator.detect(dc)
+        detected = DevcontainerGenerator.detect(dc)
         assert detected == ["python"]
-        assert editor == "none"
 
     def test_detect_handles_missing_features_key(self):
-        detected, editor = DevcontainerGenerator.detect({})
+        detected = DevcontainerGenerator.detect({})
         assert detected == []
-        assert editor == "none"
 
     def test_detect_handles_non_dict_features(self):
-        detected, editor = DevcontainerGenerator.detect({"features": "not a dict"})
+        detected = DevcontainerGenerator.detect({"features": "not a dict"})
         assert detected == []
-        assert editor == "none"
 
     def test_detect_build_tools_maven_only(self):
         dc = _dc_with_features("java")
@@ -216,12 +194,12 @@ class TestApplyDelta:
 
     def test_add_feature(self):
         dc = {"features": {}}
-        DevcontainerGenerator.apply_delta(dc, add=["python"], remove=[], editor="none")
+        DevcontainerGenerator.apply_delta(dc, add=["python"], remove=[])
         assert DevcontainerGenerator.FEATURE_URL_MAP["python"] in dc["features"]
 
     def test_remove_feature(self):
         dc = _dc_with_features("python", "docker")
-        DevcontainerGenerator.apply_delta(dc, add=[], remove=["python"], editor="none")
+        DevcontainerGenerator.apply_delta(dc, add=[], remove=["python"])
         assert DevcontainerGenerator.FEATURE_URL_MAP["python"] not in dc["features"]
         assert DevcontainerGenerator.FEATURE_URL_MAP["docker"] in dc["features"]
 
@@ -229,7 +207,7 @@ class TestApplyDelta:
         """Custom features and params must survive a delta."""
         custom_url = "ghcr.io/some/custom:1"
         dc = {"features": {custom_url: {"token": "secret"}}}
-        DevcontainerGenerator.apply_delta(dc, add=["python"], remove=[], editor="none")
+        DevcontainerGenerator.apply_delta(dc, add=["python"], remove=[])
         assert custom_url in dc["features"]
         assert dc["features"][custom_url] == {"token": "secret"}
 
@@ -238,42 +216,18 @@ class TestApplyDelta:
         dc = _dc_with_features("python", "java")
         python_url = DevcontainerGenerator.FEATURE_URL_MAP["python"]
         dc["features"][python_url]["version"] = "3.11"
-        DevcontainerGenerator.apply_delta(dc, add=[], remove=["java"], editor="none")
+        DevcontainerGenerator.apply_delta(dc, add=[], remove=["java"])
         assert dc["features"][python_url]["version"] == "3.11"
-
-    def test_set_editor_adds_vim(self):
-        dc = _dc_with_features()
-        DevcontainerGenerator.apply_delta(dc, add=[], remove=[], editor="vi")
-        packages = dc["features"][COMMON_UTILS_URL]["installPackages"]
-        assert "vim" in packages
-
-    def test_set_editor_toggle_removes_vim(self):
-        """Toggling editor to 'none' should remove vim (unlike init guard)."""
-        dc = _dc_with_features(editor="vi")
-        DevcontainerGenerator.apply_delta(dc, add=[], remove=[], editor="none")
-        packages = dc["features"][COMMON_UTILS_URL]["installPackages"]
-        assert packages is None or "vim" not in packages
-
-    def test_set_editor_preserves_other_packages(self):
-        """Changing editor must not drop packages like ripgrep."""
-        dc = {"features": {COMMON_UTILS_URL: {"installPackages": "ripgrep vim"}}}
-        DevcontainerGenerator.apply_delta(dc, add=[], remove=[], editor="nano")
-        packages = dc["features"][COMMON_UTILS_URL]["installPackages"]
-        assert "ripgrep" in packages
-        assert "nano" in packages
-        assert "vim" not in packages
 
     def test_apply_delta_returns_same_object(self):
         """apply_delta mutates and returns the passed-in dict."""
         dc = {"features": {}}
-        result = DevcontainerGenerator.apply_delta(
-            dc, add=["docker"], remove=[], editor="none"
-        )
+        result = DevcontainerGenerator.apply_delta(dc, add=["docker"], remove=[])
         assert result is dc
 
     def test_apply_delta_creates_features_key_if_missing(self):
         dc = {}
-        DevcontainerGenerator.apply_delta(dc, add=["python"], remove=[], editor="none")
+        DevcontainerGenerator.apply_delta(dc, add=["python"], remove=[])
         assert "features" in dc
         assert DevcontainerGenerator.FEATURE_URL_MAP["python"] in dc["features"]
 
@@ -718,7 +672,7 @@ class TestUpdateFeatures:
         opencode_dir.mkdir()
         dc = {"features": {}}
         DevcontainerGenerator._add_optional_features(
-            dc["features"], features_list, "none", java_build_tools=java_build_tools
+            dc["features"], features_list, java_build_tools=java_build_tools
         )
         (opencode_dir / "devcontainer.json").write_text(json.dumps(dc))
         (opencode_dir / "docker-compose.yaml").write_text(
@@ -766,7 +720,7 @@ class TestUpdateFeatures:
         monkeypatch.setattr(
             features,
             "prompt_feature_changes",
-            lambda cur, ed, jbt: (list(cur), ed, []),
+            lambda cur, jbt: (list(cur), list(jbt or [])),
         )
         monkeypatch.setattr(features, "prompt_port_mappings", lambda cur=None: [])
         opencode_dir = self._seed_opencode(tmp_path, ["python"])
@@ -785,7 +739,7 @@ class TestUpdateFeatures:
         monkeypatch.setattr(
             features,
             "prompt_feature_changes",
-            lambda cur, ed, jbt: (["python", "docker", "java"], ed, ["maven"]),
+            lambda cur, jbt: (["python", "docker", "java"], ["maven"]),
         )
         monkeypatch.setattr(features, "prompt_port_mappings", lambda cur=None: [])
         opencode_dir = self._seed_opencode(tmp_path, ["python"])
@@ -794,7 +748,7 @@ class TestUpdateFeatures:
         assert result is True
 
         dc = json.loads((opencode_dir / "devcontainer.json").read_text())
-        detected, _ = DevcontainerGenerator.detect(dc)
+        detected = DevcontainerGenerator.detect(dc)
         assert set(detected) == {"python", "docker", "java"}
 
         compose = (opencode_dir / "docker-compose.yaml").read_text()
@@ -809,7 +763,7 @@ class TestUpdateFeatures:
         monkeypatch.setattr(
             features,
             "prompt_feature_changes",
-            lambda cur, ed, jbt: (["python"], ed, []),
+            lambda cur, jbt: (["python"], []),
         )
         opencode_dir = self._seed_opencode(tmp_path, [])
         (opencode_dir / "docker-compose.yaml").unlink()
@@ -817,7 +771,7 @@ class TestUpdateFeatures:
         result = features.update_features(opencode_dir, tmp_path.name, "opencode")
         assert result is True
         dc = json.loads((opencode_dir / "devcontainer.json").read_text())
-        detected, _ = DevcontainerGenerator.detect(dc)
+        detected = DevcontainerGenerator.detect(dc)
         assert detected == ["python"]
 
     def test_port_only_change_writes_compose(self, tmp_path: Path, monkeypatch):
@@ -827,7 +781,7 @@ class TestUpdateFeatures:
         monkeypatch.setattr(
             features,
             "prompt_feature_changes",
-            lambda cur, ed, jbt: (list(cur), ed, []),
+            lambda cur, jbt: (list(cur), list(jbt or [])),
         )
         monkeypatch.setattr(
             features, "prompt_port_mappings", lambda cur=None: ["8080:8080"]
@@ -853,12 +807,11 @@ class TestUpdateFeatures:
         opencode_dir = self._seed_opencode(tmp_path, ["java"])
 
         # Monkeypatch prompt to change java build tools to gradle
-        def mock_prompt(cur, ed, jbt):
+        def mock_prompt(cur, jbt):
             # Keep java enabled, change build tools
             if "java" in cur:
-                cur = [f for f in cur if f != "java"] + ["java"]
                 jbt = ["gradle"]
-            return (cur, ed, jbt)
+            return (list(cur), jbt)
 
         monkeypatch.setattr(features, "prompt_feature_changes", mock_prompt)
         monkeypatch.setattr(features, "prompt_port_mappings", lambda cur=None: [])
@@ -928,7 +881,7 @@ class TestUpdateFeatures:
         monkeypatch.setattr(
             features,
             "prompt_feature_changes",
-            lambda cur, ed, jbt: (list(cur), ed, []),
+            lambda cur, jbt: (list(cur), list(jbt or [])),
         )
         monkeypatch.setattr(features, "prompt_port_mappings", lambda cur=None: [])
 
@@ -958,7 +911,7 @@ class TestUpdateFeatures:
         monkeypatch.setattr(
             features,
             "prompt_feature_changes",
-            lambda cur, ed, jbt: (list(cur), ed, []),
+            lambda cur, jbt: (list(cur), list(jbt or [])),
         )
         monkeypatch.setattr(features, "prompt_port_mappings", lambda cur=None: [])
 

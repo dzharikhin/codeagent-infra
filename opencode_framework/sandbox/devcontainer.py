@@ -4,13 +4,11 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 from opencode_framework.agent.registry import DEFAULT_TOOL, ToolSpec, get_tool_spec
 from opencode_framework.generators.base import FileGenerator, GenerationContext
 from opencode_framework.generators.templates import TemplateHandler
-
-COMMON_UTILS_URL = "ghcr.io/devcontainers/features/common-utils:2"
 
 STANDARD_DEVCONTAINER_PATHS = [
     ".devcontainer/devcontainer.json",
@@ -227,7 +225,6 @@ class DevcontainerGenerator(FileGenerator):
         self._add_optional_features(
             features,
             ctx.optional_features,
-            ctx.editor_choice,
             java_build_tools=ctx.java_build_tools,
         )
 
@@ -285,7 +282,6 @@ class DevcontainerGenerator(FileGenerator):
     def _add_optional_features(
         features: dict,
         optional_features: List[str],
-        editor_choice: str = "none",
         java_build_tools: Optional[List[str]] = None,
     ) -> None:
         """Add optional features to the features dict.
@@ -295,40 +291,11 @@ class DevcontainerGenerator(FileGenerator):
         for key in optional_features:
             DevcontainerGenerator._add_one_feature(features, key)
 
-        if editor_choice != "none":
-            common_utils = features.get(COMMON_UTILS_URL, {})
-            packages = common_utils.get("installPackages", [])
-            if isinstance(packages, str):
-                packages = [p.strip() for p in packages.split() if p.strip()]
-            if editor_choice == "vi" and "vim" not in packages:
-                packages.append("vim")
-            elif editor_choice == "nano" and "nano" not in packages:
-                packages.append("nano")
-            common_utils["installPackages"] = " ".join(packages) if packages else None
-            features[COMMON_UTILS_URL] = common_utils
-
         # Reconcile Java build tools after all features are added
         if java_build_tools is not None:
             DevcontainerGenerator._reconcile_java_build_tools(
                 features, java_build_tools
             )
-
-    @staticmethod
-    def _detect_editor(features: dict) -> str:
-        """Detect editor preference from common-utils installPackages."""
-        common_utils = features.get(COMMON_UTILS_URL, {})
-        if not isinstance(common_utils, dict):
-            return "none"
-        packages = common_utils.get("installPackages", [])
-        if isinstance(packages, str):
-            pkg_list = packages.split()
-        else:
-            pkg_list = list(packages) if packages else []
-        if "vim" in pkg_list:
-            return "vi"
-        if "nano" in pkg_list:
-            return "nano"
-        return "none"
 
     @staticmethod
     def detect_build_tools(devcontainer: dict) -> List[str]:
@@ -362,47 +329,18 @@ class DevcontainerGenerator(FileGenerator):
         return tools
 
     @classmethod
-    def detect(cls, devcontainer: dict) -> Tuple[List[str], str]:
-        """Detect currently-enabled optional features and editor choice.
+    def detect(cls, devcontainer: dict) -> List[str]:
+        """Detect currently-enabled optional features.
 
         Args:
             devcontainer: Parsed devcontainer.json content
 
         Returns:
-            Tuple of (optional_features list, editor_choice)
+            List of enabled optional feature keys
         """
         raw_features = devcontainer.get("features", {})
         features = raw_features if isinstance(raw_features, dict) else {}
-        detected = [key for key, url in cls.FEATURE_URL_MAP.items() if url in features]
-        editor = cls._detect_editor(features)
-        return detected, editor
-
-    @staticmethod
-    def _set_editor(features: dict, editor_choice: str) -> None:
-        """Set the editor preference, adding or removing vim/nano as needed.
-
-        Unlike the init-time guard in _add_optional_features, this fully
-        manages the editor packages so toggling to 'none' removes them.
-        """
-        if editor_choice == "none" and COMMON_UTILS_URL not in features:
-            return
-        common_utils = features.get(COMMON_UTILS_URL, {})
-        if not isinstance(common_utils, dict):
-            common_utils = {}
-        packages = common_utils.get("installPackages", [])
-        if isinstance(packages, str):
-            packages = [p.strip() for p in packages.split() if p.strip()]
-        elif packages is None:
-            packages = []
-        else:
-            packages = list(packages)
-        packages = [p for p in packages if p not in ("vim", "nano")]
-        if editor_choice == "vi":
-            packages.append("vim")
-        elif editor_choice == "nano":
-            packages.append("nano")
-        common_utils["installPackages"] = " ".join(packages) if packages else None
-        features[COMMON_UTILS_URL] = common_utils
+        return [key for key, url in cls.FEATURE_URL_MAP.items() if url in features]
 
     @classmethod
     def apply_delta(
@@ -410,10 +348,9 @@ class DevcontainerGenerator(FileGenerator):
         devcontainer: dict,
         add: List[str],
         remove: List[str],
-        editor: str,
         java_build_tools: Optional[List[str]] = None,
     ) -> dict:
-        """Surgically apply feature/editor changes to a devcontainer dict.
+        """Surgically apply feature changes to a devcontainer dict.
 
         Mutates the features dict in place, preserving any features and
         parameters that are not part of the requested change.
@@ -422,7 +359,6 @@ class DevcontainerGenerator(FileGenerator):
             devcontainer: Parsed devcontainer.json content (mutated)
             add: Feature keys to add
             remove: Feature keys to remove
-            editor: Target editor choice ("none", "vi", or "nano")
             java_build_tools: List of enabled Java build tools (for reconciliation)
 
         Returns:
@@ -436,7 +372,6 @@ class DevcontainerGenerator(FileGenerator):
             cls._remove_one_feature(features, key)
         for key in add:
             cls._add_one_feature(features, key)
-        cls._set_editor(features, editor)
 
         # Reconcile Java build tools if Java is in the final feature set
         if java_build_tools is not None:

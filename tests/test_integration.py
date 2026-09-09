@@ -196,7 +196,6 @@ class TestGeneratedConfig:
             config_dir=tmp_path / ".opencode",
             branch_name="test-branch",
             optional_features=["python"],
-            editor_choice="none",
             global_settings=GlobalSettings(
                 framework_repo_path=None,
                 framework_config_path=None,
@@ -228,7 +227,6 @@ class TestGeneratedConfig:
             config_dir=tmp_path / ".opencode",
             branch_name="test-branch",
             optional_features=[],
-            editor_choice="none",
             global_settings=GlobalSettings(
                 framework_repo_path=None,
                 framework_config_path="/path/to/config",
@@ -245,35 +243,6 @@ class TestGeneratedConfig:
 
         assert "remoteEnv" not in result
 
-    def test_editor_choice_sets_editor_env(self, tmp_path: Path):
-        """Test that editor choice sets EDITOR in .env file (not devcontainer)."""
-        from opencode_framework.config import GlobalSettings
-        from opencode_framework.generators import GenerationContext
-        from opencode_framework.generators.config_files import ConfigFilesGenerator
-
-        (tmp_path / ".opencode").mkdir()
-        ctx = GenerationContext(
-            repo_root=tmp_path,
-            config_dir=tmp_path / ".opencode",
-            branch_name="test-branch",
-            optional_features=[],
-            editor_choice="vi",
-            global_settings=GlobalSettings(
-                framework_repo_path=None,
-                framework_config_path=None,
-                global_config_found=False,
-                global_config_path=None,
-                global_auth_found=False,
-                global_auth_path=None,
-            ),
-        )
-
-        gen = ConfigFilesGenerator()
-        gen.generate(ctx)
-        env_content = (tmp_path / ".opencode" / ".env").read_text()
-
-        assert "EDITOR=vi" in env_content
-
     def test_opencode_feature_present(self, tmp_path: Path):
         """Test that OpenCode feature is included in generated devcontainer."""
         from opencode_framework.config import GlobalSettings
@@ -286,7 +255,6 @@ class TestGeneratedConfig:
             config_dir=tmp_path / ".opencode",
             branch_name="test-branch",
             optional_features=[],
-            editor_choice="none",
             global_settings=GlobalSettings(
                 framework_repo_path=None,
                 framework_config_path=None,
