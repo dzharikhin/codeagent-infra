@@ -547,6 +547,108 @@ def _parse_image_id_from_build_output(output: str) -> Optional[str]:
     return None
 
 
+_IMAGE_NAME_INVALID = re.compile(r"[^a-z0-9._-]+")
+
+
+def _per_tool_image_tag(repo_name: str, agent_tool: str) -> str:
+    """Build the per-tool image tag ``ocf-<repo>-<tool>:latest``.
+
+    Docker image names must be lowercase, so the repo name is slugified
+    into a valid image-name component (``[a-z0-9._-]`` with alphanumeric
+    boundaries).
+
+    Args:
+        repo_name: Repository directory name.
+        agent_tool: Agent tool name ("opencode" | "qwen").
+
+    Returns:
+        Image tag such as ``ocf-my-repo-opencode:latest``.
+    """
+    slug = _IMAGE_NAME_INVALID.sub("-", repo_name.lower())
+    slug = re.sub(r"^[^a-z0-9]+|[^a-z0-9]+$", "", slug)
+    return f"ocf-{slug or 'repo'}-{agent_tool}:latest"
+
+
+def _parse_image_name_from_build_json(output: str) -> Optional[str]:
+    """Parse the image name from ``devcontainer build`` JSON output.
+
+    The build command emits one JSON object per line; the success line
+    carries ``imageName`` (a string, or a list of strings when
+    ``--image-name`` was repeatable).
+    """
+    for line in output.strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(data, dict) or data.get("outcome") != "success":
+            continue
+        image_name = data.get("imageName")
+        if isinstance(image_name, list):
+            return next((n for n in image_name if isinstance(n, str) and n), None)
+        if isinstance(image_name, str) and image_name:
+            return image_name
+    return None
+
+
+def _capture_tagged_image_id(tag: str, subprocess_env: dict) -> Optional[str]:
+    """Return the image ID currently carrying ``tag``, or None."""
+    try:
+        result = subprocess.run(
+            [
+                "docker",
+                "images",
+                "--filter",
+                f"reference={tag}",
+                "--format",
+                "{{.ID}}",
+            ],
+            env=subprocess_env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+    if result.returncode != 0:
+        return None
+    ids = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    return ids[0] if ids else None
+
+
+def _inspect_image_id(reference: str, subprocess_env: dict) -> Optional[str]:
+    """Return the image ID behind ``reference``, or None."""
+    try:
+        result = subprocess.run(
+            ["docker", "image", "inspect", "--format", "{{.Id}}", reference],
+            env=subprocess_env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _remove_image(image_id: str, subprocess_env: dict) -> bool:
+    """Best-effort removal of a previous (now dangling) image."""
+    try:
+        result = subprocess.run(
+            ["docker", "rmi", image_id],
+            env=subprocess_env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+    return result.returncode == 0
+
+
 def _extract_server_arg(
     extra_args: List[str],
 ) -> Tuple[Optional[str], List[str]]:
@@ -808,8 +910,29 @@ def _remove_container(container_name: str, subprocess_env: dict) -> bool:
         return False
 
 
-def _build_image(config_dir: Path, repo_root: Path, subprocess_env: dict) -> str:
-    # devcontainer build does not call initializeCommand https://github.com/devcontainers/cli/issues/190
+def _build_image(
+    config_dir: Path, repo_root: Path, subprocess_env: dict, agent_tool: str
+) -> str:
+    """Build the devcontainer image and tag it per tool.
+
+    Two-step flow:
+    1. ``devcontainer up`` — runs initializeCommand (Dockerfile generation)
+       and builds. `devcontainer build` does not call initializeCommand
+       https://github.com/devcontainers/cli/issues/190 — so `up` stays
+       the first step.
+    2. ``devcontainer build --image-name`` — replays from layer cache and
+       applies the per-tool tag, so opencode and qwen never collide on the
+       workspace-derived vsc-... image name.
+
+    Args:
+        config_dir: Agent tool's config worktree directory.
+        repo_root: Repository root (workspace folder).
+        subprocess_env: Environment variables for subprocess.
+        agent_tool: Agent tool name ("opencode" | "qwen").
+
+    Returns:
+        The per-tool image tag (persisted as OCF_IMAGE_ID).
+    """
     build_cmd = [
         "devcontainer",
         "up",
@@ -841,16 +964,59 @@ def _build_image(config_dir: Path, repo_root: Path, subprocess_env: dict) -> str
         typer.secho("Failed to build devcontainer image", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
 
-    image_id = _parse_image_id_from_build_output(output)
+    fallback_image_id = _parse_image_id_from_build_output(output)
 
-    if not image_id:
+    if not fallback_image_id:
         typer.secho(
             "Could not parse image ID from build output", fg=typer.colors.RED, err=True
         )
         raise typer.Exit(1)
 
-    typer.echo(f"Built image: {image_id}")
-    return image_id
+    tag = _per_tool_image_tag(repo_root.name, agent_tool)
+    old_image_id = _capture_tagged_image_id(tag, subprocess_env)
+
+    tag_cmd = [
+        "devcontainer",
+        "build",
+        "--config",
+        str(config_dir / "devcontainer.json"),
+        "--workspace-folder",
+        str(repo_root),
+        "--image-name",
+        tag,
+    ]
+
+    tag_process = subprocess.Popen(
+        tag_cmd,
+        env=subprocess_env,
+        cwd=repo_root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+    tag_lines = []
+    for line in tag_process.stdout:  # type: ignore[union-attr]
+        typer.echo(line, nl=False)
+        tag_lines.append(line)
+
+    tag_process.wait()
+
+    if tag_process.returncode != 0:
+        typer.secho("Failed to tag devcontainer image", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+
+    tag_output = "".join(tag_lines)
+    tagged = _parse_image_name_from_build_json(tag_output) or tag
+
+    # Garbage control: drop the previous image the tag pointed at.
+    new_image_id = _inspect_image_id(tagged, subprocess_env)
+    if old_image_id and new_image_id and old_image_id != new_image_id:
+        if _remove_image(old_image_id, subprocess_env):
+            typer.echo(f"Removed previous image: {old_image_id}")
+
+    typer.echo(f"Built image: {tagged}")
+    return tagged
 
 
 @app.command(
@@ -1001,14 +1167,14 @@ def launch(
             typer.echo("Feature configuration changed; rebuilding image...")
         else:
             typer.echo("Building devcontainer image (--rebuild specified)...")
-        image_id = _build_image(config_dir, repo_root, subprocess_env)
+        image_id = _build_image(config_dir, repo_root, subprocess_env, spec.name)
     else:
         image_id = load_image_id(config_dir)
         if image_id:
             typer.echo(f"Using existing image: {image_id}")
         else:
             typer.echo("Building devcontainer image (no cached image ID found)...")
-            image_id = _build_image(config_dir, repo_root, subprocess_env)
+            image_id = _build_image(config_dir, repo_root, subprocess_env, spec.name)
 
     save_image_id(config_dir, image_id)
 

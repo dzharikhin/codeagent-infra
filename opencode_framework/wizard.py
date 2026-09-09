@@ -38,13 +38,15 @@ class WizardResult:
 def suggest_branch_name(agent_tool: str = DEFAULT_TOOL) -> str:
     """Suggest a config branch name based on username and tool.
 
-    The default tool keeps the plain ``codeagent-<user>`` name; other
-    tools get a ``-<tool>`` suffix because git refuses to check out one
-    branch in two worktrees.
+    Every tool gets its own marked branch ``codeagent-<user>-<tool>``
+    (git refuses to check out one branch in two worktrees, so each
+    tool's config worktree must sit on a distinct branch).
     """
-    username = getpass.getuser() or "user"
-    suffix = "" if agent_tool == DEFAULT_TOOL else f"-{agent_tool}"
-    return f"codeagent-{username}{suffix}"
+    try:
+        username = getpass.getuser() or "user"
+    except OSError:
+        username = "user"
+    return f"codeagent-{username}-{agent_tool}"
 
 
 def resolve_tool_or_exit(tool: str, hint: Optional[str] = None) -> ToolSpec:

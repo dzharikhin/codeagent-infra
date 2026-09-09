@@ -34,7 +34,7 @@ Tool-agnostic isolation around the project: devcontainer image build, Docker Com
 
 ### Part 2: Agent Tool Integration
 
-Integration of one agent tool (opencode or qwen) and its layered configuration. This part absorbs the tool's configuration complexity:
+Integration of agent tools (opencode, qwen) and their layered configuration. A project may host several harnesses side by side — one per tool — each isolated and independent: its own config worktree, `.env`, container, volumes, and image tag. This part absorbs the tools' configuration complexity:
 
 effective config = global < framework < project (optional) < env < CLI args
 
@@ -113,13 +113,15 @@ Content lives at `framework-nuts-and-bolts/{common,opencode,qwen}/`. Delivery is
 
 ## Non-Goals for V1
 
-- multiple agent tools in one project (exactly one active tool, chosen at init)
 - automatic install of missing required dependencies
 - automatic repair of broken environments
 
 ## Main Decisions
 
-- The agent tool is configurable via a ToolSpec registry (opencode, qwen); one tool per project, chosen at `init`, persisted as `OCF_AGENT_TOOL`; switching tools requires re-init
+- Each `init --tool <name>` creates one independent harness with fully isolated configuration: per-tool config worktree (`.opencode/`, `.qwen/`), `.env`, container, named volumes, and image tag. Adding another tool is a second `init --tool`; existing harnesses are never touched
+- Config branches are per-tool and marked: `codeagent-<user>-<tool>` (e.g. `codeagent-alice-opencode`, `codeagent-alice-qwen`) — git refuses to check out one branch in two worktrees
+- `launch` auto-detects configured harnesses: a single valid config launches directly; several valid configs prompt for a choice (interactive TTY) or fail with a `--tool` remediation (non-interactive)
+- The agent tool is configurable via a ToolSpec registry (opencode, qwen), persisted per harness as `OCF_AGENT_TOOL`
 - The sandbox (Part 1) is tool-agnostic and usable without an agent
 - Config precedence: global < framework < project < env < CLI args; the framework only wires configuration layers, the agent tool computes the effective configuration
 - Project-local root is `.opencode/`

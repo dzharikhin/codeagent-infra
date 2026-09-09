@@ -4,6 +4,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+import typer
+
+from opencode_framework.cli.app import (
+    _build_image,
+    _parse_image_name_from_build_json,
+    _per_tool_image_tag,
+)
 from opencode_framework.exceptions import PortAllocationError
 
 
@@ -1365,3 +1373,229 @@ class TestLaunchToolSelection:
         assert result.exit_code == 0
         assert "Using opencode config at .opencode/" in result.output
         assert "Warning: OCF_AGENT_TOOL='qwen'" in result.output
+
+
+class _FakeProcess:
+    """Minimal subprocess.Popen stand-in for devcontainer commands."""
+
+    def __init__(self, lines, returncode=0):
+        self.stdout = lines
+        self.returncode = returncode
+
+    def wait(self):
+        return self.returncode
+
+
+class TestPerToolImageTag:
+    """Tests for per-tool image tag construction."""
+
+    @pytest.mark.parametrize("tool", ["opencode", "qwen"])
+    def test_tag_format(self, tool):
+        assert _per_tool_image_tag("myrepo", tool) == f"ocf-myrepo-{tool}:latest"
+
+    def test_tags_differ_per_tool(self):
+        assert _per_tool_image_tag("myrepo", "opencode") != _per_tool_image_tag(
+            "myrepo", "qwen"
+        )
+
+    @pytest.mark.parametrize(
+        "raw,slug",
+        [
+            ("myrepo", "myrepo"),
+            ("My.Repo_1", "my.repo_1"),
+            ("My Repo!", "my-repo"),
+            ("-leading_trailing-", "leading_trailing"),
+            ("...", "repo"),
+        ],
+    )
+    def test_slugification(self, raw, slug):
+        assert _per_tool_image_tag(raw, "opencode") == f"ocf-{slug}-opencode:latest"
+
+
+class TestParseImageNameFromBuildJson:
+    """Tests for imageName parsing from devcontainer build output."""
+
+    def test_parses_list_image_name(self):
+        output = '{"outcome":"success","imageName":["ocf-x-opencode:latest"]}\n'
+        assert _parse_image_name_from_build_json(output) == "ocf-x-opencode:latest"
+
+    def test_parses_string_image_name(self):
+        output = '{"outcome":"success","imageName":"vsc-x"}\n'
+        assert _parse_image_name_from_build_json(output) == "vsc-x"
+
+    def test_ignores_failure_outcome_and_garbage(self):
+        output = 'some log line\n{"outcome":"error","imageName":["x"]}\n'
+        assert _parse_image_name_from_build_json(output) is None
+
+    def test_ignores_missing_image_name(self):
+        output = '{"outcome":"success"}\n'
+        assert _parse_image_name_from_build_json(output) is None
+
+
+class TestBuildImageTwoStep:
+    """Tests for the up → build --image-name flow in _build_image."""
+
+    def _patch_subprocess(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+        tool: str = "opencode",
+        old_id=None,
+        new_id="sha256:new",
+        build_rc=0,
+    ):
+        """Fake Popen (devcontainer) and run (docker) for _build_image."""
+        import importlib
+
+        app_module = importlib.import_module("opencode_framework.cli.app")
+
+        commands: list = []
+        rmi_calls: list = []
+        expected_tag = _per_tool_image_tag(tmp_path.name, tool)
+
+        def fake_popen(cmd, **kw):
+            commands.append(list(cmd))
+            if "up" in cmd:
+                lines = ['{"outcome":"success","containerId":"c1"}\n']
+            else:
+                lines = [f'{{"outcome":"success","imageName":["{expected_tag}"]}}\n']
+            return _FakeProcess(lines, returncode=build_rc if "build" in cmd else 0)
+
+        def fake_run(cmd, **kw):
+            cmd = list(cmd)
+            result = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            if cmd[:2] == ["docker", "inspect"] and "--format={{.Config.Image}}" in cmd:
+                result.stdout = "vsc-old-image\n"
+            elif cmd[:2] == ["docker", "images"] and "--filter" in cmd:
+                result.stdout = f"{old_id}\n" if old_id else ""
+            elif cmd[:3] == ["docker", "image", "inspect"] and "{{.Id}}" in cmd:
+                result.stdout = f"{new_id}\n"
+            elif cmd[:2] == ["docker", "rmi"]:
+                rmi_calls.append(cmd)
+            return result
+
+        monkeypatch.setattr(app_module.subprocess, "Popen", fake_popen)
+        monkeypatch.setattr(app_module.subprocess, "run", fake_run)
+        return app_module, commands, rmi_calls, expected_tag
+
+    def _make_config(self, tmp_path: Path, tool: str) -> Path:
+        config_dir = tmp_path / ("." + tool)
+        config_dir.mkdir()
+        (config_dir / "devcontainer.json").write_text("{}")
+        return config_dir
+
+    def test_up_then_build_with_per_tool_tag(self, tmp_path: Path, monkeypatch):
+        """_build_image runs `up` first, then `build` with the per-tool tag."""
+        tool = "opencode"
+        config_dir = self._make_config(tmp_path, tool)
+        app_module, commands, _, expected_tag = self._patch_subprocess(
+            monkeypatch, tmp_path, tool=tool
+        )
+
+        tag = _build_image(config_dir, tmp_path, {}, tool)
+
+        assert commands[0][:2] == ["devcontainer", "up"]
+        assert commands[1][:2] == ["devcontainer", "build"]
+        assert "--image-name" in commands[1]
+        assert commands[1][commands[1].index("--image-name") + 1] == expected_tag
+        assert tag == expected_tag
+
+    @pytest.mark.parametrize("tool", ["opencode", "qwen"])
+    def test_tag_is_per_tool(self, tmp_path: Path, monkeypatch, tool):
+        """The applied tag carries the tool name."""
+        config_dir = self._make_config(tmp_path, tool)
+        self._patch_subprocess(monkeypatch, tmp_path, tool=tool)
+
+        tag = _build_image(config_dir, tmp_path, {}, tool)
+
+        assert tag == f"ocf-{tmp_path.name}-{tool}:latest"
+
+    def test_previous_image_removed_when_changed(self, tmp_path: Path, monkeypatch):
+        """A previous image behind the tag is removed after the tag moves."""
+        config_dir = self._make_config(tmp_path, "opencode")
+        _, _, rmi_calls, _ = self._patch_subprocess(
+            monkeypatch, tmp_path, old_id="sha256:old", new_id="sha256:new"
+        )
+
+        _build_image(config_dir, tmp_path, {}, "opencode")
+
+        assert rmi_calls == [["docker", "rmi", "sha256:old"]]
+
+    def test_same_image_not_removed(self, tmp_path: Path, monkeypatch):
+        """Cache replay producing the same image triggers no cleanup."""
+        config_dir = self._make_config(tmp_path, "opencode")
+        _, _, rmi_calls, _ = self._patch_subprocess(
+            monkeypatch, tmp_path, old_id="sha256:same", new_id="sha256:same"
+        )
+
+        _build_image(config_dir, tmp_path, {}, "opencode")
+
+        assert rmi_calls == []
+
+    def test_first_build_no_cleanup(self, tmp_path: Path, monkeypatch):
+        """No previous tag → nothing to clean up."""
+        config_dir = self._make_config(tmp_path, "opencode")
+        _, _, rmi_calls, _ = self._patch_subprocess(
+            monkeypatch, tmp_path, old_id=None, new_id="sha256:new"
+        )
+
+        _build_image(config_dir, tmp_path, {}, "opencode")
+
+        assert rmi_calls == []
+
+    def test_tag_step_failure_exits(self, tmp_path: Path, monkeypatch):
+        """A failing `devcontainer build` step exits with code 1."""
+        config_dir = self._make_config(tmp_path, "opencode")
+        self._patch_subprocess(monkeypatch, tmp_path, build_rc=1)
+
+        with pytest.raises(typer.Exit) as exc_info:
+            _build_image(config_dir, tmp_path, {}, "opencode")
+
+        assert exc_info.value.exit_code == 1
+
+
+class TestLaunchBuildImageToolArg:
+    """launch passes the selected tool name to _build_image."""
+
+    def test_build_image_receives_tool_name(self, tmp_path: Path, monkeypatch):
+        import importlib
+
+        app_module = importlib.import_module("opencode_framework.cli.app")
+
+        opencode = tmp_path / ".opencode"
+        opencode.mkdir()
+        (opencode / "docker-compose.yaml").write_text(
+            "services:\n  opencode:\n    container_name: ocf_repo\n"
+        )
+        (opencode / ".env").write_text("REMOTE_USER=root\nOCF_AGENT_TOOL=opencode\n")
+
+        build_args: list = []
+
+        def fake_build(config_dir, repo_root, subprocess_env, agent_tool):
+            build_args.append(agent_tool)
+            return "sha256:fake"
+
+        def mock_run(*args, **kw):
+            result = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            return result
+
+        monkeypatch.setattr(
+            app_module,
+            "validate_runtime_context",
+            lambda cwd, config_dirname: (True, ""),
+        )
+        monkeypatch.setattr(app_module, "get_repo_root", lambda cwd: tmp_path.resolve())
+        monkeypatch.setattr(app_module, "load_env_with_overrides", lambda **kw: {})
+        monkeypatch.setattr(app_module, "build_docker_env", lambda env, ctx: {})
+        monkeypatch.setattr(app_module, "load_image_id", lambda d: None)
+        monkeypatch.setattr(app_module, "_build_image", fake_build)
+        monkeypatch.setattr(app_module, "save_image_id", lambda *a, **kw: None)
+        monkeypatch.setattr(app_module.subprocess, "run", mock_run)
+        monkeypatch.chdir(tmp_path)
+
+        from typer.testing import CliRunner
+
+        result = CliRunner().invoke(app_module.app, ["launch"])
+
+        assert result.exit_code == 0
+        assert build_args == ["opencode"]

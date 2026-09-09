@@ -3,15 +3,17 @@
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from opencode_framework.agent.registry import get_tool_spec
 from opencode_framework.config import discover_global_settings
-from opencode_framework.wizard import WizardResult
 
 from .base import GenerationContext
 from .config_files import ConfigFilesGenerator
 from .documentation import DocumentationGenerator
+
+if TYPE_CHECKING:
+    from opencode_framework.wizard import WizardResult
 
 
 class GenerationOrchestrator:
@@ -29,7 +31,7 @@ class GenerationOrchestrator:
         self.docs_gen = DocumentationGenerator()
         self.compose_gen = ComposeGenerator()
 
-    def generate(self, repo_root: Path, wizard_result: WizardResult) -> None:
+    def generate(self, repo_root: Path, wizard_result: "WizardResult") -> None:
         """Generate the complete config worktree for the selected tool.
 
         Args:

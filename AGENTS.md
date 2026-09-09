@@ -293,6 +293,13 @@ poetry run pytest            # Run tests
 
 All commands require a valid framework repository (installed via `pipx install -e <path>`).
 
+Multiple harnesses can coexist in one project — one per tool, each with its own
+isolated config directory (`.opencode/`, `.qwen/`), `.env`, container, volumes,
+and image tag. `init --tool <name>` adds a harness without touching existing
+ones. `launch` detects configured harnesses: one valid config launches directly,
+several valid configs prompt for a choice (interactive TTY; hard error with
+`--tool` remediation when non-interactive).
+
 Launch target selection precedence: `--tool` flag > auto-detect (exactly one
 valid config dir) > interactive prompt (multiple valid, interactive TTY);
 non-interactive with multiple valid configs is a hard error. Pass-through
@@ -358,9 +365,9 @@ a hard launch error with a re-init remediation — regenerate via
 - The config worktree lives in a per-tool native dir: `.opencode/`
   (opencode) or `.qwen/` (qwen) — a nested linked Git worktree on a
   separate branch
-- Branch name suggested: `codeagent-{username}` (opencode) /
-  `codeagent-{username}-qwen` (other tools; git refuses to check out one
-  branch in two worktrees, hence the suffix)
+- Branch name suggested: `codeagent-{username}-{tool}` for every tool
+  (e.g. `codeagent-alice-opencode`, `codeagent-alice-qwen`); git refuses
+  to check out one branch in two worktrees, hence the per-tool mark
 - If branch exists, reuse it; otherwise create orphan branch
 - Framework never auto-commits; developer controls commits
 
@@ -371,6 +378,12 @@ a hard launch error with a re-init remediation — regenerate via
   `m2-myrepo-qwen`, `gradle-myrepo-qwen`, `docker-myrepo-qwen`) via
   `managed_volume_name(prefix, repo_name, tool)` in `agent/registry.py` —
   two agents can run concurrently on one repo without sharing mutable state
+- Built images: `ocf-<repo>-<tool>:latest` (e.g. `ocf-myrepo-qwen:latest`),
+  applied via `devcontainer build --image-name` after the `devcontainer up`
+  step; persisted in the tool's `<config_dir>/runtime_data/.image_id` and
+  surfaced as `OCF_IMAGE_ID` — avoids collision on the devcontainer CLI's
+  shared `vsc-<workspace>-<hash>` tag when several harnesses build for the
+  same workspace folder
 - Containers created before the per-tool naming upgrade (`ocf_<repo>`) are
   not auto-attached by `launch`; remove them (`docker rm -f ocf_<repo>`)
   or run `launch --force` once

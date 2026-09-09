@@ -91,6 +91,21 @@ ocframework init --force
 
 The backup is created at `.opencode.backup-<timestamp>` in the project root.
 
+### Multiple Agents in One Project
+
+Every tool initializes independently, so a project can host several harnesses
+side by side — each with its own config directory, `.env`, container, volumes,
+and image tag. To add a second agent next to an existing one:
+
+```sh
+ocframework init --tool qwen
+```
+
+Existing harnesses are never touched. `ocframework launch` then starts the
+single configured agent automatically, or asks which one to launch when
+several are configured (pass `--tool <name>` to choose explicitly, e.g. in
+scripts).
+
 ### Environment Configuration
 
 The `init` command generates `.opencode/.env` with placeholder values. Edit this file to configure environment variables for your project.
@@ -154,7 +169,7 @@ docker info | grep "Storage Driver"
 # Should output: Storage Driver: overlay2 (or vfs in sandboxed environments)
 ```
 
-A named volume `docker-<repo>` is mounted at `/var/lib/docker` to persist Docker data across container restarts.
+A named volume `docker-<repo>-<tool>` is mounted at `/var/lib/docker` to persist Docker data across container restarts.
 
 ### Debug Configuration
 
@@ -197,10 +212,11 @@ Both print version info, framework repo path, global config status, and auth.jso
 
 ### Remove the Container
 
-There is no `devcontainer down` command. To stop and remove the container:
+There is no `devcontainer down` command. To stop and remove the container
+(named `ocf_<repo>_<tool>`, e.g. `ocf_myrepo_qwen`):
 
 ```sh
-docker rm -f ocf_$(basename "$(pwd)")
+docker rm -f ocf_$(basename "$(pwd)")_<tool>
 ```
 
 ### Run a Headless Server (Serve)
