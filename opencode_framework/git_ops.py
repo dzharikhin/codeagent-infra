@@ -3,7 +3,7 @@
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 
 @dataclass
@@ -22,10 +22,9 @@ def run_git_command(
 ) -> subprocess.CompletedProcess:
     """Run a git command, returning a CompletedProcess.
 
-    Failed commands and timeouts are converted into non-zero return
-    codes instead of raising, unless ``check`` is set (in which case a
-    non-zero exit raises ``subprocess.CalledProcessError`` only for the
-    converted timeout-free cases handled below).
+    Failures (non-zero exit, timeout, missing git binary) are converted
+    into non-zero return codes instead of raising; ``stderr`` carries
+    the failure details.
     """
     try:
         return subprocess.run(
@@ -158,17 +157,22 @@ def make_initial_commit(
     message: str,
     cwd: Optional[Path] = None,
     allow_empty: bool = True,
-) -> bool:
-    """Create an initial commit.
+) -> Tuple[bool, str]:
+    """Create the framework's bootstrap commit.
 
-    Returns True on success.
+    This is internal bookkeeping for the config worktree, so GPG
+    signing (``-c commit.gpgsign=false``) and hooks (``--no-verify``)
+    are bypassed to keep ``init`` deterministic.
+
+    Returns:
+        Tuple of (success, stripped git stderr; empty on success).
     """
-    args = ["commit", "-m", message]
+    args = ["-c", "commit.gpgsign=false", "commit", "-m", message, "--no-verify"]
     if allow_empty:
         args.append("--allow-empty")
 
     result = run_git_command(args, cwd=cwd)
-    return result.returncode == 0
+    return result.returncode == 0, result.stderr.strip()
 
 
 def setup_config_worktree(
@@ -193,16 +197,19 @@ def setup_config_worktree(
         return result
 
     if not existing_branch:
-        success = make_initial_commit(
+        success, stderr = make_initial_commit(
             message="Initial OpenCode framework configuration",
             cwd=config_dir,
             allow_empty=True,
         )
         if not success:
             remove_worktree(config_dir, cwd=repo_root)
+            error = "Failed to create initial commit"
+            if stderr:
+                error = f"{error}: {stderr}"
             return WorktreeResult(
                 success=False,
-                error="Failed to create initial commit",
+                error=error,
             )
 
     return result

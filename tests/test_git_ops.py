@@ -3,6 +3,7 @@
 import shutil
 import subprocess
 from pathlib import Path
+from typing import List, Optional, Tuple
 
 import pytest
 
@@ -11,6 +12,7 @@ from opencode_framework.git_ops import (
     create_worktree,
     get_current_branch,
     is_worktree,
+    make_initial_commit,
     remove_worktree,
     setup_config_worktree,
 )
@@ -105,6 +107,96 @@ class TestWorktreeOperations:
 
         assert remove_worktree(worktree_path, cwd=git_repo)
         assert not worktree_path.exists()
+
+
+class TestMakeInitialCommit:
+    """Tests for make_initial_commit."""
+
+    def test_uses_bootstrap_flags(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Bootstrap commit bypasses GPG signing and hooks."""
+        captured: List[List[str]] = []
+
+        def fake_run_git_command(
+            args: List[str],
+            cwd: Optional[Path] = None,
+            check: bool = False,
+        ) -> subprocess.CompletedProcess:
+            captured.append(args)
+            return subprocess.CompletedProcess(
+                args=["git"] + args, returncode=0, stdout="", stderr=""
+            )
+
+        monkeypatch.setattr(
+            "opencode_framework.git_ops.run_git_command", fake_run_git_command
+        )
+
+        success, stderr = make_initial_commit("Initial config", cwd=tmp_path)
+
+        assert success
+        assert stderr == ""
+        args = captured[0]
+        assert args[:2] == ["-c", "commit.gpgsign=false"]
+        assert "commit" in args
+        assert "-m" in args
+        assert "--no-verify" in args
+        assert "--allow-empty" in args
+
+    def test_failure_propagates_stderr(
+        self, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """setup_config_worktree surfaces git stderr on bootstrap commit failure."""
+
+        def fake_make_initial_commit(
+            message: str,
+            cwd: Optional[Path] = None,
+            allow_empty: bool = True,
+        ) -> Tuple[bool, str]:
+            return False, "fatal: unable to auto-detect email address"
+
+        monkeypatch.setattr(
+            "opencode_framework.git_ops.make_initial_commit", fake_make_initial_commit
+        )
+
+        opencode_dir = git_repo / ".opencode"
+        result = setup_config_worktree(
+            repo_root=git_repo,
+            branch_name="codeagent-fail",
+            config_dir=opencode_dir,
+        )
+
+        assert not result.success
+        assert result.error is not None
+        assert "Failed to create initial commit" in result.error
+        assert "fatal: unable to auto-detect email address" in result.error
+        assert not opencode_dir.exists()
+
+    def test_failure_without_stderr(
+        self, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """setup_config_worktree falls back to a plain message when stderr is empty."""
+
+        def fake_make_initial_commit(
+            message: str,
+            cwd: Optional[Path] = None,
+            allow_empty: bool = True,
+        ) -> Tuple[bool, str]:
+            return False, ""
+
+        monkeypatch.setattr(
+            "opencode_framework.git_ops.make_initial_commit", fake_make_initial_commit
+        )
+
+        opencode_dir = git_repo / ".opencode"
+        result = setup_config_worktree(
+            repo_root=git_repo,
+            branch_name="codeagent-fail",
+            config_dir=opencode_dir,
+        )
+
+        assert not result.success
+        assert result.error == "Failed to create initial commit"
 
 
 class TestSetupConfigWorktree:
