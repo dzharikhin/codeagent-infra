@@ -16,3 +16,4 @@ RUN <<EOF
     fi
 EOF
 RUN mkdir -p /etc/docker && echo '{"firewall-backend": "nftables"}' > /etc/docker/daemon.json
+{{AGENT_INSTALL}}

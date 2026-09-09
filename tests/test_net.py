@@ -5,7 +5,7 @@ import socket
 import pytest
 
 from opencode_framework.exceptions import PortAllocationError
-from opencode_framework.net import find_free_port
+from opencode_framework.sandbox.net import find_free_port
 
 
 class TestFindFreePort:

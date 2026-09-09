@@ -87,7 +87,7 @@ class TestDevcontainerHandling:
     @pytest.mark.skipif(not TOOLS_AVAILABLE, reason="Required tools not installed")
     def test_incompatible_devcontainer_detected(self, tmp_path: Path):
         """Test that incompatible devcontainer is detected."""
-        from opencode_framework.devcontainer import detect_devcontainer
+        from opencode_framework.sandbox.devcontainer import detect_devcontainer
 
         repo = tmp_path / "test-repo"
         repo.mkdir()
@@ -124,7 +124,7 @@ class TestWizardBehavior:
 
     def test_incompatible_devcontainer_detection(self, tmp_path: Path):
         """Test that incompatible devcontainer is detected."""
-        from opencode_framework.devcontainer import detect_devcontainer
+        from opencode_framework.sandbox.devcontainer import detect_devcontainer
 
         repo = tmp_path / "test-repo"
         repo.mkdir()
@@ -152,7 +152,7 @@ class TestForceFlag:
         opencode_dir.mkdir()
         (opencode_dir / "test.txt").write_text("existing content")
 
-        result = run_cli(["init", "--force"], cwd=repo)
+        run_cli(["init", "--force"], cwd=repo)
 
         backups = list(repo.glob(".opencode.backup-*"))
         if backups:
@@ -170,7 +170,7 @@ class TestForceFlag:
         (opencode_dir / "link-to-test.txt").symlink_to("test.txt")
         (opencode_dir / "broken-link").symlink_to("/nonexistent/path")
 
-        result = run_cli(["init", "--force"], cwd=repo)
+        run_cli(["init", "--force"], cwd=repo)
 
         backups = list(repo.glob(".opencode.backup-*"))
         if backups:
@@ -188,12 +188,12 @@ class TestGeneratedConfig:
         """Test that generated devcontainer.json has correct structure."""
         from opencode_framework.config import GlobalSettings
         from opencode_framework.generators import GenerationContext
-        from opencode_framework.generators.devcontainer import DevcontainerGenerator
+        from opencode_framework.sandbox.devcontainer import DevcontainerGenerator
 
         (tmp_path / ".opencode").mkdir()
         ctx = GenerationContext(
             repo_root=tmp_path,
-            opencode_dir=tmp_path / ".opencode",
+            config_dir=tmp_path / ".opencode",
             branch_name="test-branch",
             optional_features=["python"],
             editor_choice="none",
@@ -217,15 +217,15 @@ class TestGeneratedConfig:
         assert result["workspaceFolder"] == "/${localWorkspaceFolderBasename}"
 
     def test_devcontainer_no_remote_env(self, tmp_path: Path):
-        """Test that generated devcontainer does NOT have remoteEnv (moved to compose)."""
+        """Test that generated devcontainer has no remoteEnv (moved to compose)."""
         from opencode_framework.config import GlobalSettings
         from opencode_framework.generators import GenerationContext
-        from opencode_framework.generators.devcontainer import DevcontainerGenerator
+        from opencode_framework.sandbox.devcontainer import DevcontainerGenerator
 
         (tmp_path / ".opencode").mkdir()
         ctx = GenerationContext(
             repo_root=tmp_path,
-            opencode_dir=tmp_path / ".opencode",
+            config_dir=tmp_path / ".opencode",
             branch_name="test-branch",
             optional_features=[],
             editor_choice="none",
@@ -254,7 +254,7 @@ class TestGeneratedConfig:
         (tmp_path / ".opencode").mkdir()
         ctx = GenerationContext(
             repo_root=tmp_path,
-            opencode_dir=tmp_path / ".opencode",
+            config_dir=tmp_path / ".opencode",
             branch_name="test-branch",
             optional_features=[],
             editor_choice="vi",
@@ -278,12 +278,12 @@ class TestGeneratedConfig:
         """Test that OpenCode feature is included in generated devcontainer."""
         from opencode_framework.config import GlobalSettings
         from opencode_framework.generators import GenerationContext
-        from opencode_framework.generators.devcontainer import DevcontainerGenerator
+        from opencode_framework.sandbox.devcontainer import DevcontainerGenerator
 
         (tmp_path / ".opencode").mkdir()
         ctx = GenerationContext(
             repo_root=tmp_path,
-            opencode_dir=tmp_path / ".opencode",
+            config_dir=tmp_path / ".opencode",
             branch_name="test-branch",
             optional_features=[],
             editor_choice="none",
@@ -301,4 +301,7 @@ class TestGeneratedConfig:
         gen.generate(ctx)
         result = json.loads((tmp_path / ".opencode" / "devcontainer.json").read_text())
 
-        assert "ghcr.io/jsburckhardt/devcontainer-features/opencode:1.1.1" in result["features"]
+        assert (
+            "ghcr.io/jsburckhardt/devcontainer-features/opencode:1.1.1"
+            in result["features"]
+        )

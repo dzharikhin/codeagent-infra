@@ -10,15 +10,14 @@ from opencode_framework.config import (
     get_config_root,
     get_local_config_root,
     get_local_home,
-    validate_framework_repo,
 )
 from opencode_framework.preflight import (
     PreflightResult,
     check_docker_rootless_context,
     check_required_tools,
+    config_directory_exists,
     get_repo_root,
     is_inside_git_tree,
-    opencode_directory_exists,
     run_preflight_checks,
 )
 
@@ -72,71 +71,47 @@ class TestGitOperations:
         assert result is None
 
 
-class TestOpencodeDirectoryExists:
-    """Tests for .opencode/ directory detection."""
+class TestConfigDirectoryExists:
+    """Tests for agent tool config directory detection."""
 
     def test_returns_false_when_not_exists(self, tmp_path: Path):
         """Should return False when .opencode/ doesn't exist."""
-        assert opencode_directory_exists(tmp_path) is False
+        assert config_directory_exists(tmp_path) is False
 
     def test_returns_true_when_exists(self, tmp_path: Path):
         """Should return True when .opencode/ exists."""
         (tmp_path / ".opencode").mkdir()
-        assert opencode_directory_exists(tmp_path) is True
+        assert config_directory_exists(tmp_path) is True
+
+    def test_qwen_tool_checks_qwen_dir(self, tmp_path: Path):
+        """agent_tool='qwen' should check .qwen/, not .opencode/."""
+        (tmp_path / ".opencode").mkdir()
+        assert config_directory_exists(tmp_path, agent_tool="qwen") is False
+        (tmp_path / ".qwen").mkdir()
+        assert config_directory_exists(tmp_path, agent_tool="qwen") is True
 
 
-class TestValidateFrameworkRepo:
-    """Tests for framework repository validation."""
+class TestDetectFrameworkRepoPath:
+    """Tests for framework repo detection from an editable install."""
 
-    def test_valid_framework_repo(self, tmp_path: Path):
-        """Should return True for valid framework repo."""
-        (tmp_path / ".git").mkdir()
-        (tmp_path / "framework-nuts-and-bolts").mkdir()
-        (tmp_path / "framework-nuts-and-bolts" / "stub-auth.json").write_text("{}")
-        (tmp_path / "framework-config").mkdir()
+    def test_detects_repo_root_of_package(self):
+        """Should return the package's parent directory when it is a git clone."""
+        import opencode_framework
 
-        valid, missing = validate_framework_repo(tmp_path)
-        assert valid is True
-        assert missing == []
+        repo_root = Path(opencode_framework.__file__).resolve().parent.parent
+        settings = discover_global_settings()
+        if not (repo_root / ".git").is_dir():
+            pytest.skip("opencode_framework not installed from a git clone")
+        assert settings.framework_repo_path == str(repo_root)
 
-    def test_invalid_missing_git(self, tmp_path: Path):
-        """Should return False when .git is missing."""
-        (tmp_path / "framework-nuts-and-bolts").mkdir()
-        (tmp_path / "framework-nuts-and-bolts" / "stub-auth.json").write_text("{}")
-        (tmp_path / "framework-config").mkdir()
-
-        valid, missing = validate_framework_repo(tmp_path)
-        assert valid is False
-        assert ".git" in missing
-
-    def test_invalid_missing_framework_nuts_and_bolts(self, tmp_path: Path):
-        """Should return False when framework-nuts-and-bolts is missing."""
-        (tmp_path / ".git").mkdir()
-        (tmp_path / "framework-config").mkdir()
-
-        valid, missing = validate_framework_repo(tmp_path)
-        assert valid is False
-        assert "framework-nuts-and-bolts" in missing
-
-    def test_invalid_missing_stub_auth(self, tmp_path: Path):
-        """Should return False when stub-auth.json is missing."""
-        (tmp_path / ".git").mkdir()
-        (tmp_path / "framework-nuts-and-bolts").mkdir()
-        (tmp_path / "framework-config").mkdir()
-
-        valid, missing = validate_framework_repo(tmp_path)
-        assert valid is False
-        assert "framework-nuts-and-bolts/stub-auth.json" in missing
-
-    def test_invalid_missing_framework_config(self, tmp_path: Path):
-        """Should return False when framework-config is missing."""
-        (tmp_path / ".git").mkdir()
-        (tmp_path / "framework-nuts-and-bolts").mkdir()
-        (tmp_path / "framework-nuts-and-bolts" / "stub-auth.json").write_text("{}")
-
-        valid, missing = validate_framework_repo(tmp_path)
-        assert valid is False
-        assert "framework-config" in missing
+    def test_framework_config_path_derived_from_repo(self):
+        """Should expose framework-config under the detected repo."""
+        settings = discover_global_settings()
+        if settings.framework_repo_path is None:
+            pytest.skip("opencode_framework not installed from a git clone")
+        assert settings.framework_config_path == str(
+            Path(settings.framework_repo_path) / "framework-config"
+        )
 
 
 class TestRunPreflightChecks:

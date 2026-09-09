@@ -7,10 +7,6 @@ from typing import Dict, List, Optional, Tuple
 
 from dotenv import dotenv_values
 
-from opencode_framework.config import (
-    get_framework_validation_error,
-    validate_framework_repo,
-)
 from opencode_framework.preflight import get_repo_root, is_inside_git_tree
 
 
@@ -44,16 +40,21 @@ class InterpolationError(EnvError):
     """Raised when interpolation fails."""
 
 
-def validate_runtime_context(cwd: Path) -> Tuple[bool, str]:
+def validate_runtime_context(cwd: Path, config_dirname: str) -> Tuple[bool, str]:
     """Validate that the current directory is suitable for launch/exec.
 
     Checks:
     - Inside a Git working tree
     - At the repository root
-    - .opencode/ directory exists
-    - .opencode/devcontainer.json exists
-    - .opencode/.env exists
-    - Framework repo from .env still exists and is valid
+    - <config_dirname>/ directory exists
+    - <config_dirname>/devcontainer.json exists
+    - <config_dirname>/.env exists
+    - Framework repo path from .env still exists
+
+    Args:
+        cwd: directory launch was invoked from.
+        config_dirname: name of the agent tool's config worktree directory
+            (e.g. ".opencode" or ".qwen").
 
     Returns:
         (True, "") on success
@@ -72,35 +73,41 @@ def validate_runtime_context(cwd: Path) -> Tuple[bool, str]:
             f"Current directory is not the repository root. Run from: {repo_root}",
         )
 
-    opencode_dir = repo_root / ".opencode"
-    if not opencode_dir.is_dir():
+    config_dir = repo_root / config_dirname
+    if not config_dir.is_dir():
         return (
             False,
-            ".opencode/ directory does not exist. Run 'ocframework init' first.",
+            f"{config_dirname}/ directory does not exist. "
+            "Run 'ocframework init' first.",
         )
 
-    devcontainer_json = opencode_dir / "devcontainer.json"
+    devcontainer_json = config_dir / "devcontainer.json"
     if not devcontainer_json.is_file():
         return (
             False,
-            ".opencode/devcontainer.json does not exist. Run 'ocframework init' first.",
+            f"{config_dirname}/devcontainer.json does not exist. "
+            "Run 'ocframework init' first.",
         )
 
-    env_file = opencode_dir / ".env"
+    env_file = config_dir / ".env"
     if not env_file.is_file():
-        return False, ".opencode/.env does not exist. Run 'ocframework init' first."
+        return (
+            False,
+            f"{config_dirname}/.env does not exist. Run 'ocframework init' first.",
+        )
 
     # Load base env to validate framework path
     try:
         base_env = dotenv_values(env_file, interpolate=True)
     except Exception as e:
-        return False, f"Error reading .opencode/.env: {e}"
+        return False, f"Error reading {config_dirname}/.env: {e}"
 
     framework_path_str = base_env.get("OCF_LOCAL_FRAMEWORK_PATH")
     if not framework_path_str:
         return (
             False,
-            "OCF_LOCAL_FRAMEWORK_PATH not set in .opencode/.env. Run 'ocframework init' again.",
+            f"OCF_LOCAL_FRAMEWORK_PATH not set in {config_dirname}/.env. "
+            "Run 'ocframework init' again.",
         )
 
     framework_path = Path(framework_path_str)
@@ -110,11 +117,6 @@ def validate_runtime_context(cwd: Path) -> Tuple[bool, str]:
             "The framework must be reinstalled from a valid git clone:\n"
             "  pipx install -e <path-to-framework-git-clone>"
         )
-
-    valid, missing = validate_framework_repo(framework_path)
-    if not valid:
-        error_msg = get_framework_validation_error(missing, framework_path_str)
-        return False, f"Framework repository is invalid:\n{error_msg}"
 
     return True, ""
 
@@ -159,13 +161,15 @@ def load_env_with_overrides(
         CircularReferenceError: For circular references
         FileNotFoundError: If specified files don't exist
     """
-    merged_env = {}
+    merged_env: Dict[str, str] = {}
 
     # 0. Load global env (lowest priority, best-effort)
     if global_env_path and global_env_path.exists():
         try:
-            global_env = dotenv_values(global_env_path, interpolate=False)
-            global_env = {k: v if v is not None else "" for k, v in global_env.items()}
+            global_env_raw = dotenv_values(global_env_path, interpolate=False)
+            global_env: Dict[str, str] = {
+                k: v if v is not None else "" for k, v in global_env_raw.items()
+            }
             merged_env.update(global_env)
         except Exception as e:
             if warnings is not None:
@@ -175,27 +179,31 @@ def load_env_with_overrides(
     if base_env_path.exists():
         try:
             # Load raw without interpolation
-            base_env = dotenv_values(base_env_path, interpolate=False)
+            base_env_raw = dotenv_values(base_env_path, interpolate=False)
             # Convert None to empty string (dotenv returns None for some cases)
-            base_env = {k: v if v is not None else "" for k, v in base_env.items()}
+            base_env: Dict[str, str] = {
+                k: v if v is not None else "" for k, v in base_env_raw.items()
+            }
             merged_env.update(base_env)
         except Exception as e:
-            raise EnvError(f"Failed to parse env file: {e}", file_path=base_env_path)
+            raise EnvError(
+                f"Failed to parse env file: {e}", file_path=base_env_path
+            ) from e
 
     # 2. Load override file if provided
     if override_env_path:
         if not override_env_path.exists():
             raise FileNotFoundError(f"Override env file not found: {override_env_path}")
         try:
-            override_env = dotenv_values(override_env_path, interpolate=False)
-            override_env = {
-                k: v if v is not None else "" for k, v in override_env.items()
+            override_env_raw = dotenv_values(override_env_path, interpolate=False)
+            override_env: Dict[str, str] = {
+                k: v if v is not None else "" for k, v in override_env_raw.items()
             }
             merged_env.update(override_env)
         except Exception as e:
             raise EnvError(
                 f"Failed to parse env file: {e}", file_path=override_env_path
-            )
+            ) from e
 
     # 3. Parse CLI variables
     if cli_env_vars:
@@ -203,16 +211,17 @@ def load_env_with_overrides(
             cli_env = parse_cli_env_vars(cli_env_vars)
             merged_env.update(cli_env)
         except ValueError as e:
-            raise EnvError(f"Invalid CLI environment variable: {e}")
+            raise EnvError(f"Invalid CLI environment variable: {e}") from e
 
     # 4. Apply recursive interpolation to merged environment
-    # This handles both basic interpolation ($VAR, ${VAR}) and defaults (${VAR:-default})
+    # This handles both basic interpolation ($VAR, ${VAR}) and the
+    # ${VAR:-default} syntax.
     try:
         final_env = apply_combined_interpolation(merged_env, max_depth=5)
     except CircularReferenceError:
         raise
     except Exception as e:
-        raise InterpolationError(f"Interpolation failed: {e}")
+        raise InterpolationError(f"Interpolation failed: {e}") from e
 
     return final_env
 
@@ -279,11 +288,6 @@ def apply_combined_interpolation(
         InterpolationError: If max depth exceeded
     """
     result = env.copy()
-
-    # Pattern for all variable references: $VAR, ${VAR}, and ${VAR:-default}
-    var_pattern = re.compile(
-        r"\$\{?([A-Za-z_][A-Za-z0-9_]*(?:-[^}]*)?)?\}?|\$([A-Za-z_][A-Za-z0-9_]*)"
-    )
 
     for depth in range(max_depth):
         changed = False
@@ -396,7 +400,7 @@ def build_docker_env(
     Merges base_env with current process environment and sets DOCKER_CONTEXT.
 
     Args:
-        base_env: Environment variables from .opencode/.env
+        base_env: Environment variables from the config directory's .env
         docker_context: Docker context to use (e.g., "rootless")
 
     Returns:

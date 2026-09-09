@@ -12,6 +12,10 @@ Framework for attaching AI coding agents to existing projects safely.
 
 See [vision.md](vision.md) for project goals, scope, and architecture.
 
+> **Roadmap:** the agent tool is becoming configurable (`opencode` | `qwen`) as
+> part of a 3-part restructure (sandbox / agent integration / nuts-and-bolts).
+> Design and implementation plan: [tool-adoption.md](tool-adoption.md).
+
 ## Requirements
 
 - Python 3.12+
@@ -87,11 +91,26 @@ ocframework init --force
 
 The backup is created at `.opencode.backup-<timestamp>` in the project root.
 
+### Multiple Agents in One Project
+
+Every tool initializes independently, so a project can host several harnesses
+side by side — each with its own config directory, `.env`, container, volumes,
+and image tag. To add a second agent next to an existing one:
+
+```sh
+ocframework init --tool qwen
+```
+
+Existing harnesses are never touched. `ocframework launch` then starts the
+single configured agent automatically, or asks which one to launch when
+several are configured (pass `--tool <name>` to choose explicitly, e.g. in
+scripts).
+
 ### Environment Configuration
 
 The `init` command generates `.opencode/.env` with placeholder values. Edit this file to configure environment variables for your project.
 
-You can also use a global environment file at `~/.config/opencode/.env` (on Unix-like systems) or `%APPDATA%\opencode\.env` on Windows. This file is automatically loaded if present, with the lowest priority.
+You can also use a global environment file at `~/.config/opencode/.env` for opencode projects (on Unix-like systems) or `%APPDATA%\opencode\.env` on Windows; qwen projects use `~/.qwen/.env`. This file is automatically loaded if present, with the lowest priority.
 
 At launch time, you can override environment variables:
 
@@ -104,7 +123,7 @@ ocframework launch -e API_KEY=secret123 -e DEBUG=true
 ```
 
 Environment precedence (lowest to highest):
-1. Global env file (`~/.config/opencode/.env` or `%APPDATA%\opencode\.env`, auto-loaded)
+1. Global env file (`~/.config/opencode/.env` for opencode, `~/.qwen/.env` for qwen; auto-loaded)
 2. Base `.opencode/.env` file
 3. Override file (`--env-file`)
 4. Command-line variables (`-e KEY=VALUE`)
@@ -150,7 +169,7 @@ docker info | grep "Storage Driver"
 # Should output: Storage Driver: overlay2 (or vfs in sandboxed environments)
 ```
 
-A named volume `docker-<repo>` is mounted at `/var/lib/docker` to persist Docker data across container restarts.
+A named volume `docker-<repo>-<tool>` is mounted at `/var/lib/docker` to persist Docker data across container restarts.
 
 ### Debug Configuration
 
@@ -193,10 +212,11 @@ Both print version info, framework repo path, global config status, and auth.jso
 
 ### Remove the Container
 
-There is no `devcontainer down` command. To stop and remove the container:
+There is no `devcontainer down` command. To stop and remove the container
+(named `ocf_<repo>_<tool>`, e.g. `ocf_myrepo_qwen`):
 
 ```sh
-docker rm -f ocf_$(basename "$(pwd)")
+docker rm -f ocf_$(basename "$(pwd)")_<tool>
 ```
 
 ### Run a Headless Server (Serve)

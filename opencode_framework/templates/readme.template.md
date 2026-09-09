@@ -29,19 +29,16 @@ This directory contains the project-level configuration for the OpenCode Framewo
 {{SHELL_COMMAND}}
 ```
 
-Find container name with: `docker ps | grep ocf-`
+Find container name with: `docker ps | grep ocf_`
 
-### Available Models
-
-To see available models (including any autodiscovered by the
-`opencode-models-discovery` plugin), run inside the container:
-
-```sh
-opencode models
-```
-
+{{AGENT_MODELS_SECTION}}
 ## How It Works
 
+The sandbox image is built once from `devcontainer.json` and reused across
+launches; `docker-compose.yaml` wires runtime env, mounts and ports.
+Agent install: {{AGENT_INSTALL_LINE}}
+
+{{AGENT_CONFIG_LAYERS_SECTION}}
 ## Rebuilding
 
 To rebuild the image (e.g., after changing features):
@@ -57,36 +54,20 @@ toggle features on or off. Only the feature-dependent parts of `devcontainer.jso
 `docker-compose.yaml` are updated; manual customizations are preserved. In a non-interactive
 context the prompt is skipped.
 
-## Run a Headless Server
-
-Run the OpenCode server inside the container so external clients (TUI attach,
-SDK, IDE, web UI) can connect, by combining the `serve` subcommand with port
-mappings:
-
-```sh
-{{LAUNCH_COMMAND}} -- serve --hostname 0.0.0.0 --port 4096
-```
-
-Add a matching port mapping (e.g. `4096:4096`) via `--rebuild` first; the
-framework auto-adds `--service-ports` when ports are configured. When
-`--server` is used alongside configured ports, each port is published
-individually instead (because `--service-ports` and `--publish` are mutually
-exclusive in `docker compose run`). Set `OPENCODE_SERVER_PASSWORD` in `.env`
-to enable basic auth.
-
+{{AGENT_SERVE_SECTION}}
 ## Version Control
 
 This directory is a linked Git worktree on branch `{{BRANCH_NAME}}`.
 
 To save configuration changes:
-1. `cd .opencode`
+1. `cd {{CONFIG_DIR}}`
 2. `git add . && git commit -m "Update config"`
 3. `git push origin {{BRANCH_NAME}}`
 
-The `.opencode/` directory is a linked Git worktree. Git commands must run
-from inside `.opencode/` to affect the configuration branch.
+The `{{CONFIG_DIR}}/` directory is a linked Git worktree. Git commands must run
+from inside `{{CONFIG_DIR}}/` to affect the configuration branch.
 
 ## Documentation
 
 - Framework docs: https://github.com/dzharikhin/codeagent-infra
-- OpenCode docs: https://opencode.ai
+{{AGENT_DOCS_LINE}}

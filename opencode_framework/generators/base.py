@@ -5,21 +5,23 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
 
+from opencode_framework.agent.registry import DEFAULT_TOOL
 from opencode_framework.config import GlobalSettings
 
 
 @dataclass
 class GenerationContext:
-    """Context for generating .opencode/ contents."""
+    """Context for generating the active tool's config directory contents."""
 
     repo_root: Path
-    opencode_dir: Path
+    config_dir: Path
     branch_name: str
     optional_features: List[str]
     editor_choice: str
     global_settings: GlobalSettings
     port_mappings: List[str] = field(default_factory=list)
     java_build_tools: List[str] = field(default_factory=list)
+    agent_tool: str = DEFAULT_TOOL
 
 
 class FileGenerator(ABC):

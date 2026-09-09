@@ -1,6 +1,7 @@
 """Validation service for project setup."""
 
 from pathlib import Path
+from typing import List
 
 from opencode_framework.core import ConfigManager, GitOperations
 from opencode_framework.models import ValidationResult
@@ -29,8 +30,8 @@ class ValidationService:
         Returns:
             ValidationResult with validation status and errors
         """
-        errors = []
-        warnings = []
+        errors: List[str] = []
+        warnings: List[str] = []
 
         # Check if inside git tree
         if not self.git.is_inside_git_tree(path):
@@ -75,8 +76,8 @@ class ValidationService:
         Returns:
             ValidationResult with validation status
         """
-        errors = []
-        warnings = []
+        errors: List[str] = []
+        warnings: List[str] = []
 
         # Discover global settings
         settings = self.config.discover_global_settings()
@@ -85,21 +86,8 @@ class ValidationService:
         if not settings.framework_repo_path:
             errors.append(
                 "Framework repository not found. "
-                "The framework must be installed as an editable package from a git clone: "
-                "pipx install -e <path-to-framework-git-clone>"
-            )
-            return ValidationResult(valid=False, errors=errors, warnings=warnings)
-
-        # Validate framework repo
-        valid, missing = self.config.validate_framework_repo(
-            Path(settings.framework_repo_path)
-        )
-        if not valid:
-            errors.append(
-                self.config.get_framework_validation_error(
-                    missing,
-                    settings.framework_repo_path,
-                )
+                "The framework must be installed as an editable package "
+                "from a git clone: pipx install -e <path-to-framework-git-clone>"
             )
             return ValidationResult(valid=False, errors=errors, warnings=warnings)
 
@@ -114,8 +102,8 @@ class ValidationService:
         Returns:
             ValidationResult with validation status
         """
-        errors = []
-        warnings = []
+        errors: List[str] = []
+        warnings: List[str] = []
 
         # Check for required environment variables if any
         # This can be extended as needed

@@ -6,13 +6,13 @@ from typing import List
 
 import pytest
 
-from opencode_framework import features
-from opencode_framework.generators.compose import ComposeGenerator
-from opencode_framework.generators.devcontainer import (
+from opencode_framework.generators.templates import TemplateHandler
+from opencode_framework.sandbox import features
+from opencode_framework.sandbox.compose import ComposeGenerator
+from opencode_framework.sandbox.devcontainer import (
     COMMON_UTILS_URL,
     DevcontainerGenerator,
 )
-from opencode_framework.generators.templates import TemplateHandler
 
 
 def _dc_with_features(*features: str, editor: str = "none") -> dict:
@@ -139,11 +139,11 @@ class TestDetect:
         tools = DevcontainerGenerator.detect_build_tools(dc)
         assert tools == []
 
-    def test_detect_build_tools_default_to_maven_when_no_flags(self):
-        """Backward compatibility: Java present but no build flags → default to maven."""
+    def test_detect_build_tools_no_flags_returns_empty(self):
+        """Java present but no build flags → no tools (no compat default)."""
         dc = _dc_with_features("java")
         tools = DevcontainerGenerator.detect_build_tools(dc)
-        assert tools == ["maven"]
+        assert tools == []
 
     def test_detect_build_tools_no_java(self):
         dc = _dc_with_features("python")
@@ -298,25 +298,29 @@ class TestRebuildFeatures:
         assert ("    init: true" in text.split("\n")) is True
         assert ("docker-init.sh" in text) is has_docker
         # Python venv volume is mounted at /myrepo/.venv, not /home
-        assert (f"venv-{self.REPO}:/myrepo/.venv" in text) is (
+        assert (f"venv-{self.REPO}-opencode:/myrepo/.venv" in text) is (
             "python" in features
         )
         # Maven m2 volume is mounted at /home/${REMOTE_USER}/.m2
-        assert (f"m2-{self.REPO}:/home/${{REMOTE_USER}}/.m2" in text) is (
-            "java" in features and ("maven" in (java_build_tools or ["maven"]))
+        assert (f"m2-{self.REPO}-opencode:/home/${{REMOTE_USER}}/.m2" in text) is (
+            "java" in features and ("maven" in (java_build_tools or []))
         )
         # Gradle home volume is mounted at /home/${REMOTE_USER}/.gradle
-        assert (f"gradle-{self.REPO}:/home/${{REMOTE_USER}}/.gradle" in text) is (
-            "java" in features and ("gradle" in (java_build_tools or ["maven"]))
-        )
-        assert (f"docker-{self.REPO}:/var/lib/docker" in text) is has_docker
-        if "python" in features or (
-            "java" in features
-            and (
-                "maven" in (java_build_tools or ["maven"])
-                or "gradle" in (java_build_tools or ["maven"])
+        assert (
+            f"gradle-{self.REPO}-opencode:/home/${{REMOTE_USER}}/.gradle" in text
+        ) is ("java" in features and ("gradle" in (java_build_tools or [])))
+        assert (f"docker-{self.REPO}-opencode:/var/lib/docker" in text) is has_docker
+        if (
+            "python" in features
+            or (
+                "java" in features
+                and (
+                    "maven" in (java_build_tools or [])
+                    or "gradle" in (java_build_tools or [])
+                )
             )
-        ) or has_docker:
+            or has_docker
+        ):
             assert "\nvolumes:" in text
         else:
             assert "\nvolumes:" not in text
@@ -353,13 +357,13 @@ class TestRebuildFeatures:
         text = _render_compose(self.REPO, [])
         rebuilt = self._rebuild(text, ["python"])
         self.assert_managed(rebuilt, ["python"])
-        assert f"  venv-{self.REPO}:" in rebuilt.split("\n")
+        assert f"  venv-{self.REPO}-opencode:" in rebuilt.split("\n")
 
     def test_remove_python(self):
         text = _render_compose(self.REPO, ["python"])
         rebuilt = self._rebuild(text, [])
         self.assert_managed(rebuilt, [])
-        assert f"venv-{self.REPO}:" not in rebuilt
+        assert f"venv-{self.REPO}-opencode:" not in rebuilt
         assert "\nvolumes:" not in rebuilt
 
     def test_toggle_docker_on(self):
@@ -367,14 +371,14 @@ class TestRebuildFeatures:
         rebuilt = self._rebuild(text, ["docker"])
         assert '["/usr/local/share/docker-init.sh", "opencode"]' in rebuilt
         assert "    privileged: true" in rebuilt.split("\n")
-        assert f"docker-{self.REPO}:/var/lib/docker" in rebuilt.split("\n")
+        assert f"docker-{self.REPO}-opencode:/var/lib/docker" in rebuilt
 
     def test_toggle_docker_off(self):
         text = _render_compose(self.REPO, ["docker"])
         rebuilt = self._rebuild(text, [])
         assert '["opencode"]' in rebuilt
         assert "    privileged: true" not in rebuilt.split("\n")
-        assert f"docker-{self.REPO}:/var/lib/docker" not in rebuilt.split("\n")
+        assert f"docker-{self.REPO}-opencode:/var/lib/docker" not in rebuilt.split("\n")
 
     def test_all_transitions_consistent(self):
         """Every add/remove transition must match the rendered target."""
@@ -395,8 +399,9 @@ class TestRebuildFeatures:
         """User-added environment lines must survive rebuild."""
         text = _render_compose(self.REPO, [])
         text = text.replace(
-            "      - OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT=true",
-            "      - OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT=true\n      - MY_CUSTOM=keepme",
+            "      - XDG_CACHE_HOME=${XDG_CACHE_HOME:-/${REMOTE_USER}/.cache}",
+            "      - XDG_CACHE_HOME=${XDG_CACHE_HOME:-/${REMOTE_USER}/.cache}"
+            "\n      - MY_CUSTOM=keepme",
             1,
         )
         rebuilt = self._rebuild(text, ["python", "docker"])
@@ -406,13 +411,15 @@ class TestRebuildFeatures:
         """A user-defined top-level volume must survive alongside managed ones."""
         text = _render_compose(self.REPO, ["python"])
         text = text.replace(
-            "volumes:\n  venv-myrepo:",
-            "volumes:\n  user-keepvol:\n  venv-myrepo:",
+            "volumes:\n  venv-myrepo-opencode:",
+            "volumes:\n  user-keepvol:\n  venv-myrepo-opencode:",
         )
-        rebuilt = self._rebuild(text, ["python", "java", "docker"])
+        rebuilt = self._rebuild(
+            text, ["python", "java", "docker"], java_build_tools=["maven"]
+        )
         assert "  user-keepvol:" in rebuilt.split("\n")
-        assert "  venv-myrepo:" in rebuilt.split("\n")
-        assert "  m2-myrepo:" in rebuilt.split("\n")
+        assert "  venv-myrepo-opencode:" in rebuilt.split("\n")
+        assert "  m2-myrepo-opencode:" in rebuilt.split("\n")
 
     def test_volumes_header_not_duplicated(self):
         """Rebuilding must not create two top-level volumes: keys."""
@@ -430,7 +437,8 @@ class TestRebuildFeatures:
             for i, ln in enumerate(lines)
             if ln.strip() == "volumes:" and ln.startswith(" ")
         )
-        # the line right after the service-level volumes: key must be a mount, not a top-level key
+        # the line after a service-level volumes: key must be a mount,
+        # not a top-level key
         assert lines[svc_idx + 1].startswith("      - ")
 
     def test_gradle_mount_adds_gradle_volume_to_managed_lines(self):
@@ -468,6 +476,16 @@ class TestRebuildFeatures:
         rebuilt = self._rebuild(text, ["java"], java_build_tools=["maven", "gradle"])
         assert "m2-" in rebuilt
         assert "gradle-" in rebuilt
+
+    def test_java_rebuild_to_empty_tools_removes_mounts(self):
+        """Rebuilding java with empty build tools strips existing tool mounts."""
+        text = _render_compose(
+            self.REPO, ["java"], java_build_tools=["maven", "gradle"]
+        )
+        rebuilt = self._rebuild(text, ["java"], java_build_tools=[])
+        self.assert_managed(rebuilt, ["java"], [])
+        assert f"m2-{self.REPO}-opencode:/home" not in rebuilt
+        assert f"gradle-{self.REPO}-opencode:/home" not in rebuilt
 
     def test_rebuild_features_accepts_java_build_tools_kwarg(self):
         """rebuild_features must accept java_build_tools as a keyword argument."""
@@ -571,15 +589,16 @@ class TestRebuildPorts:
             text, self.REPO, ["python", "docker"], port_mappings=ports
         )
         assert "    privileged: true" in rebuilt
-        assert f"venv-{self.REPO}:/{self.REPO}/.venv" in rebuilt
+        assert f"venv-{self.REPO}-opencode:/{self.REPO}/.venv" in rebuilt
         assert ComposeGenerator.detect_ports(rebuilt) == ports
 
     def test_preserves_manual_env_var_with_ports(self):
         """User-added environment lines survive a port rebuild."""
         text = _render_compose(self.REPO, [])
         text = text.replace(
-            "      - OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT=true",
-            "      - OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT=true\n      - MY_CUSTOM=keepme",
+            "      - XDG_CACHE_HOME=${XDG_CACHE_HOME:-/${REMOTE_USER}/.cache}",
+            "      - XDG_CACHE_HOME=${XDG_CACHE_HOME:-/${REMOTE_USER}/.cache}"
+            "\n      - MY_CUSTOM=keepme",
             1,
         )
         rebuilt = ComposeGenerator.rebuild_features(
@@ -592,22 +611,22 @@ class TestRenderComposeTemplateVolumeFix:
     """Regression tests for the java-without-python volumes: header bug."""
 
     def test_java_only_has_volumes_header(self):
-        text = _render_compose("repo", ["java"])
+        text = _render_compose("repo", ["java"], java_build_tools=["maven"])
         assert "\nvolumes:" in text
-        assert "  m2-repo:" in text.split("\n")
+        assert "  m2-repo-opencode:" in text.split("\n")
 
     def test_java_only_not_orphaned_under_services(self):
         """The m2 volume key must live under top-level volumes:, not services."""
-        text = _render_compose("repo", ["java"])
+        text = _render_compose("repo", ["java"], java_build_tools=["maven"])
         lines = text.split("\n")
         vol_idx = next(i for i, ln in enumerate(lines) if ln == "volumes:")
-        assert lines[vol_idx + 1] == "  m2-repo:"
+        assert lines[vol_idx + 1] == "  m2-repo-opencode:"
 
     def test_python_and_java_both_volumes(self):
-        text = _render_compose("repo", ["python", "java"])
+        text = _render_compose("repo", ["python", "java"], java_build_tools=["maven"])
         assert text.count("\nvolumes:") == 1
-        assert "  venv-repo:" in text.split("\n")
-        assert "  m2-repo:" in text.split("\n")
+        assert "  venv-repo-opencode:" in text.split("\n")
+        assert "  m2-repo-opencode:" in text.split("\n")
 
     def test_no_features_no_volumes(self):
         text = _render_compose("repo", [])
@@ -617,52 +636,65 @@ class TestRenderComposeTemplateVolumeFix:
         """Gradle only adds gradle- volume, not m2."""
         text = _render_compose("repo", ["java"], java_build_tools=["gradle"])
         assert "\nvolumes:" in text
-        assert "  gradle-repo:" in text.split("\n")
-        assert "  m2-repo:" not in text.split("\n")
+        assert "  gradle-repo-opencode:" in text.split("\n")
+        assert "  m2-repo-opencode:" not in text.split("\n")
 
     def test_java_gradle_mounts_gradle_home(self):
         """Gradle only mounts the gradle home directory."""
         text = _render_compose("repo", ["java"], java_build_tools=["gradle"])
+        assert "gradle-repo-opencode:/home/${REMOTE_USER}/.gradle" in text
+        assert "m2-repo-opencode" not in text
+
+    def test_java_without_tools_no_tool_volumes(self):
+        """Java with empty build tools must not silently mount maven volumes."""
+        text = _render_compose("repo", ["java"], java_build_tools=[])
+        assert "  m2-repo-opencode:" not in text.split("\n")
+        assert "  gradle-repo-opencode:" not in text.split("\n")
+        assert "m2-repo-opencode:/home" not in text
+        assert "gradle-repo-opencode:/home" not in text
+        assert "\nvolumes:" not in text
 
     def test_docker_only_has_volumes_header(self):
         """Docker adds a named volume for /var/lib/docker."""
         text = _render_compose("repo", ["docker"])
         assert "\nvolumes:" in text
-        assert "  docker-repo:" in text.split("\n")
+        assert "  docker-repo-opencode:" in text.split("\n")
 
     def test_docker_volume_mounts_var_lib_docker(self):
         """Docker mount targets /var/lib/docker."""
         text = _render_compose("repo", ["docker"])
-        assert "docker-repo:/var/lib/docker" in text.split("\n")
+        assert "docker-repo-opencode:/var/lib/docker" in text
 
     def test_python_and_docker_both_volumes(self):
         """Python and Docker both add top-level volume keys."""
         text = _render_compose("repo", ["python", "docker"])
         assert text.count("\nvolumes:") == 1
-        assert "  venv-repo:" in text.split("\n")
-        assert "  docker-repo:" in text.split("\n")
+        assert "  venv-repo-opencode:" in text.split("\n")
+        assert "  docker-repo-opencode:" in text.split("\n")
 
     def test_java_docker_and_python_all_volumes(self):
         """All three features add their own volume keys."""
-        text = _render_compose("repo", ["python", "java", "docker"])
+        text = _render_compose(
+            "repo", ["python", "java", "docker"], java_build_tools=["maven"]
+        )
         assert text.count("\nvolumes:") == 1
-        assert "  venv-repo:" in text.split("\n")
-        assert "  m2-repo:" in text.split("\n")
-        assert "  docker-repo:" in text.split("\n")
-        assert "      - gradle-repo:/home/${REMOTE_USER}/.gradle" in text
+        assert "  venv-repo-opencode:" in text.split("\n")
+        assert "  m2-repo-opencode:" in text.split("\n")
+        assert "  docker-repo-opencode:" in text.split("\n")
+        assert "      - m2-repo-opencode:/home/${REMOTE_USER}/.m2" in text
 
     def test_java_both_has_both_volumes(self):
         """Both Maven and Gradle add both volumes."""
         text = _render_compose("repo", ["java"], java_build_tools=["maven", "gradle"])
         assert "\nvolumes:" in text
-        assert "  m2-repo:" in text.split("\n")
-        assert "  gradle-repo:" in text.split("\n")
+        assert "  m2-repo-opencode:" in text.split("\n")
+        assert "  gradle-repo-opencode:" in text.split("\n")
 
     def test_java_both_has_both_mounts(self):
         """Both Maven and Gradle add both service mounts."""
         text = _render_compose("repo", ["java"], java_build_tools=["maven", "gradle"])
-        assert "      - m2-repo:/home/${REMOTE_USER}/.m2" in text
-        assert "      - gradle-repo:/home/${REMOTE_USER}/.gradle" in text
+        assert "      - m2-repo-opencode:/home/${REMOTE_USER}/.m2" in text
+        assert "      - gradle-repo-opencode:/home/${REMOTE_USER}/.gradle" in text
 
 
 class TestUpdateFeatures:
@@ -679,7 +711,8 @@ class TestUpdateFeatures:
         Args:
             tmp_path: Temporary path
             features_list: List of feature keys to include
-            java_build_tools: List of Java build tools (e.g. ["maven"], ["gradle"], ["maven", "gradle"])
+            java_build_tools: Java build tools, e.g. ["maven"], ["gradle"],
+                or ["maven", "gradle"]
         """
         opencode_dir = tmp_path / ".opencode"
         opencode_dir.mkdir()
@@ -705,7 +738,7 @@ class TestUpdateFeatures:
         dc_before = (opencode_dir / "devcontainer.json").read_text()
         compose_before = (opencode_dir / "docker-compose.yaml").read_text()
 
-        result = features.update_features(opencode_dir, tmp_path.name)
+        result = features.update_features(opencode_dir, tmp_path.name, "opencode")
 
         assert result is False
         assert (opencode_dir / "devcontainer.json").read_text() == dc_before
@@ -718,7 +751,7 @@ class TestUpdateFeatures:
         opencode_dir.mkdir()
         (opencode_dir / "devcontainer.json").write_text("{ not valid json")
 
-        result = features.update_features(opencode_dir, tmp_path.name)
+        result = features.update_features(opencode_dir, tmp_path.name, "opencode")
         assert result is False
 
     def test_no_change_returns_false(self, tmp_path: Path, monkeypatch):
@@ -739,25 +772,25 @@ class TestUpdateFeatures:
         opencode_dir = self._seed_opencode(tmp_path, ["python"])
         dc_before = (opencode_dir / "devcontainer.json").read_text()
 
-        result = features.update_features(opencode_dir, tmp_path.name)
-        # Compose is reconciled even on no-op, so it's written back
-        assert result is True
+        result = features.update_features(opencode_dir, tmp_path.name, "opencode")
+        # Freshly rendered compose is reconcile-clean, so nothing is written
+        assert result is False
         # Devcontainer.json is only updated when features change, so it stays unchanged
         assert (opencode_dir / "devcontainer.json").read_text() == dc_before
 
     def test_change_writes_both_files(self, tmp_path: Path, monkeypatch):
         """A feature change must update devcontainer.json and compose."""
         monkeypatch.setattr(features, "is_interactive", lambda: True)
-        # Simulate the user adding docker + java to an existing python setup.
+        # Simulate the user adding docker + java (maven) to a python setup.
         monkeypatch.setattr(
             features,
             "prompt_feature_changes",
-            lambda cur, ed, jbt: (["python", "docker", "java"], ed, []),
+            lambda cur, ed, jbt: (["python", "docker", "java"], ed, ["maven"]),
         )
         monkeypatch.setattr(features, "prompt_port_mappings", lambda cur=None: [])
         opencode_dir = self._seed_opencode(tmp_path, ["python"])
 
-        result = features.update_features(opencode_dir, tmp_path.name)
+        result = features.update_features(opencode_dir, tmp_path.name, "opencode")
         assert result is True
 
         dc = json.loads((opencode_dir / "devcontainer.json").read_text())
@@ -766,7 +799,7 @@ class TestUpdateFeatures:
 
         compose = (opencode_dir / "docker-compose.yaml").read_text()
         assert "docker-init.sh" in compose
-        assert f"m2-{tmp_path.name}:/home" in compose
+        assert f"m2-{tmp_path.name}-opencode:/home" in compose
 
     def test_change_without_compose_only_updates_devcontainer(
         self, tmp_path: Path, monkeypatch
@@ -781,14 +814,15 @@ class TestUpdateFeatures:
         opencode_dir = self._seed_opencode(tmp_path, [])
         (opencode_dir / "docker-compose.yaml").unlink()
 
-        result = features.update_features(opencode_dir, tmp_path.name)
+        result = features.update_features(opencode_dir, tmp_path.name, "opencode")
         assert result is True
         dc = json.loads((opencode_dir / "devcontainer.json").read_text())
         detected, _ = DevcontainerGenerator.detect(dc)
         assert detected == ["python"]
 
     def test_port_only_change_writes_compose(self, tmp_path: Path, monkeypatch):
-        """A port-only change (features unchanged) updates compose but not devcontainer."""
+        """A port-only change (features unchanged) updates compose but not
+        devcontainer."""
         monkeypatch.setattr(features, "is_interactive", lambda: True)
         monkeypatch.setattr(
             features,
@@ -801,7 +835,7 @@ class TestUpdateFeatures:
         opencode_dir = self._seed_opencode(tmp_path, ["python"])
         dc_before = (opencode_dir / "devcontainer.json").read_text()
 
-        result = features.update_features(opencode_dir, tmp_path.name)
+        result = features.update_features(opencode_dir, tmp_path.name, "opencode")
         assert result is True
         # devcontainer unchanged (features didn't change)
         assert (opencode_dir / "devcontainer.json").read_text() == dc_before
@@ -815,10 +849,10 @@ class TestUpdateFeatures:
         """Java→Gradle transition through update_features must work correctly."""
         monkeypatch.setattr(features, "is_interactive", lambda: True)
 
-        # Seed with java+maven (no explicit build flags in _seed_opencode)
+        # Seed with java (no explicit build flags in _seed_opencode)
         opencode_dir = self._seed_opencode(tmp_path, ["java"])
 
-        # Monkeypatch prompt to change java from maven to gradle
+        # Monkeypatch prompt to change java build tools to gradle
         def mock_prompt(cur, ed, jbt):
             # Keep java enabled, change build tools
             if "java" in cur:
@@ -829,7 +863,7 @@ class TestUpdateFeatures:
         monkeypatch.setattr(features, "prompt_feature_changes", mock_prompt)
         monkeypatch.setattr(features, "prompt_port_mappings", lambda cur=None: [])
 
-        result = features.update_features(opencode_dir, tmp_path.name)
+        result = features.update_features(opencode_dir, tmp_path.name, "opencode")
         assert result is True
 
         # Verify devcontainer.json has installGradle:True, installMaven:False
@@ -846,11 +880,12 @@ class TestUpdateFeatures:
         assert "  m2-" not in compose
 
     def test_update_features_detect_build_tools_no_crash(self, tmp_path: Path):
-        """update_features must correctly detect and use build tools from devcontainer.json."""
+        """update_features must correctly detect and use build tools from
+        devcontainer.json."""
         opencode_dir = self._seed_opencode(tmp_path, ["java"])
 
         # Call update_features with a no-op prompt (same state)
-        result = features.update_features(opencode_dir, tmp_path.name)
+        result = features.update_features(opencode_dir, tmp_path.name, "opencode")
         assert result is False  # No changes detected
 
         # Verify no crash occurred
@@ -858,27 +893,34 @@ class TestUpdateFeatures:
         assert "java" in dc
 
     def test_no_change_reconciles_drifted_compose(self, tmp_path: Path, monkeypatch):
-        """A drifted compose (missing docker volume) gets reconciled even with no selection change."""
+        """A drifted compose (missing docker volume) gets reconciled even
+        with no selection change."""
         monkeypatch.setattr(features, "is_interactive", lambda: True)
         opencode_dir = self._seed_opencode(tmp_path, ["docker"])
         compose_before = (opencode_dir / "docker-compose.yaml").read_text()
 
         # Manually create a drifted compose without the docker volume
-        drifted = compose_before.replace(
-            "      - docker-repo:/var/lib/docker",
-            "",
-        ).replace(
-            "  docker-repo:",
-            "",
-        ).replace(
-            "    privileged: true",
-            "",
-        ).replace(
-            '["/usr/local/share/docker-init.sh", "opencode"]',
-            '["opencode"]',
-        ).replace(
-            "\n  volumes:",
-            "\nvolumes:",
+        drifted = (
+            compose_before.replace(
+                f"      - docker-{tmp_path.name}-opencode:/var/lib/docker",
+                "",
+            )
+            .replace(
+                f"  docker-{tmp_path.name}-opencode:",
+                "",
+            )
+            .replace(
+                "    privileged: true",
+                "",
+            )
+            .replace(
+                '["/usr/local/share/docker-init.sh", "opencode"]',
+                '["opencode"]',
+            )
+            .replace(
+                "\n  volumes:",
+                "\nvolumes:",
+            )
         )
         (opencode_dir / "docker-compose.yaml").write_text(drifted)
 
@@ -890,20 +932,25 @@ class TestUpdateFeatures:
         )
         monkeypatch.setattr(features, "prompt_port_mappings", lambda cur=None: [])
 
-        # With the fix, compose is always reconciled. Since it drifted, it will be written.
-        result = features.update_features(opencode_dir, tmp_path.name)
+        # With the fix, compose is always reconciled. Since it drifted,
+        # it will be written.
+        result = features.update_features(opencode_dir, tmp_path.name, "opencode")
         assert result is True  # Compose drifted and was reconciled
 
         # Verify compose is now reconciled - the docker volume is restored
         compose_after = (opencode_dir / "docker-compose.yaml").read_text()
         # The mount name will use tmp_path.name, which is the actual repo path
         assert any("/var/lib/docker" in line for line in compose_after.split("\n"))
-        assert any(f"docker-{tmp_path.name}" in line for line in compose_after.split("\n"))
+        assert any(
+            f"docker-{tmp_path.name}-opencode" in line
+            for line in compose_after.split("\n")
+        )
         assert "    privileged: true" in compose_after
         assert '["/usr/local/share/docker-init.sh", "opencode"]' in compose_after
 
     def test_no_change_in_sync_compose_untouched(self, tmp_path: Path, monkeypatch):
-        """When compose is already in sync, no meaningful rewrite occurs on no-op --rebuild."""
+        """When compose is already in sync, no meaningful rewrite occurs
+        on no-op --rebuild."""
         monkeypatch.setattr(features, "is_interactive", lambda: True)
         opencode_dir = self._seed_opencode(tmp_path, ["docker"])
 
@@ -917,13 +964,17 @@ class TestUpdateFeatures:
 
         # With the fix, compose is always reconciled. If it's in sync, no bytes change.
         # The function returns True when anything was written (even if bytes unchanged).
-        result = features.update_features(opencode_dir, tmp_path.name)
-        assert result is True  # Compose was reconciled (bytes unchanged is still a write)
+        result = features.update_features(opencode_dir, tmp_path.name, "opencode")
+        assert (
+            result is True
+        )  # Compose was reconciled (bytes unchanged is still a write)
 
-        # Verify compose bytes are unchanged (idempotent - only whitespace differences expected)
+        # Verify compose bytes are unchanged (idempotent - only whitespace
+        # differences expected)
         compose_after = (opencode_dir / "docker-compose.yaml").read_text()
         # Jinja2 may normalize whitespace differently on each pass
-        # The important thing is the docker volume is present and privileged line is there
+        # The important thing is the docker volume is present and the
+        # privileged line is there
         assert any("/var/lib/docker" in line for line in compose_after.split("\n"))
         assert "    privileged: true" in compose_after
         assert '["/usr/local/share/docker-init.sh", "opencode"]' in compose_after
@@ -948,26 +999,31 @@ class TestPromptJavaBuildTools:
 
         self.typer_confirm = _FakeConfirm()
         monkeypatch.setattr(
-            "opencode_framework.features.typer.confirm", self.typer_confirm
+            "opencode_framework.sandbox.features.typer.confirm", self.typer_confirm
         )
 
         monkeypatch.setattr(
-            "opencode_framework.features.typer.echo", lambda *args, **kwargs: None
+            "opencode_framework.sandbox.features.typer.echo",
+            lambda *args, **kwargs: None,
         )
 
-    def test_none_defaults_maven_true_gradle_false(self):
-        """When current_tools is None, default to maven=True, gradle=False."""
+    def test_none_defaults_both_prompts_false(self):
+        """When current_tools is None, both prompts default to No."""
         tools = features._prompt_java_build_tools(None)
 
         assert self.typer_confirm.call_count == 2
-        assert tools == ["maven"]
+        assert self.typer_confirm.answers[0][1] is False
+        assert self.typer_confirm.answers[1][1] is False
+        assert tools == []
 
-    def test_empty_list_defaults_maven_true(self):
-        """When current_tools is [], default to maven=True, gradle=False."""
+    def test_empty_list_defaults_both_prompts_false(self):
+        """When current_tools is [], both prompts default to No."""
         tools = features._prompt_java_build_tools([])
 
         assert self.typer_confirm.call_count == 2
-        assert tools == ["maven"]
+        assert self.typer_confirm.answers[0][1] is False
+        assert self.typer_confirm.answers[1][1] is False
+        assert tools == []
 
     def test_existing_gradle_preserved_as_default(self):
         """When current_tools has gradle, gradle defaults True, maven defaults False."""
@@ -989,9 +1045,10 @@ class TestPromptJavaBuildTools:
                 call_count += 1
                 return True  # Always confirm both
 
-            m.setattr("opencode_framework.features.typer.confirm", mock_confirm)
+            m.setattr("opencode_framework.sandbox.features.typer.confirm", mock_confirm)
             m.setattr(
-                "opencode_framework.features.typer.echo", lambda *args, **kwargs: None
+                "opencode_framework.sandbox.features.typer.echo",
+                lambda *args, **kwargs: None,
             )
 
             tools = features._prompt_java_build_tools([])

@@ -1,17 +1,90 @@
-"""Devcontainer file generation."""
+"""Devcontainer file generation, detection, and evaluation."""
 
 import json
 import re
+from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Optional, Tuple
 
-from .base import FileGenerator, GenerationContext
-from .templates import TemplateHandler
+from opencode_framework.agent.registry import DEFAULT_TOOL, ToolSpec, get_tool_spec
+from opencode_framework.generators.base import FileGenerator, GenerationContext
+from opencode_framework.generators.templates import TemplateHandler
 
 COMMON_UTILS_URL = "ghcr.io/devcontainers/features/common-utils:2"
 
+STANDARD_DEVCONTAINER_PATHS = [
+    ".devcontainer/devcontainer.json",
+    ".devcontainer.json",
+    ".devcontainer/devcontainer.yaml",
+    ".devcontainer/devcontainer.yml",
+]
+
+
+@dataclass
+class DevcontainerInfo:
+    """Information about an existing devcontainer."""
+
+    path: str
+    format: str  # "json" or "yaml"
+    compatible: bool
+    incompatibility_reason: Optional[str] = None
+    content: Optional[dict] = None
+
+
+def detect_devcontainer(repo_root: Path) -> Optional[DevcontainerInfo]:
+    """Detect standard devcontainer files.
+
+    Only checks standard locations:
+    - .devcontainer/devcontainer.json
+    - .devcontainer.json
+    - .devcontainer/devcontainer.yaml
+    - .devcontainer/devcontainer.yml
+    """
+    for rel_path in STANDARD_DEVCONTAINER_PATHS:
+        dc_path = repo_root / rel_path
+        if not dc_path.is_file():
+            continue
+
+        file_format = "yaml" if rel_path.endswith((".yaml", ".yml")) else "json"
+
+        content = None
+        compatible = True
+        incompatibility_reason = None
+
+        if file_format == "json":
+            try:
+                content = json.loads(dc_path.read_text())
+                compatible, incompatibility_reason = evaluate_compatibility(content)
+            except json.JSONDecodeError as e:
+                compatible = False
+                incompatibility_reason = f"Invalid JSON: {e}"
+
+        return DevcontainerInfo(
+            path=str(dc_path),
+            format=file_format,
+            compatible=compatible,
+            incompatibility_reason=incompatibility_reason,
+            content=content,
+        )
+
+    return None
+
+
+def evaluate_compatibility(devcontainer_content: dict) -> tuple[bool, Optional[str]]:
+    """Evaluate if a devcontainer is compatible with the framework.
+
+    Basic compatibility rules:
+    - Must have a valid image or build context
+    - Should not have conflicting postCreateCommand
+    """
+    if "image" not in devcontainer_content and "build" not in devcontainer_content:
+        return False, "No 'image' or 'build' specified"
+
+    return True, None
+
 
 class DevcontainerGenerator(FileGenerator):
-    """Generates .opencode/devcontainer.json for build configuration."""
+    """Generates devcontainer.json in the tool's config directory."""
 
     PLACEHOLDER_DOCKERFILE_INITIALIZER = "{{DOCKERFILE_INITIALIZER}}"
 
@@ -45,7 +118,7 @@ class DevcontainerGenerator(FileGenerator):
         """Generate devcontainer configuration (build-only)."""
         devcontainer = self._generate_scratch(ctx)
 
-        dc_path = ctx.opencode_dir / "devcontainer.json"
+        dc_path = ctx.config_dir / "devcontainer.json"
         dc_path.write_text(json.dumps(devcontainer, indent=2) + "\n")
 
     @staticmethod
@@ -74,18 +147,53 @@ class DevcontainerGenerator(FileGenerator):
         return result
 
     @staticmethod
-    def _build_dockerfile_initializer() -> str:
+    def _build_install_block(spec: ToolSpec) -> str:
+        """Build the Dockerfile install block for a tool spec.
+
+        ARG declarations for the spec's build args followed by the
+        install snippet; empty when the tool installs via a
+        devcontainer feature instead.
+
+        Args:
+            spec: Tool spec providing build args and install snippet
+
+        Returns:
+            Install block lines, or "" for feature-installed tools
+        """
+        lines: List[str] = [f"ARG {arg}=latest" for arg in spec.install.build_args]
+        if spec.install.dockerfile_snippet:
+            lines.append(spec.install.dockerfile_snippet)
+        return "\n".join(lines)
+
+    @staticmethod
+    def _build_dockerfile_initializer(agent_tool: str = DEFAULT_TOOL) -> str:
         """Build the initializeCommand for Dockerfile generation.
 
-        Loads the dockerfile template and formats it as an echo -e command
-        that writes the Dockerfile to .opencode/runtime_data/Dockerfile.
+        Loads the dockerfile template, injects the tool's install block
+        into the {{AGENT_INSTALL}} slot, and formats it as an echo -e
+        command that writes the Dockerfile into the tool's config
+        directory (workspace-relative at initializeCommand runtime).
+
+        Args:
+            agent_tool: Agent tool name ("opencode" | "qwen")
 
         Returns:
             Shell command string for initializeCommand
         """
+        spec = get_tool_spec(agent_tool)
         dockerfile_content = TemplateHandler.load_dockerfile_template()
+        install_block = DevcontainerGenerator._build_install_block(spec)
+        if install_block:
+            dockerfile_content = dockerfile_content.replace(
+                "{{AGENT_INSTALL}}", install_block
+            )
+        else:
+            dockerfile_content = dockerfile_content.replace("\n{{AGENT_INSTALL}}", "")
         escaped_content = DevcontainerGenerator._escape_for_echo_e(dockerfile_content)
-        return f'echo -e "{escaped_content}" > .opencode/runtime_data/Dockerfile'
+        return (
+            f'echo -e "{escaped_content}" > '
+            f"{spec.config_dirname}/runtime_data/Dockerfile"
+        )
 
     @staticmethod
     def _reconcile_java_build_tools(
@@ -95,18 +203,15 @@ class DevcontainerGenerator(FileGenerator):
 
         Args:
             features: The features dict (mutated in place)
-            java_build_tools: List of enabled tools (e.g. ["maven"], ["gradle"], ["maven","gradle"])
+            java_build_tools: List of enabled tools (e.g. ["maven"],
+                ["gradle"], ["maven", "gradle"])
         """
         java_url = DevcontainerGenerator.FEATURE_URL_MAP["java"]
         if java_url not in features:
             return
 
-        # None = backward compat default (maven only); [] = explicit empty choice
-        if java_build_tools is None:
-            maven_installed, gradle_installed = True, False
-        else:
-            maven_installed = "maven" in java_build_tools
-            gradle_installed = "gradle" in java_build_tools
+        maven_installed = "maven" in java_build_tools
+        gradle_installed = "gradle" in java_build_tools
 
         features[java_url]["installMaven"] = maven_installed
         features[java_url]["installGradle"] = gradle_installed
@@ -114,8 +219,11 @@ class DevcontainerGenerator(FileGenerator):
     def _generate_scratch(self, ctx: GenerationContext) -> dict:
         """Generate devcontainer config from template (build-only)."""
         template = DevcontainerGenerator._load_template()
+        spec = get_tool_spec(ctx.agent_tool)
 
         features = dict(template.get("features", {}))
+        devcontainer = dict(template)
+        self._add_agent_install(devcontainer, features, spec)
         self._add_optional_features(
             features,
             ctx.optional_features,
@@ -123,15 +231,41 @@ class DevcontainerGenerator(FileGenerator):
             java_build_tools=ctx.java_build_tools,
         )
 
-        devcontainer = dict(template)
         devcontainer["features"] = features
 
         if self.PLACEHOLDER_DOCKERFILE_INITIALIZER in devcontainer.get(
             "initializeCommand", ""
         ):
-            devcontainer["initializeCommand"] = self._build_dockerfile_initializer()
+            devcontainer["initializeCommand"] = self._build_dockerfile_initializer(
+                ctx.agent_tool
+            )
 
         return devcontainer
+
+    @staticmethod
+    def _add_agent_install(devcontainer: dict, features: dict, spec: ToolSpec) -> None:
+        """Fill the agent install slots in the devcontainer config.
+
+        Feature-installed tools get their devcontainer feature entry with
+        a localEnv version pin; Dockerfile-installed tools get their
+        build args on the build section instead.
+
+        Args:
+            devcontainer: Devcontainer config dict (mutated for build args)
+            features: Features dict (mutated for feature-installed tools)
+            spec: Tool spec providing the install mechanism
+        """
+        install = spec.install
+        if install.devcontainer_feature:
+            version_env = install.feature_version_env or "OCF_AGENT_VERSION"
+            features[install.devcontainer_feature] = {
+                "version": f"${{localEnv:{version_env}:latest}}"
+            }
+        if install.build_args:
+            build = devcontainer.setdefault("build", {})
+            build["args"] = {
+                arg: f"${{localEnv:{arg}:latest}}" for arg in install.build_args
+            }
 
     @staticmethod
     def _add_one_feature(features: dict, key: str) -> None:
@@ -204,9 +338,9 @@ class DevcontainerGenerator(FileGenerator):
             devcontainer: Parsed devcontainer.json content
 
         Returns:
-            List of enabled build tools (e.g. ["maven"], ["gradle"], ["maven","gradle"])
-            Defaults to ["maven"] for backward compatibility when Java is present
-            but no build flags are explicitly set.
+            List of enabled build tools (e.g. ["maven"], ["gradle"],
+            ["maven","gradle"]). Empty when Java is present without
+            explicit install flags.
         """
         raw_features = devcontainer.get("features", {})
         features = raw_features if isinstance(raw_features, dict) else {}
@@ -224,13 +358,6 @@ class DevcontainerGenerator(FileGenerator):
             tools.append("maven")
         if java_feature.get("installGradle"):
             tools.append("gradle")
-
-        # Backward compatibility: if Java is present but no flags set, default to maven
-        has_explicit_flags = (
-            "installMaven" in java_feature or "installGradle" in java_feature
-        )
-        if not tools and not has_explicit_flags:
-            tools = ["maven"]
 
         return tools
 

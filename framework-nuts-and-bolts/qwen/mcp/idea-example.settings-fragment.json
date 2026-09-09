@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "openide": {
+      "url": "http://host.docker.internal:64342/sse",
+      "headers": {
+        "Host": "127.0.0.1",
+        "IJ_MCP_SERVER_PROJECT_PATH": "{project basename}"
+      }
+    }
+  }
+}

@@ -130,7 +130,7 @@ class TestSetupOpencodeWorktree:
         result = setup_opencode_worktree(
             repo_root=git_repo,
             branch_name=branch_name,
-            opencode_dir=opencode_dir,
+            config_dir=opencode_dir,
         )
 
         assert result.success
@@ -146,7 +146,7 @@ class TestSetupOpencodeWorktree:
         result1 = setup_opencode_worktree(
             repo_root=git_repo,
             branch_name=branch_name,
-            opencode_dir=opencode_dir,
+            config_dir=opencode_dir,
         )
         assert result1.success
 
@@ -155,7 +155,7 @@ class TestSetupOpencodeWorktree:
         result2 = setup_opencode_worktree(
             repo_root=git_repo,
             branch_name=branch_name,
-            opencode_dir=opencode_dir,
+            config_dir=opencode_dir,
         )
 
         assert result2.success

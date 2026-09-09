@@ -68,7 +68,8 @@ def _prompt_java_build_tools(current_tools: Optional[List[str]] = None) -> List[
     """Prompt user to select Java build tools (Maven and/or Gradle).
 
     Args:
-        current_tools: Currently enabled build tools (for defaults). If None, defaults to maven only.
+        current_tools: Currently enabled build tools (for prompt defaults).
+            With no current tools both prompts default to No.
 
     Returns:
         List of enabled build tools (e.g. ["maven"], ["gradle"], ["maven","gradle"])
@@ -76,7 +77,7 @@ def _prompt_java_build_tools(current_tools: Optional[List[str]] = None) -> List[
     typer.echo("\nJava build tools:")
 
     cur = current_tools or []
-    maven = typer.confirm("  Install Maven?", default=("maven" in cur) if cur else True)
+    maven = typer.confirm("  Install Maven?", default=("maven" in cur))
     gradle = typer.confirm("  Install Gradle?", default=("gradle" in cur))
 
     tools: List[str] = []
@@ -103,7 +104,10 @@ def _prompt_editor_choice(default: str) -> str:
         choice_lower = choice.lower()
         if choice_lower in EDITOR_CHOICES:
             return choice_lower
-        typer.secho("Invalid choice. Please select one of: none, vi, or nano.", fg=typer.colors.RED)
+        typer.secho(
+            "Invalid choice. Please select one of: none, vi, or nano.",
+            fg=typer.colors.RED,
+        )
 
 
 def prompt_feature_changes(
@@ -179,7 +183,7 @@ def prompt_port_mappings(current_ports: Optional[List[str]] = None) -> List[str]
     return parse_port_mappings(raw)
 
 
-def update_features(opencode_dir: Path, repo_name: str) -> bool:
+def update_features(config_dir: Path, repo_name: str, agent_tool: str) -> bool:
     """Interactively offer to add/remove devcontainer features.
 
     Reads the current configuration, prompts for changes (skipped silently
@@ -187,19 +191,23 @@ def update_features(opencode_dir: Path, repo_name: str) -> bool:
     docker-compose.yaml when anything changes.
 
     Args:
-        opencode_dir: Path to the .opencode directory
+        config_dir: Path to the agent tool's config worktree
+            (e.g. .opencode/ or .qwen/)
         repo_name: Repository name (used in managed compose volume names)
+        agent_tool: Agent tool name ("opencode" | "qwen"); drives the
+            tool-suffixed volume names and entrypoint binary written by
+            the compose reconciler
 
     Returns:
         True if feature configuration was changed, False otherwise.
     """
-    from opencode_framework.generators.compose import ComposeGenerator
-    from opencode_framework.generators.devcontainer import DevcontainerGenerator
+    from opencode_framework.sandbox.compose import ComposeGenerator
+    from opencode_framework.sandbox.devcontainer import DevcontainerGenerator
 
     if not is_interactive():
         return False
 
-    devcontainer_path = opencode_dir / "devcontainer.json"
+    devcontainer_path = config_dir / "devcontainer.json"
     try:
         devcontainer = json.loads(devcontainer_path.read_text())
     except (OSError, ValueError) as exc:
@@ -216,7 +224,7 @@ def update_features(opencode_dir: Path, repo_name: str) -> bool:
         current_features, current_editor, current_java_build_tools
     )
 
-    compose_path = opencode_dir / "docker-compose.yaml"
+    compose_path = config_dir / "docker-compose.yaml"
     compose_text = ""
     current_ports: List[str] = []
     if compose_path.exists():
@@ -227,10 +235,10 @@ def update_features(opencode_dir: Path, repo_name: str) -> bool:
         new_ports = []
 
     features_changed = (
-        set(new_features) != set(current_features) or new_editor != current_editor
+        set(new_features) != set(current_features)
+        or new_editor != current_editor
         or set(new_java_build_tools) != set(current_java_build_tools)
     )
-    ports_changed = new_ports != current_ports
 
     # Always rewrite devcontainer.json when features/editor/build-tools changed.
     if features_changed:
@@ -244,7 +252,9 @@ def update_features(opencode_dir: Path, repo_name: str) -> bool:
             java_build_tools=new_java_build_tools,
         )
         devcontainer_path.write_text(json.dumps(devcontainer, indent=2) + "\n")
-        typer.secho("Updated .opencode/devcontainer.json", fg=typer.colors.GREEN)
+        typer.secho(
+            f"Updated {config_dir.name}/devcontainer.json", fg=typer.colors.GREEN
+        )
 
     # Always reconcile the compose file to match the declared feature set,
     # even when the user made no selection change. This restores any managed
@@ -258,10 +268,14 @@ def update_features(opencode_dir: Path, repo_name: str) -> bool:
             new_features,
             port_mappings=new_ports,
             java_build_tools=new_java_build_tools,
+            agent_tool=agent_tool,
         )
         if reconciled != compose_text:
             compose_path.write_text(reconciled)
-            typer.secho("Updated .opencode/docker-compose.yaml", fg=typer.colors.GREEN)
+            typer.secho(
+                f"Updated {config_dir.name}/docker-compose.yaml",
+                fg=typer.colors.GREEN,
+            )
             changed = True
 
     if not changed:

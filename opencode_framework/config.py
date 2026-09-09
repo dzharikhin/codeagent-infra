@@ -4,14 +4,7 @@ import os
 import pwd
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
-
-REQUIRED_FRAMEWORK_PATHS = [
-    ".git",
-    "framework-nuts-and-bolts",
-    "framework-config",
-    "framework-nuts-and-bolts/stub-auth.json",
-]
+from typing import Optional
 
 
 def get_local_home() -> Path:
@@ -74,48 +67,6 @@ class GlobalSettings:
     global_auth_path: Optional[str]
 
 
-def validate_framework_repo(path: Path) -> Tuple[bool, List[str]]:
-    """Validate that a path is a valid framework repository.
-
-    Checks for required paths:
-    - .git/
-    - framework-nuts-and-bolts/
-    - framework-config/
-    - framework-nuts-and-bolts/stub-auth.json
-
-    Returns:
-        (True, []) if valid
-        (False, [missing_paths]) if invalid
-    """
-    missing = []
-    for required in REQUIRED_FRAMEWORK_PATHS:
-        req_path = path / required
-        if required.endswith(".json"):
-            if not req_path.is_file():
-                missing.append(required)
-        else:
-            if not req_path.is_dir():
-                missing.append(required)
-
-    return len(missing) == 0, missing
-
-
-def get_framework_validation_error(
-    missing: List[str], framework_path: Optional[str]
-) -> str:
-    """Generate a clear error message for invalid framework repo."""
-    msg = "Framework repository is not valid or not installed correctly.\n"
-    msg += f"Detected path: {framework_path or 'none'}\n"
-    if missing:
-        msg += f"Missing required paths: {', '.join(missing)}\n"
-    msg += (
-        "\nThe framework must be installed as an editable package from a git clone:\n"
-    )
-    msg += "  pipx install -e <path-to-framework-git-clone>\n"
-    msg += "\nClone the framework repository first, then install it with pipx."
-    return msg
-
-
 def get_config_root() -> Path:
     """Get the config root directory for host-side operations.
 
@@ -131,7 +82,8 @@ def discover_global_settings() -> GlobalSettings:
 
     Looks for:
     - $XDG_CONFIG_HOME/opencode or ~/.config/opencode - global config directory
-    - $XDG_DATA_HOME/opencode/auth.json or ~/.local/share/opencode/auth.json - global auth file
+    - $XDG_DATA_HOME/opencode/auth.json or ~/.local/share/opencode/auth.json
+      - global auth file
     - framework config/ directory
 
     Uses local user context (respects SUDO_USER, HOME env) for host-side paths.
@@ -163,19 +115,18 @@ def discover_global_settings() -> GlobalSettings:
 def _detect_framework_repo_path() -> Optional[str]:
     """Detect the framework repository path from an editable install.
 
-    Only returns a path if it is a valid framework git clone with all
-    required directories and files. Returns None if not installed from
-    a framework git clone.
+    Returns a path only when the package lives at the root of a git
+    clone (a ``.git`` directory next to the package). Returns None
+    otherwise.
 
-    The framework MUST be installed via:
+    The framework is installed via:
         pipx install -e <path-to-framework-git-clone>
     """
     package_path = Path(__file__).resolve().parent
 
     repo_root = package_path.parent
 
-    valid, _ = validate_framework_repo(repo_root)
-    if valid:
+    if (repo_root / ".git").is_dir():
         return str(repo_root)
 
     return None

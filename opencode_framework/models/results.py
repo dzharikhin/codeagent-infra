@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 
 @dataclass
@@ -25,7 +25,7 @@ class ValidationResult:
 
     valid: bool
     errors: List[str]
-    warnings: List[str] = None
+    warnings: Optional[List[str]] = None
 
     def __post_init__(self):
         """Ensure warnings is a list."""
