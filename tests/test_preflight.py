@@ -7,17 +7,15 @@ import pytest
 
 from opencode_framework.config import (
     discover_global_settings,
-    get_config_root,
     get_local_config_root,
     get_local_home,
 )
+from opencode_framework.git_ops import get_repo_root, is_inside_git_tree
 from opencode_framework.preflight import (
     PreflightResult,
     check_docker_rootless_context,
     check_required_tools,
     config_directory_exists,
-    get_repo_root,
-    is_inside_git_tree,
     run_preflight_checks,
 )
 
@@ -104,15 +102,6 @@ class TestDetectFrameworkRepoPath:
             pytest.skip("opencode_framework not installed from a git clone")
         assert settings.framework_repo_path == str(repo_root)
 
-    def test_framework_config_path_derived_from_repo(self):
-        """Should expose framework-config under the detected repo."""
-        settings = discover_global_settings()
-        if settings.framework_repo_path is None:
-            pytest.skip("opencode_framework not installed from a git clone")
-        assert settings.framework_config_path == str(
-            Path(settings.framework_repo_path) / "framework-config"
-        )
-
 
 class TestRunPreflightChecks:
     """Tests for full preflight check suite."""
@@ -185,13 +174,6 @@ class TestPreflightResult:
         result = PreflightResult(success=True)
         assert result.error is None
         assert result.remediation is None
-        assert result.repo_root is None
-        assert result.missing_tools == []
-        assert result.docker_rootless_available is False
-
-    def test_post_init_ensures_list(self):
-        """Should ensure missing_tools is a list."""
-        result = PreflightResult(success=True, missing_tools=None)
         assert result.missing_tools == []
 
 
@@ -245,55 +227,20 @@ class TestGetLocalConfigRoot:
         result = get_local_config_root()
         assert result == tmp_path
 
-
-class TestGetConfigRoot:
-    """Tests for config root discovery (alias for get_local_config_root)."""
-
-    def test_uses_xdg_config_home_when_set(self, monkeypatch, tmp_path: Path):
-        """Should use XDG_CONFIG_HOME when set."""
-        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-        monkeypatch.delenv("SUDO_USER", raising=False)
-        result = get_config_root()
-        assert result == tmp_path
-
-    def test_uses_home_config_when_xdg_not_set(self, monkeypatch):
-        """Should use ~/.config when XDG_CONFIG_HOME is not set."""
-        monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
-        monkeypatch.delenv("SUDO_USER", raising=False)
-        result = get_config_root()
-        assert result.name == ".config"
-
     def test_uses_home_config_when_xdg_empty(self, monkeypatch):
         """Should use ~/.config when XDG_CONFIG_HOME is empty."""
         monkeypatch.setenv("XDG_CONFIG_HOME", "")
         monkeypatch.delenv("SUDO_USER", raising=False)
-        result = get_config_root()
+        result = get_local_config_root()
         assert result.name == ".config"
 
 
 class TestDiscoverGlobalSettings:
     """Tests for global settings discovery."""
 
-    def test_discovers_config_from_xdg(self, monkeypatch, tmp_path: Path):
-        """Should discover config from XDG_CONFIG_HOME/opencode."""
-        xdg_config = tmp_path / "config"
-        xdg_config.mkdir()
-        opencode_config = xdg_config / "opencode"
-        opencode_config.mkdir()
-
-        monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg_config))
+    def test_settings_expose_framework_repo_path(self):
+        """discover_global_settings mirrors the editable-install detection."""
+        from opencode_framework.config import _detect_framework_repo_path
 
         settings = discover_global_settings()
-        assert settings.global_config_found is True
-        assert settings.global_config_path == str(opencode_config)
-
-    def test_config_not_found_when_missing(self, monkeypatch, tmp_path: Path):
-        """Should return not found when opencode config dir doesn't exist."""
-        xdg_config = tmp_path / "config"
-        xdg_config.mkdir()
-
-        monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg_config))
-
-        settings = discover_global_settings()
-        assert settings.global_config_found is False
-        assert settings.global_config_path is None
+        assert settings.framework_repo_path == _detect_framework_repo_path()

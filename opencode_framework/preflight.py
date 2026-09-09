@@ -7,6 +7,13 @@ from pathlib import Path
 from typing import List, Optional
 
 from opencode_framework.agent.registry import DEFAULT_TOOL, get_tool_spec
+from opencode_framework.config import _detect_framework_repo_path
+from opencode_framework.git_ops import (
+    get_repo_root,
+    has_staged_changes,
+    is_bare_repository,
+    is_inside_git_tree,
+)
 
 
 @dataclass
@@ -16,17 +23,7 @@ class PreflightResult:
     success: bool
     error: Optional[str] = None
     remediation: Optional[str] = None
-    repo_root: Optional[Path] = None
-    has_staged_changes: bool = False
-    is_bare_repo: bool = False
-    is_inside_git_tree: bool = False
     missing_tools: List[str] = field(default_factory=list)
-    docker_rootless_available: bool = False
-    framework_repo_path: Optional[Path] = None
-
-    def __post_init__(self):
-        if self.missing_tools is None:
-            self.missing_tools = []
 
 
 REQUIRED_TOOLS = ["git", "docker", "devcontainer"]
@@ -64,51 +61,6 @@ def check_docker_rootless_context() -> bool:
     return False
 
 
-def run_git_command(
-    args: List[str], cwd: Optional[Path] = None
-) -> tuple[int, str, str]:
-    """Run a git command and return (returncode, stdout, stderr)."""
-    try:
-        result = subprocess.run(
-            ["git"] + args,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        return result.returncode, result.stdout.strip(), result.stderr.strip()
-    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-        return -1, "", str(e)
-
-
-def is_inside_git_tree(path: Path) -> bool:
-    """Check if path is inside a Git working tree."""
-    returncode, _, _ = run_git_command(["rev-parse", "--is-inside-work-tree"], cwd=path)
-    return returncode == 0
-
-
-def is_bare_repository(path: Path) -> bool:
-    """Check if the repository is bare."""
-    returncode, stdout, _ = run_git_command(
-        ["rev-parse", "--is-bare-repository"], cwd=path
-    )
-    return returncode == 0 and stdout.lower() == "true"
-
-
-def get_repo_root(path: Path) -> Optional[Path]:
-    """Get the repository root directory."""
-    returncode, stdout, _ = run_git_command(["rev-parse", "--show-toplevel"], cwd=path)
-    if returncode == 0 and stdout:
-        return Path(stdout)
-    return None
-
-
-def has_staged_changes(path: Path) -> bool:
-    """Check if the Git index has staged changes."""
-    returncode, stdout, _ = run_git_command(["diff", "--cached", "--quiet"], cwd=path)
-    return returncode != 0
-
-
 def config_directory_exists(repo_root: Path, agent_tool: str = DEFAULT_TOOL) -> bool:
     """Check if the agent tool's config worktree directory already exists."""
     return (repo_root / get_tool_spec(agent_tool).config_dirname).exists()
@@ -139,10 +91,7 @@ def run_preflight_checks(
             missing_tools=missing_tools,
         )
 
-    from opencode_framework.config import _detect_framework_repo_path
-
-    framework_repo_path_str = _detect_framework_repo_path()
-    if not framework_repo_path_str:
+    if not _detect_framework_repo_path():
         return PreflightResult(
             success=False,
             error="Framework repository not found or invalid.",
@@ -153,14 +102,11 @@ def run_preflight_checks(
             ),
         )
 
-    framework_repo_path = Path(framework_repo_path_str)
-
     if not is_inside_git_tree(cwd):
         return PreflightResult(
             success=False,
             error="Current directory is not inside a Git working tree",
             remediation="Run this command from inside a Git repository",
-            framework_repo_path=framework_repo_path,
         )
 
     repo_root = get_repo_root(cwd)
@@ -169,7 +115,6 @@ def run_preflight_checks(
             success=False,
             error="Could not determine repository root",
             remediation="Ensure you are in a valid Git repository",
-            framework_repo_path=framework_repo_path,
         )
 
     if repo_root != cwd.resolve():
@@ -177,7 +122,6 @@ def run_preflight_checks(
             success=False,
             error="Current directory is not the repository root",
             remediation=f"Run this command from the repository root: {repo_root}",
-            framework_repo_path=framework_repo_path,
         )
 
     if is_bare_repository(cwd):
@@ -185,7 +129,6 @@ def run_preflight_checks(
             success=False,
             error="Repository is bare (no working tree)",
             remediation="Use a non-bare repository with a working tree",
-            framework_repo_path=framework_repo_path,
         )
 
     if has_staged_changes(cwd):
@@ -193,8 +136,6 @@ def run_preflight_checks(
             success=False,
             error="Git index has staged changes",
             remediation="Commit or unstage your changes before running init",
-            has_staged_changes=True,
-            framework_repo_path=framework_repo_path,
         )
 
     if config_directory_exists(repo_root, agent_tool):
@@ -205,13 +146,6 @@ def run_preflight_checks(
                 remediation=(
                     "Use --force to backup and regenerate, or remove it manually"
                 ),
-                framework_repo_path=framework_repo_path,
             )
 
-    return PreflightResult(
-        success=True,
-        repo_root=repo_root,
-        is_inside_git_tree=True,
-        is_bare_repo=False,
-        framework_repo_path=framework_repo_path,
-    )
+    return PreflightResult(success=True)

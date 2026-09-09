@@ -4,9 +4,10 @@ import json
 from pathlib import Path
 
 from opencode_framework.config import GlobalSettings
-from opencode_framework.generators import GenerationContext, GenerationOrchestrator
+from opencode_framework.generators.base import GenerationContext
 from opencode_framework.generators.config_files import ConfigFilesGenerator
 from opencode_framework.generators.documentation import DocumentationGenerator
+from opencode_framework.generators.orchestrator import GenerationOrchestrator
 from opencode_framework.generators.templates import TemplateHandler
 from opencode_framework.sandbox.compose import ComposeGenerator
 from opencode_framework.sandbox.devcontainer import DevcontainerGenerator
@@ -15,14 +16,7 @@ from opencode_framework.wizard import WizardResult
 
 def _make_global_settings(**kwargs):
     """Create GlobalSettings with defaults."""
-    defaults = {
-        "framework_repo_path": None,
-        "framework_config_path": None,
-        "global_config_found": False,
-        "global_config_path": None,
-        "global_auth_found": False,
-        "global_auth_path": None,
-    }
+    defaults = {"framework_repo_path": None}
     defaults.update(kwargs)
     return GlobalSettings(**defaults)
 
@@ -53,7 +47,6 @@ class TestGenerateOpencodeDirectory:
         wizard_result = WizardResult(
             branch_name="codeagent-test",
             optional_features=[],
-            should_add_to_gitignore=True,
         )
 
         orchestrator = GenerationOrchestrator()
@@ -75,7 +68,6 @@ class TestGenerateOpencodeDirectory:
         wizard_result = WizardResult(
             branch_name="codeagent-test",
             optional_features=[],
-            should_add_to_gitignore=True,
         )
 
         orchestrator = GenerationOrchestrator()
@@ -234,17 +226,17 @@ class TestLaunchCommands:
 
     def test_launch_command_is_cli(self):
         """Launch command should use ocframework CLI."""
-        commands = DocumentationGenerator._get_launch_commands("opencode")
+        commands = DocumentationGenerator.get_launch_commands("opencode")
         assert commands["launch"] == "ocframework launch --tool opencode"
 
     def test_debug_command_is_cli(self):
         """Debug command should use ocframework launch with debug subcommand."""
-        commands = DocumentationGenerator._get_launch_commands("opencode")
+        commands = DocumentationGenerator.get_launch_commands("opencode")
         assert commands["debug"] == "ocframework launch --tool opencode -- debug config"
 
     def test_shell_command_is_docker_exec(self):
         """Shell command should use docker exec directly."""
-        commands = DocumentationGenerator._get_launch_commands("opencode")
+        commands = DocumentationGenerator.get_launch_commands("opencode")
         assert commands["shell"] == "docker exec -it <container_name> /bin/bash"
 
 
@@ -369,7 +361,6 @@ class TestRuntimeDataStructure:
         wizard_result = WizardResult(
             branch_name="codeagent-test",
             optional_features=[],
-            should_add_to_gitignore=True,
         )
 
         orchestrator = GenerationOrchestrator()
@@ -392,7 +383,6 @@ class TestRuntimeDataStructure:
         wizard_result = WizardResult(
             branch_name="codeagent-test",
             optional_features=[],
-            should_add_to_gitignore=True,
         )
 
         orchestrator = GenerationOrchestrator()
@@ -414,7 +404,6 @@ class TestRuntimeDataStructure:
         wizard_result = WizardResult(
             branch_name="codeagent-test",
             optional_features=[],
-            should_add_to_gitignore=True,
         )
 
         orchestrator = GenerationOrchestrator()

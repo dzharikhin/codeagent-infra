@@ -20,36 +20,36 @@ from opencode_framework.agent.discovery import (
 )
 from opencode_framework.agent.layers import (
     discover_global_layer,
+    expected_global_auth_path,
     expected_global_env_path,
     expected_global_path,
 )
 from opencode_framework.agent.registry import (
     DEFAULT_TOOL,
+    OPENCODE_TOOL_SPEC,
     QWEN_TOOL_SPEC,
     SUPPORTED_TOOLS,
     ToolSpec,
 )
-from opencode_framework.config import (
-    discover_global_settings,
-    get_config_root,
-    get_local_data_home,
-)
+from opencode_framework.config import discover_global_settings
 from opencode_framework.exceptions import PortAllocationError
-from opencode_framework.generators import GenerationOrchestrator
 from opencode_framework.generators.documentation import DocumentationGenerator
+from opencode_framework.generators.orchestrator import GenerationOrchestrator
 from opencode_framework.git_ops import (
     get_current_branch,
+    get_repo_root,
     is_worktree,
     remove_worktree,
-    setup_opencode_worktree,
+    setup_config_worktree,
 )
-from opencode_framework.preflight import (
-    get_repo_root,
-    run_preflight_checks,
-)
+from opencode_framework.preflight import run_preflight_checks
 from opencode_framework.sandbox.compose import ComposeGenerator
 from opencode_framework.sandbox.features import is_interactive, update_features
-from opencode_framework.sandbox.net import find_free_port
+from opencode_framework.sandbox.net import (
+    SERVER_HOST_PORT_MAX,
+    SERVER_HOST_PORT_MIN,
+    find_free_port,
+)
 from opencode_framework.sandbox.runtime import (
     EnvError,
     build_docker_env,
@@ -61,9 +61,6 @@ from opencode_framework.sandbox.runtime import (
     validate_runtime_context,
 )
 from opencode_framework.wizard import resolve_tool_or_exit, run_wizard
-
-SERVER_HOST_PORT_MIN = 4096
-SERVER_HOST_PORT_MAX = 4196
 
 app = typer.Typer(
     name="ocframework",
@@ -85,19 +82,19 @@ def _print_version_info() -> None:
     else:
         typer.secho("framework repo path: not found", fg=typer.colors.RED)
 
-    expected_global_config_path = get_config_root() / "opencode"
-    expected_global_auth_path = get_local_data_home() / "opencode" / "auth.json"
-
-    typer.echo(f"global config found: {settings.global_config_found}")
-    if settings.global_config_found:
-        typer.echo(f"global config path: {settings.global_config_path}")
+    opencode_layer = discover_global_layer(OPENCODE_TOOL_SPEC)
+    typer.echo(f"global config found: {opencode_layer.global_found}")
+    if opencode_layer.global_found:
+        typer.echo(f"global config path: {opencode_layer.global_path}")
     else:
-        typer.echo(f"expected global config path: {expected_global_config_path}")
-    typer.echo(f"global auth.json found: {settings.global_auth_found}")
-    if settings.global_auth_found:
-        typer.echo(f"global auth.json path: {settings.global_auth_path}")
+        expected_config = expected_global_path(OPENCODE_TOOL_SPEC)
+        typer.echo(f"expected global config path: {expected_config}")
+    typer.echo(f"global auth.json found: {opencode_layer.auth_found}")
+    if opencode_layer.auth_found:
+        typer.echo(f"global auth.json path: {opencode_layer.auth_path}")
     else:
-        typer.echo(f"expected global auth.json path: {expected_global_auth_path}")
+        expected_auth = expected_global_auth_path(OPENCODE_TOOL_SPEC)
+        typer.echo(f"expected global auth.json path: {expected_auth}")
 
     qwen_layer = discover_global_layer(QWEN_TOOL_SPEC)
     typer.echo(f"qwen global settings found: {qwen_layer.global_found}")
@@ -239,29 +236,26 @@ def _select_launch_target(
         typer.Exit: when no usable config directory matches the request.
     """
     locations = discover_configs(repo_root)
+    env_override = _peek_env_agent_tool(env_file, env_vars)
 
     requested: Optional[ToolSpec] = None
     if tool is not None:
         requested = resolve_tool_or_exit(tool)
-    else:
-        override = _peek_env_agent_tool(env_file, env_vars)
-        if override:
-            requested = resolve_tool_or_exit(
-                override,
-                hint=f"Fix {AGENT_TOOL_KEY} in -e/--env or the --env-file override.",
-            )
+    elif env_override:
+        requested = resolve_tool_or_exit(
+            env_override,
+            hint=f"Fix {AGENT_TOOL_KEY} in -e/--env or the --env-file override.",
+        )
 
     if requested is not None:
         loc = _require_location(repo_root, locations, requested)
-        if tool is not None:
-            override = _peek_env_agent_tool(env_file, env_vars)
-            if override and override != requested.name:
-                typer.secho(
-                    f"Warning: {AGENT_TOOL_KEY}={override!r} from -e/--env or "
-                    f"--env-file overrides the selected tool '{requested.name}' "
-                    "inside the container environment.",
-                    fg=typer.colors.YELLOW,
-                )
+        if tool is not None and env_override and env_override != requested.name:
+            typer.secho(
+                f"Warning: {AGENT_TOOL_KEY}={env_override!r} from -e/--env or "
+                f"--env-file overrides the selected tool '{requested.name}' "
+                "inside the container environment.",
+                fg=typer.colors.YELLOW,
+            )
         typer.echo(f"Using {requested.name} config at {requested.config_dirname}/")
         return loc.config_dir, requested
 
@@ -463,7 +457,7 @@ def init(
                 typer.echo(f"Backup created at: {backup_path}")
 
     typer.echo("Running setup wizard...")
-    wizard_result = run_wizard(repo_path, result, agent_tool=spec.name)
+    wizard_result = run_wizard(repo_path, spec.name)
 
     if wizard_result.create_global_config:
         global_spec = resolve_tool_or_exit(wizard_result.agent_tool)
@@ -481,7 +475,7 @@ def init(
             raise typer.Exit(1) from e
 
     typer.echo(f"Setting up worktree on branch '{wizard_result.branch_name}'...")
-    worktree_result = setup_opencode_worktree(
+    worktree_result = setup_config_worktree(
         repo_root=repo_path,
         branch_name=wizard_result.branch_name,
         config_dir=config_dir,
@@ -499,7 +493,7 @@ def init(
     orchestrator = GenerationOrchestrator()
     orchestrator.generate(repo_path, wizard_result)
 
-    commands = DocumentationGenerator._get_launch_commands(wizard_result.agent_tool)
+    commands = DocumentationGenerator.get_launch_commands(wizard_result.agent_tool)
 
     typer.secho("Initialization complete!", fg=typer.colors.GREEN)
     typer.echo("\nCommands:")
@@ -508,10 +502,15 @@ def init(
     typer.echo(f"  Shell:  {commands['shell']}")
 
 
-def _parse_image_id_from_build_output(output: str) -> Optional[str]:
-    """Parse image ID from devcontainer build output.
+def _verify_build_output(output: str) -> bool:
+    """Check that ``devcontainer up`` produced a parseable build result.
 
-    Devcontainer build outputs JSON lines. We look for the image ID in the output.
+    Devcontainer build output is JSON lines; the line carrying an
+    ``outcome`` also names a throwaway ``containerId``. That leftover
+    container is removed here (compose launches its own), and the
+    success condition is that its image reference resolved to a
+    non-empty name. As a fallback, a raw image ID is regex-searched in
+    the output.
     """
     for line in output.strip().split("\n"):
         line = line.strip()
@@ -534,17 +533,13 @@ def _parse_image_id_from_build_output(output: str) -> Optional[str]:
                     )
                 finally:
                     subprocess.run(["docker", "rm", "-f", container_id])
-                return inspect_result.stdout.strip()
+                return bool(inspect_result.stdout.strip())
 
         except json.JSONDecodeError:
             continue
 
     sha256_pattern = re.compile(r"(sha256:[a-f0-9]{64}|[a-f0-9]{12,64})")
-    match = sha256_pattern.search(output)
-    if match:
-        return match.group(1)
-
-    return None
+    return sha256_pattern.search(output) is not None
 
 
 _IMAGE_NAME_INVALID = re.compile(r"[^a-z0-9._-]+")
@@ -594,26 +589,34 @@ def _parse_image_name_from_build_json(output: str) -> Optional[str]:
     return None
 
 
-def _capture_tagged_image_id(tag: str, subprocess_env: dict) -> Optional[str]:
-    """Return the image ID currently carrying ``tag``, or None."""
+def _docker(
+    args: List[str],
+    env: Optional[dict] = None,
+    timeout: int = 30,
+) -> Optional[subprocess.CompletedProcess]:
+    """Run a docker command with captured output.
+
+    Returns None when the command times out or docker is unavailable.
+    """
     try:
-        result = subprocess.run(
-            [
-                "docker",
-                "images",
-                "--filter",
-                f"reference={tag}",
-                "--format",
-                "{{.ID}}",
-            ],
-            env=subprocess_env,
+        return subprocess.run(
+            ["docker"] + args,
+            env=env,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=timeout,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return None
-    if result.returncode != 0:
+
+
+def _capture_tagged_image_id(tag: str, subprocess_env: dict) -> Optional[str]:
+    """Return the image ID currently carrying ``tag``, or None."""
+    result = _docker(
+        ["images", "--filter", f"reference={tag}", "--format", "{{.ID}}"],
+        env=subprocess_env,
+    )
+    if result is None or result.returncode != 0:
         return None
     ids = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     return ids[0] if ids else None
@@ -621,32 +624,19 @@ def _capture_tagged_image_id(tag: str, subprocess_env: dict) -> Optional[str]:
 
 def _inspect_image_id(reference: str, subprocess_env: dict) -> Optional[str]:
     """Return the image ID behind ``reference``, or None."""
-    try:
-        result = subprocess.run(
-            ["docker", "image", "inspect", "--format", "{{.Id}}", reference],
-            env=subprocess_env,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    result = _docker(
+        ["image", "inspect", "--format", "{{.Id}}", reference],
+        env=subprocess_env,
+    )
+    if result is None or result.returncode != 0:
         return None
-    return result.stdout.strip() if result.returncode == 0 else None
+    return result.stdout.strip()
 
 
 def _remove_image(image_id: str, subprocess_env: dict) -> bool:
     """Best-effort removal of a previous (now dangling) image."""
-    try:
-        result = subprocess.run(
-            ["docker", "rmi", image_id],
-            env=subprocess_env,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
-    return result.returncode == 0
+    result = _docker(["rmi", image_id], env=subprocess_env)
+    return result is not None and result.returncode == 0
 
 
 def _extract_server_arg(
@@ -844,19 +834,13 @@ def _get_container_status(container_name: str, subprocess_env: dict) -> Optional
         Container status (e.g., 'running', 'exited', 'created') if exists,
         None otherwise
     """
-    try:
-        result = subprocess.run(
-            ["docker", "inspect", "--format", "{{.State.Status}}", container_name],
-            env=subprocess_env,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if result.returncode == 0:
-            status = result.stdout.strip()
-            return status if status else None
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
+    result = _docker(
+        ["inspect", "--format", "{{.State.Status}}", container_name],
+        env=subprocess_env,
+    )
+    if result is not None and result.returncode == 0:
+        status = result.stdout.strip()
+        return status if status else None
     return None
 
 
@@ -871,19 +855,10 @@ def _get_container_ports(container_name: str, subprocess_env: dict) -> Optional[
         Raw ``docker port`` output (e.g. ``"4096/tcp -> 0.0.0.0:4096"``),
         or None when the container has no published ports or the command fails.
     """
-    try:
-        result = subprocess.run(
-            ["docker", "port", container_name],
-            env=subprocess_env,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if result.returncode == 0:
-            output = result.stdout.strip()
-            return output if output else None
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
+    result = _docker(["port", container_name], env=subprocess_env)
+    if result is not None and result.returncode == 0:
+        output = result.stdout.strip()
+        return output if output else None
     return None
 
 
@@ -897,17 +872,8 @@ def _remove_container(container_name: str, subprocess_env: dict) -> bool:
     Returns:
         True if removal succeeded, False otherwise
     """
-    try:
-        result = subprocess.run(
-            ["docker", "rm", "-f", container_name],
-            env=subprocess_env,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
+    result = _docker(["rm", "-f", container_name], env=subprocess_env)
+    return result is not None and result.returncode == 0
 
 
 def _build_image(
@@ -964,9 +930,7 @@ def _build_image(
         typer.secho("Failed to build devcontainer image", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
 
-    fallback_image_id = _parse_image_id_from_build_output(output)
-
-    if not fallback_image_id:
+    if not _verify_build_output(output):
         typer.secho(
             "Could not parse image ID from build output", fg=typer.colors.RED, err=True
         )
@@ -1114,7 +1078,9 @@ def launch(
 
     config_dir, spec = _select_launch_target(repo_root, tool, env_file, env_vars)
 
-    valid, error = validate_runtime_context(cwd, spec.config_dirname)
+    valid, error = validate_runtime_context(
+        cwd, spec.config_dirname, repo_root=repo_root
+    )
     if not valid:
         typer.secho(f"Error: {error}", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
@@ -1282,10 +1248,8 @@ def launch(
         run_cmd.extend(spec.serve.serve_args)
     run_cmd.extend(args)
 
-    result = None
     try:
-        result = subprocess.run(run_cmd, env=subprocess_env, cwd=repo_root)
-        raise typer.Exit(result.returncode)
+        run_result = subprocess.run(run_cmd, env=subprocess_env, cwd=repo_root)
     except KeyboardInterrupt:
         # Cleanup: stop the container if it's still running
         typer.echo("\nInterrupted. Cleaning up container...", err=True)
@@ -1308,9 +1272,8 @@ def launch(
             err=True,
         )
         raise typer.Exit(130) from None  # 130 is standard exit code for SIGINT
-    except Exception:
-        # Re-raise any other exception
-        raise
+
+    raise typer.Exit(run_result.returncode)
 
 
 if __name__ == "__main__":

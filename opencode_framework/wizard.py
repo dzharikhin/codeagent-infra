@@ -14,7 +14,6 @@ from opencode_framework.agent.registry import (
     get_tool_spec,
 )
 from opencode_framework.exceptions import ValidationError
-from opencode_framework.preflight import PreflightResult
 from opencode_framework.sandbox.features import (
     prompt_feature_changes,
     prompt_port_mappings,
@@ -27,7 +26,6 @@ class WizardResult:
 
     branch_name: str
     optional_features: List[str]
-    should_add_to_gitignore: bool
     create_global_config: bool = False
     port_mappings: List[str] = field(default_factory=list)
     java_build_tools: List[str] = field(default_factory=list)
@@ -81,25 +79,14 @@ def check_gitignore_needs(repo_root: Path, entry: str) -> bool:
     return entry not in content
 
 
-def run_wizard(
-    repo_root: Path,
-    preflight_result: PreflightResult,
-    agent_tool: Optional[str] = None,
-) -> WizardResult:
+def run_wizard(repo_root: Path, agent_tool: str) -> WizardResult:
     """Run the interactive setup wizard.
 
     Asks only for meaningful structural choices:
-    - Agent CLI tool (opencode | qwen) - FIRST, unless given via --tool
     - Global config creation (dir-based tools, if missing)
     - Branch name with suggested default
     - Optional feature selection
     """
-    if agent_tool is None:
-        agent_tool = typer.prompt(
-            "\nAgent CLI tool (opencode | qwen)",
-            default=DEFAULT_TOOL,
-            type=str,
-        )
     spec = resolve_tool_or_exit(agent_tool)
 
     create_global_config = False
@@ -136,7 +123,6 @@ def run_wizard(
     return WizardResult(
         branch_name=branch_name,
         optional_features=optional_features,
-        should_add_to_gitignore=True,
         create_global_config=create_global_config,
         port_mappings=port_mappings,
         java_build_tools=java_build_tools,

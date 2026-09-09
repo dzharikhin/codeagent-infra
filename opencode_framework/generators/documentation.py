@@ -14,7 +14,7 @@ class DocumentationGenerator(FileGenerator):
         self._generate_readme(ctx)
 
     @staticmethod
-    def _get_launch_commands(agent_tool: str) -> dict:
+    def get_launch_commands(agent_tool: str) -> dict:
         """Get the host-side commands for the selected tool.
 
         Returns CLI commands that handle environment loading and Docker context.
@@ -29,7 +29,7 @@ class DocumentationGenerator(FileGenerator):
     @staticmethod
     def _generate_readme(ctx: GenerationContext) -> None:
         """Generate the config worktree's README.md."""
-        commands = DocumentationGenerator._get_launch_commands(ctx.agent_tool)
+        commands = DocumentationGenerator.get_launch_commands(ctx.agent_tool)
 
         readme_content = TemplateHandler.render_readme_template(
             launch_command=commands["launch"],

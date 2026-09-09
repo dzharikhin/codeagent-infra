@@ -11,9 +11,8 @@ from opencode_framework.git_ops import (
     create_worktree,
     get_current_branch,
     is_worktree,
-    list_worktrees,
     remove_worktree,
-    setup_opencode_worktree,
+    setup_config_worktree,
 )
 
 pytestmark = pytest.mark.skipif(
@@ -107,27 +106,16 @@ class TestWorktreeOperations:
         assert remove_worktree(worktree_path, cwd=git_repo)
         assert not worktree_path.exists()
 
-    def test_list_worktrees(self, git_repo: Path):
-        """list_worktrees returns all worktrees."""
-        worktree_path = git_repo / ".opencode"
-        create_worktree(worktree_path, "test-branch", cwd=git_repo)
 
-        worktrees = list_worktrees(cwd=git_repo)
-
-        assert len(worktrees) == 2
-        assert git_repo in worktrees
-        assert worktree_path in worktrees
-
-
-class TestSetupOpencodeWorktree:
-    """Tests for setup_opencode_worktree function."""
+class TestSetupConfigWorktree:
+    """Tests for setup_config_worktree function."""
 
     def test_setup_creates_worktree(self, git_repo: Path):
-        """setup_opencode_worktree creates a worktree."""
+        """setup_config_worktree creates a worktree."""
         opencode_dir = git_repo / ".opencode"
         branch_name = "codeagent-test"
 
-        result = setup_opencode_worktree(
+        result = setup_config_worktree(
             repo_root=git_repo,
             branch_name=branch_name,
             config_dir=opencode_dir,
@@ -139,11 +127,11 @@ class TestSetupOpencodeWorktree:
         assert is_worktree(opencode_dir)
 
     def test_setup_with_existing_branch(self, git_repo: Path):
-        """setup_opencode_worktree reuses existing branch."""
+        """setup_config_worktree reuses existing branch."""
         opencode_dir = git_repo / ".opencode"
         branch_name = "codeagent-test"
 
-        result1 = setup_opencode_worktree(
+        result1 = setup_config_worktree(
             repo_root=git_repo,
             branch_name=branch_name,
             config_dir=opencode_dir,
@@ -152,7 +140,7 @@ class TestSetupOpencodeWorktree:
 
         remove_worktree(opencode_dir, cwd=git_repo)
 
-        result2 = setup_opencode_worktree(
+        result2 = setup_config_worktree(
             repo_root=git_repo,
             branch_name=branch_name,
             config_dir=opencode_dir,

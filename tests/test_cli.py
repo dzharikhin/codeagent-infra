@@ -313,7 +313,7 @@ class TestLaunchRebuildFeaturePrompt:
         monkeypatch.setattr(
             app_module,
             "validate_runtime_context",
-            lambda cwd, config_dirname: (True, ""),
+            lambda cwd, config_dirname, repo_root=None: (True, ""),
         )
         monkeypatch.setattr(app_module, "get_repo_root", lambda cwd: tmp_path.resolve())
         monkeypatch.setattr(app_module, "load_env_with_overrides", lambda **kw: {})
@@ -481,7 +481,7 @@ class TestLaunchAttachRemoveFeature:
         monkeypatch.setattr(
             app_module,
             "validate_runtime_context",
-            lambda cwd, config_dirname: (True, ""),
+            lambda cwd, config_dirname, repo_root=None: (True, ""),
         )
         monkeypatch.setattr(app_module, "get_repo_root", lambda cwd: tmp_path.resolve())
         monkeypatch.setattr(app_module, "load_env_with_overrides", lambda **kw: {})
@@ -702,7 +702,7 @@ class TestLaunchServer:
         monkeypatch.setattr(
             app_module,
             "validate_runtime_context",
-            lambda cwd, config_dirname: (True, ""),
+            lambda cwd, config_dirname, repo_root=None: (True, ""),
         )
         monkeypatch.setattr(app_module, "get_repo_root", lambda cwd: tmp_path.resolve())
         monkeypatch.setattr(app_module, "load_env_with_overrides", lambda **kw: {})
@@ -1060,7 +1060,7 @@ class TestLaunchToolSpec:
         monkeypatch.setattr(
             app_module,
             "validate_runtime_context",
-            lambda cwd, config_dirname: (True, ""),
+            lambda cwd, config_dirname, repo_root=None: (True, ""),
         )
         monkeypatch.setattr(app_module, "get_repo_root", lambda cwd: tmp_path.resolve())
         monkeypatch.setattr(
@@ -1276,7 +1276,7 @@ class TestLaunchToolSelection:
         monkeypatch.setattr(
             app_module,
             "validate_runtime_context",
-            lambda cwd, config_dirname: (True, ""),
+            lambda cwd, config_dirname, repo_root=None: (True, ""),
         )
         monkeypatch.setattr(app_module, "get_repo_root", lambda cwd: tmp_path.resolve())
         monkeypatch.setattr(app_module, "load_env_with_overrides", lambda **kw: {})
@@ -1582,7 +1582,7 @@ class TestLaunchBuildImageToolArg:
         monkeypatch.setattr(
             app_module,
             "validate_runtime_context",
-            lambda cwd, config_dirname: (True, ""),
+            lambda cwd, config_dirname, repo_root=None: (True, ""),
         )
         monkeypatch.setattr(app_module, "get_repo_root", lambda cwd: tmp_path.resolve())
         monkeypatch.setattr(app_module, "load_env_with_overrides", lambda **kw: {})

@@ -1,18 +1,9 @@
-"""Git operations for worktree and branch management."""
+"""Git operations: repository queries, worktree, and branch management."""
 
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
-
-
-@dataclass
-class GitBranchInfo:
-    """Information about a Git branch."""
-
-    name: str
-    exists: bool
-    is_orphan: bool = False
 
 
 @dataclass
@@ -29,9 +20,15 @@ def run_git_command(
     cwd: Optional[Path] = None,
     check: bool = False,
 ) -> subprocess.CompletedProcess:
-    """Run a git command."""
+    """Run a git command, returning a CompletedProcess.
+
+    Failed commands and timeouts are converted into non-zero return
+    codes instead of raising, unless ``check`` is set (in which case a
+    non-zero exit raises ``subprocess.CalledProcessError`` only for the
+    converted timeout-free cases handled below).
+    """
     try:
-        result = subprocess.run(
+        return subprocess.run(
             ["git"] + args,
             cwd=cwd,
             capture_output=True,
@@ -39,7 +36,6 @@ def run_git_command(
             timeout=60,
             check=check,
         )
-        return result
     except subprocess.CalledProcessError as e:
         return subprocess.CompletedProcess(
             args=e.args,
@@ -53,6 +49,13 @@ def run_git_command(
             returncode=-1,
             stdout="",
             stderr="Git command timed out",
+        )
+    except FileNotFoundError as e:
+        return subprocess.CompletedProcess(
+            args=["git"] + args,
+            returncode=-1,
+            stdout="",
+            stderr=str(e),
         )
 
 
@@ -76,26 +79,30 @@ def get_current_branch(cwd: Optional[Path] = None) -> Optional[str]:
     return None
 
 
-def create_orphan_branch(
-    branch_name: str,
-    cwd: Optional[Path] = None,
-) -> bool:
-    """Create an orphan branch with no commit history.
-
-    Returns True on success.
-    """
-    result = run_git_command(
-        ["checkout", "--orphan", branch_name],
-        cwd=cwd,
-    )
-    if result.returncode != 0:
-        return False
-
-    result = run_git_command(
-        ["reset", "--hard"],
-        cwd=cwd,
-    )
+def is_inside_git_tree(path: Path) -> bool:
+    """Check if path is inside a Git working tree."""
+    result = run_git_command(["rev-parse", "--is-inside-work-tree"], cwd=path)
     return result.returncode == 0
+
+
+def is_bare_repository(path: Path) -> bool:
+    """Check if the repository is bare."""
+    result = run_git_command(["rev-parse", "--is-bare-repository"], cwd=path)
+    return result.returncode == 0 and result.stdout.strip().lower() == "true"
+
+
+def get_repo_root(path: Path) -> Optional[Path]:
+    """Get the repository root directory."""
+    result = run_git_command(["rev-parse", "--show-toplevel"], cwd=path)
+    if result.returncode == 0 and result.stdout.strip():
+        return Path(result.stdout.strip())
+    return None
+
+
+def has_staged_changes(path: Path) -> bool:
+    """Check if the Git index has staged changes."""
+    result = run_git_command(["diff", "--cached", "--quiet"], cwd=path)
+    return result.returncode != 0
 
 
 def create_worktree(
@@ -139,40 +146,12 @@ def remove_worktree(worktree_path: Path, cwd: Optional[Path] = None) -> bool:
     return result.returncode == 0
 
 
-def list_worktrees(cwd: Optional[Path] = None) -> List[Path]:
-    """List all worktree paths."""
-    result = run_git_command(
-        ["worktree", "list", "--porcelain"],
-        cwd=cwd,
-    )
-
-    worktrees = []
-    if result.returncode == 0:
-        for line in result.stdout.splitlines():
-            if line.startswith("worktree "):
-                worktree_path = Path(line.split(" ", 1)[1])
-                worktrees.append(worktree_path)
-
-    return worktrees
-
-
 def is_worktree(path: Path) -> bool:
     """Check if the given path is a worktree."""
     git_file = path / ".git"
     if git_file.is_file():
         return True
     return False
-
-
-def get_worktree_gitdir(worktree_path: Path) -> Optional[Path]:
-    """Get the .git directory for a worktree."""
-    git_file = worktree_path / ".git"
-    if git_file.is_file():
-        content = git_file.read_text().strip()
-        if content.startswith("gitdir: "):
-            gitdir = content[8:]
-            return worktree_path / gitdir
-    return None
 
 
 def make_initial_commit(
@@ -192,13 +171,7 @@ def make_initial_commit(
     return result.returncode == 0
 
 
-def add_all_files(cwd: Optional[Path] = None) -> bool:
-    """Stage all files in the working directory."""
-    result = run_git_command(["add", "."], cwd=cwd)
-    return result.returncode == 0
-
-
-def setup_opencode_worktree(
+def setup_config_worktree(
     repo_root: Path,
     branch_name: str,
     config_dir: Path,

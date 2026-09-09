@@ -5,10 +5,13 @@ from typing import Iterable, Optional
 
 from opencode_framework.exceptions import PortAllocationError
 
+SERVER_HOST_PORT_MIN = 4096
+SERVER_HOST_PORT_MAX = 4196
+
 
 def find_free_port(
-    start: int = 4096,
-    end: int = 4196,
+    start: int = SERVER_HOST_PORT_MIN,
+    end: int = SERVER_HOST_PORT_MAX,
     reserved: Optional[Iterable[int]] = None,
 ) -> int:
     """Return the first free TCP port on 127.0.0.1 in the inclusive range.

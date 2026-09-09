@@ -8,6 +8,8 @@ from typing import List, Optional, Tuple
 import typer
 
 from opencode_framework.preflight import check_docker_rootless_context
+from opencode_framework.sandbox.compose import ComposeGenerator
+from opencode_framework.sandbox.devcontainer import DevcontainerGenerator
 
 # Shared feature catalog (key, human-readable description).
 # Order matters: it defines the prompt order and is reused by the init wizard.
@@ -173,9 +175,6 @@ def update_features(config_dir: Path, repo_name: str, agent_tool: str) -> bool:
     Returns:
         True if feature configuration was changed, False otherwise.
     """
-    from opencode_framework.sandbox.compose import ComposeGenerator
-    from opencode_framework.sandbox.devcontainer import DevcontainerGenerator
-
     if not is_interactive():
         return False
 

@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Optional
 
 from opencode_framework.agent.registry import get_tool_spec
 from opencode_framework.config import discover_global_settings
+from opencode_framework.sandbox.compose import ComposeGenerator
+from opencode_framework.sandbox.devcontainer import DevcontainerGenerator
 
 from .base import GenerationContext
 from .config_files import ConfigFilesGenerator
@@ -21,11 +23,6 @@ class GenerationOrchestrator:
 
     def __init__(self):
         """Initialize the orchestrator with all generators."""
-        # Lazy: the sandbox generators import generators.base, so importing
-        # them at module level would create a circular import.
-        from opencode_framework.sandbox.compose import ComposeGenerator
-        from opencode_framework.sandbox.devcontainer import DevcontainerGenerator
-
         self.devcontainer_gen = DevcontainerGenerator()
         self.config_gen = ConfigFilesGenerator()
         self.docs_gen = DocumentationGenerator()

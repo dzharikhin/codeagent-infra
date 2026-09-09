@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Tuple
 
 from dotenv import dotenv_values
 
-from opencode_framework.preflight import get_repo_root, is_inside_git_tree
+from opencode_framework.git_ops import get_repo_root, is_inside_git_tree
 
 
 class EnvError(Exception):
@@ -40,7 +40,9 @@ class InterpolationError(EnvError):
     """Raised when interpolation fails."""
 
 
-def validate_runtime_context(cwd: Path, config_dirname: str) -> Tuple[bool, str]:
+def validate_runtime_context(
+    cwd: Path, config_dirname: str, repo_root: Optional[Path] = None
+) -> Tuple[bool, str]:
     """Validate that the current directory is suitable for launch/exec.
 
     Checks:
@@ -55,23 +57,26 @@ def validate_runtime_context(cwd: Path, config_dirname: str) -> Tuple[bool, str]
         cwd: directory launch was invoked from.
         config_dirname: name of the agent tool's config worktree directory
             (e.g. ".opencode" or ".qwen").
+        repo_root: caller-verified repository root; when given, the git
+            tree/root checks are skipped to avoid re-querying git.
 
     Returns:
         (True, "") on success
         (False, "error message") on failure
     """
-    if not is_inside_git_tree(cwd):
-        return False, "Current directory is not inside a Git working tree"
-
-    repo_root = get_repo_root(cwd)
     if repo_root is None:
-        return False, "Could not determine repository root"
+        if not is_inside_git_tree(cwd):
+            return False, "Current directory is not inside a Git working tree"
 
-    if repo_root != cwd.resolve():
-        return (
-            False,
-            f"Current directory is not the repository root. Run from: {repo_root}",
-        )
+        repo_root = get_repo_root(cwd)
+        if repo_root is None:
+            return False, "Could not determine repository root"
+
+        if repo_root != cwd.resolve():
+            return (
+                False,
+                f"Current directory is not the repository root. Run from: {repo_root}",
+            )
 
     config_dir = repo_root / config_dirname
     if not config_dir.is_dir():

@@ -126,7 +126,6 @@ class TemplateHandler:
     ENV_TEMPLATE = "env.template"
     COMPOSE_TEMPLATE = "docker-compose.template.yaml"
     README_TEMPLATE = "readme.template.md"
-    GITIGNORE_TEMPLATE = "gitignore.template"
 
     @staticmethod
     def load_json_template(template_name: str) -> dict:

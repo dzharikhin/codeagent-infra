@@ -22,6 +22,7 @@ opencode_framework/
 ├── __main__.py          # Entry point for python -m
 ├── agent/               # PART 2: agent tool integration
 │   ├── registry.py      # ToolSpec registry (opencode | qwen)
+│   ├── discovery.py     # Config directory discovery + OCF_AGENT_TOOL cross-check
 │   └── layers.py        # .env tool sections, project stubs, stub fallbacks
 ├── sandbox/             # PART 1: tool-agnostic sandbox
 │   ├── devcontainer.py  # devcontainer.json + Dockerfile image build
@@ -31,21 +32,14 @@ opencode_framework/
 │   └── features.py      # Feature set reconciliation on rebuild
 ├── cli/
 │   ├── __init__.py
-│   ├── app.py           # Typer CLI commands (init, launch)
-│   └── error_handler.py # CLI error handling
-├── core/
-│   ├── __init__.py
-│   ├── config.py        # Configuration discovery
-│   └── git.py           # Git operations
-├── exceptions/          # Custom exception hierarchy
+│   └── app.py           # Typer CLI commands (init, launch)
+├── exceptions/          # Custom exception hierarchy (FrameworkError family)
 ├── generators/          # Shared generators/assemblers for the active tool's config dir (ctx, templates, env, docs)
-├── models/              # Data models (results, etc.)
-├── services/            # Validation services
 ├── config.py            # Global settings, framework validation
-├── preflight.py         # Preflight checks
-├── git_ops.py           # Worktree management
+├── preflight.py         # Preflight checks (git queries come from git_ops)
+├── git_ops.py           # Git repository queries + worktree management (single git implementation)
 ├── wizard.py            # Interactive setup wizard
-└── templates/           # Jinja2 templates
+└── templates/           # Plain-text templates rendered via {{PLACEHOLDER}} replacement
 ```
 
 Moves from the pre-restructure layout (`generators/devcontainer.py`,
@@ -78,7 +72,6 @@ from pathlib import Path
 from typing import List, Optional
 
 import typer
-from pydantic import BaseModel
 
 from opencode_framework.config import GlobalSettings
 from opencode_framework.exceptions import FrameworkError
@@ -93,16 +86,16 @@ from opencode_framework.exceptions import FrameworkError
 - Common return pattern: `Tuple[bool, List[str]]` for validation results
 
 ```python
-def run_command(args: List[str], cwd: Optional[Path] = None) -> GitResult:
+def run_git_command(args: List[str], cwd: Optional[Path] = None) -> subprocess.CompletedProcess:
     ...
 
-def validate_runtime_context(cwd: Path, config_dirname: str) -> Tuple[bool, str]:
+def validate_runtime_context(cwd: Path, config_dirname: str, repo_root: Optional[Path] = None) -> Tuple[bool, str]:
     ...
 ```
 
 ### Dataclasses
 
-Use dataclasses for structured data with type hints. Use `__post_init__` for default mutable fields:
+Use dataclasses for structured data with type hints. Use `field(default_factory=...)` for mutable defaults:
 
 ```python
 from dataclasses import dataclass, field
@@ -112,17 +105,14 @@ from typing import List, Optional
 class PreflightResult:
     success: bool
     error: Optional[str] = None
+    remediation: Optional[str] = None
     missing_tools: List[str] = field(default_factory=list)
-    
-    def __post_init__(self):
-        if self.missing_tools is None:
-            self.missing_tools = []
 ```
 
 ### Naming Conventions
 
 - **Functions/variables**: `snake_case` (e.g., `run_preflight_checks`, `repo_root`)
-- **Classes**: `PascalCase` (e.g., `PreflightResult`, `GitOperations`)
+- **Classes**: `PascalCase` (e.g., `PreflightResult`, `WorktreeResult`)
 - **Constants**: `UPPER_SNAKE_CASE` (e.g., `REQUIRED_TOOLS`)
 - **Private functions**: prefix with `_` (e.g., `_check_framework_repo`)
 - **Test classes**: `Test<Feature>` (e.g., `TestCheckRequiredTools`)
@@ -167,26 +157,9 @@ raise ValidationError(
 #### Exception Hierarchy
 
 ```
-FrameworkError (base)
-├── ConfigurationError
+FrameworkError (base; carries message, remediation, context)
 ├── ValidationError
-│   ├── ProjectSetupError
-│   ├── FrameworkInstallationError
-│   ├── EnvironmentError
-│   ├── GitRepositoryError
-│   └── DirectoryStructureError
-├── GitError
-│   └── WorktreeError
-├── RuntimeError
-│   └── EnvError
-├── GenerationError
-│   ├── TemplateError
-│   │   ├── TemplateNotFoundError
-│   │   └── TemplateRenderError
-│   ├── DevcontainerGenerationError
-│   └── ConfigGenerationError
-├── PreflighjError      # Note: typo exists in codebase
-└── WizardError
+└── PortAllocationError
 ```
 
 Note: `runtime.py` defines a separate `EnvError` class for environment loading errors.
@@ -223,19 +196,18 @@ import subprocess
 from typing import List, Optional
 from pathlib import Path
 
-def run_git_command(args: List[str], cwd: Optional[Path] = None) -> tuple[int, str, str]:
-    """Run a git command and return (returncode, stdout, stderr)."""
+def run_git_command(args: List[str], cwd: Optional[Path] = None) -> subprocess.CompletedProcess:
+    """Run a git command; failures and timeouts return non-zero codes."""
     try:
-        result = subprocess.run(
+        return subprocess.run(
             ["git"] + args,
             cwd=cwd,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=60,
         )
-        return result.returncode, result.stdout.strip(), result.stderr.strip()
-    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-        return -1, "", str(e)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(args=["git"] + args, returncode=-1, stdout="", stderr="Git command timed out")
 ```
 
 ### Generator Pattern

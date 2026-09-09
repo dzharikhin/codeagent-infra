@@ -1,12 +1,7 @@
-"""Generator package for creating .opencode/ directory contents."""
+"""Generators for the active tool's config directory contents.
 
-from .base import FileGenerator, GenerationContext
-from .orchestrator import GenerationOrchestrator
-from .templates import TemplateHandler
-
-__all__ = [
-    "GenerationOrchestrator",
-    "FileGenerator",
-    "GenerationContext",
-    "TemplateHandler",
-]
+Import concrete submodules (``generators.orchestrator``,
+``generators.base``, ...), not symbols from here: eagerly importing
+the orchestrator here would create an import cycle with the sandbox
+generators it uses.
+"""

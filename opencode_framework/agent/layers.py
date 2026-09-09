@@ -41,11 +41,7 @@ def expected_global_path(
     Follows the spec's base/relpath fields; injectable roots override
     the host defaults (XDG-aware) for testing.
     """
-    if spec.global_config_base == "config_root":
-        base = config_root if config_root is not None else get_local_config_root()
-    else:
-        base = home if home is not None else get_local_home()
-    return base.joinpath(*spec.global_config_relpath)
+    return _global_base(spec, config_root, home).joinpath(*spec.global_config_relpath)
 
 
 def expected_global_env_path(
@@ -60,11 +56,32 @@ def expected_global_env_path(
     qwen); injectable roots override the host defaults (XDG-aware)
     for testing.
     """
+    return _global_base(spec, config_root, home).joinpath(*spec.global_env_relpath)
+
+
+def expected_global_auth_path(
+    spec: ToolSpec,
+    data_home: Optional[Path] = None,
+) -> Optional[Path]:
+    """Expected host path of a tool's global auth file, if it has one.
+
+    Returns None for tools without an auth layer (qwen).
+    """
+    if spec.auth_relpath is None:
+        return None
+    root = data_home if data_home is not None else get_local_data_home()
+    return root.joinpath(*spec.auth_relpath)
+
+
+def _global_base(
+    spec: ToolSpec,
+    config_root: Optional[Path] = None,
+    home: Optional[Path] = None,
+) -> Path:
+    """Resolve the base directory (config root or home) for a spec."""
     if spec.global_config_base == "config_root":
-        base = config_root if config_root is not None else get_local_config_root()
-    else:
-        base = home if home is not None else get_local_home()
-    return base.joinpath(*spec.global_env_relpath)
+        return config_root if config_root is not None else get_local_config_root()
+    return home if home is not None else get_local_home()
 
 
 def discover_global_layer(
@@ -101,14 +118,9 @@ def discover_global_layer(
     else:
         global_found = global_path.is_file()
 
-    auth_path: Optional[Path] = None
-    auth_found = False
-    if spec.auth_relpath is not None:
-        auth_root = data_home if data_home is not None else get_local_data_home()
-        auth_candidate = auth_root.joinpath(*spec.auth_relpath)
-        auth_found = auth_candidate.is_file()
-        if auth_found:
-            auth_path = auth_candidate
+    auth_candidate = expected_global_auth_path(spec, data_home=data_home)
+    auth_found = auth_candidate is not None and auth_candidate.is_file()
+    auth_path = auth_candidate if auth_found else None
 
     stub_path: Optional[str] = None
     if framework_repo_path:
