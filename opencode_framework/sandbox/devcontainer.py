@@ -101,7 +101,7 @@ class DevcontainerGenerator(FileGenerator):
         directory (workspace-relative at initializeCommand runtime).
 
         Args:
-            agent_tool: Agent tool name ("opencode" | "qwen")
+            agent_tool: Agent tool name ("opencode" | "qwen" | "dsh")
 
         Returns:
             Shell command string for initializeCommand

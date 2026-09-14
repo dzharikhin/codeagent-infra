@@ -183,7 +183,7 @@ def setup_config_worktree(
     """Set up the config directory as a linked git worktree.
 
     This function:
-    1. Creates the worktree at config_dir (e.g. .opencode/ or .qwen/)
+    1. Creates the worktree at config_dir (e.g. .opencode/, .qwen/ or .dsh/)
     2. Uses an orphan branch if it doesn't exist
     3. Creates an initial empty commit
 

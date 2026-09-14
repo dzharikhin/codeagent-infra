@@ -114,6 +114,81 @@ _README_SECTIONS: Dict[str, Dict[str, str]] = {
         ),
         "docs": "- Qwen Code docs: https://github.com/QwenLM/qwen-code",
     },
+    "dsh": {
+        "models": (
+            "### Available Models\n"
+            "\n"
+            "dsh takes credentials from the environment: set "
+            "`DEEPSEEK_API_KEY` in this `.dsh/.env`, in the host "
+            "`~/.dsh/.env` (merged as lowest-priority launch env), or "
+            "pass it with `launch -e`. Provider and model entries live "
+            "in `settings.yaml` (`apiKeyEnv` credential refs; the "
+            "`llm-pi-ai` section registers custom providers). The "
+            "model-stack env vars (`OCF_MAIN_MODEL`, `OCF_BUILD_MODEL`, "
+            "`OCF_SMALL_MODEL`) are not wired for dsh.\n"
+        ),
+        "install": (
+            "Node.js 22 + `npm install -g @deepseek-ai/dsh` in the "
+            "Dockerfile, version-pinned via the `OCF_AGENT_VERSION` build arg."
+        ),
+        "config_layers": (
+            "## Configuration Layers\n"
+            "\n"
+            "Config and env layers, lowest to highest precedence:\n"
+            "\n"
+            "| Layer | Location |\n"
+            "|---|---|\n"
+            "| Global | host `~/.dsh/settings.yaml` and "
+            "`~/.dsh/.credentials.yaml`, mounted read-only at `~/.dsh/*` "
+            "in the container; host `~/.dsh/.env` merged as "
+            "lowest-priority launch env (an env `DEEPSEEK_API_KEY` wins "
+            "over the credentials store) |\n"
+            "| Framework | framework-config mounted at "
+            "`/opt/ocframework/config` (the `dsh/web-bind-all.patch.yml` "
+            "overlay) and `framework-nuts-and-bolts/{common,dsh}` under "
+            "`.dsh/` |\n"
+            "| Project | this `.dsh/` worktree (`.env`, compose, "
+            "`runtime_data/` = container home, so container `~/.dsh` "
+            "profiles/sessions persist) |\n"
+            "\n"
+            "Saving settings or keys through the in-container Web UI "
+            "fails against the read-only mounts - edit "
+            "`~/.dsh/settings.yaml` on the host instead; dsh "
+            "hot-reloads it. The credentials document must be "
+            "owner-only (mode 0600): the framework stub is fixed up at "
+            "`init`, so re-run `ocframework init --force --tool dsh` (or "
+            "`chmod 600` the stub) if dsh reports a credentials file "
+            "readable beyond its owner after a fresh framework clone.\n"
+        ),
+        "serve": (
+            "## Run the Web UI\n"
+            "\n"
+            "dsh ships no TUI - the Web UI is the interactive surface:\n"
+            "\n"
+            "```sh\n"
+            "{{LAUNCH_COMMAND}} --server\n"
+            "```\n"
+            "\n"
+            "`--server` publishes the Web UI port (container port 3080) "
+            "and runs `dsh web --patch "
+            "/opt/ocframework/config/dsh/web-bind-all.patch.yml "
+            "--no-open --port 3080` (the overlay binds all interfaces "
+            "inside the sandbox; the CLI itself rejects `--host "
+            "0.0.0.0`). Copy the one-time `?token=…` URL from the "
+            "launch output and open "
+            "`http://127.0.0.1:<host-port>/?token=…` (pass "
+            "`--server=5000` to fix the host port; without a value a "
+            "free port is auto-assigned). Plain `launch` runs bare "
+            "`dsh`, which exits with a usage error - use `--server` or "
+            "pass through explicitly, e.g. `{{LAUNCH_COMMAND}} -- web "
+            "--no-open` or `{{LAUNCH_COMMAND}} -- --profile headless "
+            '"run tests"`.\n'
+        ),
+        "docs": (
+            "- dsh repository: https://github.com/deepseek-ai/deepseek-harness\n"
+            "- dsh docs site: https://deepseek-harness.github.io/deepseek-harness/"
+        ),
+    },
 }
 
 
@@ -233,9 +308,9 @@ class TemplateHandler:
 
         Args:
             global_config_path: Path to the global config layer (dir or file)
-            global_auth_path: Path to the global auth file (opencode only)
+            global_auth_path: Path to the global auth file (opencode and dsh)
             framework_repo_path: Path to framework repository
-            agent_tool: Agent tool name ("opencode" | "qwen")
+            agent_tool: Agent tool name ("opencode" | "qwen" | "dsh")
 
         Returns:
             Rendered environment template
@@ -272,7 +347,7 @@ class TemplateHandler:
             port_mappings: List of Docker-style port mappings (e.g. ["8080:8080"])
             java_build_tools: Enabled Java build tools (e.g., ["maven"], ["gradle"]).
                 Empty/None mounts no build-tool volumes.
-            agent_tool: Agent tool name ("opencode" | "qwen")
+            agent_tool: Agent tool name ("opencode" | "qwen" | "dsh")
 
         Returns:
             Rendered docker-compose content
@@ -374,7 +449,7 @@ class TemplateHandler:
             debug_command: CLI debug command
             shell_command: CLI shell command
             branch_name: Git branch name for config worktree
-            agent_tool: Agent tool name ("opencode" | "qwen")
+            agent_tool: Agent tool name ("opencode" | "qwen" | "dsh")
 
         Returns:
             Rendered README content

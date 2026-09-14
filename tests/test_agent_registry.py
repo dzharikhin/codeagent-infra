@@ -6,6 +6,7 @@ import pytest
 
 from opencode_framework.agent.registry import (
     DEFAULT_TOOL,
+    DSH_TOOL_SPEC,
     OPENCODE_TOOL_SPEC,
     QWEN_TOOL_SPEC,
     SUPPORTED_TOOLS,
@@ -18,8 +19,8 @@ from opencode_framework.exceptions import ValidationError
 class TestToolRegistry:
     """Tests for registry lookup and module constants."""
 
-    def test_supported_tools_contains_both(self):
-        assert set(SUPPORTED_TOOLS) == {"opencode", "qwen"}
+    def test_supported_tools_contains_all_three(self):
+        assert set(SUPPORTED_TOOLS) == {"opencode", "qwen", "dsh"}
 
     def test_default_tool_is_opencode(self):
         assert DEFAULT_TOOL == "opencode"
@@ -30,11 +31,14 @@ class TestToolRegistry:
     def test_get_tool_spec_returns_qwen(self):
         assert get_tool_spec("qwen") is QWEN_TOOL_SPEC
 
+    def test_get_tool_spec_returns_dsh(self):
+        assert get_tool_spec("dsh") is DSH_TOOL_SPEC
+
     def test_get_tool_spec_unknown_raises(self):
         with pytest.raises(ValidationError) as exc_info:
             get_tool_spec("cursor")
         assert "cursor" in exc_info.value.message
-        assert exc_info.value.context["supported"] == ["opencode", "qwen"]
+        assert exc_info.value.context["supported"] == ["dsh", "opencode", "qwen"]
         assert exc_info.value.remediation is not None
 
     def test_specs_are_frozen(self):
@@ -152,6 +156,82 @@ class TestQwenSpec:
         assert QWEN_TOOL_SPEC.context_files == ("QWEN.md", "AGENTS.md")
 
 
+class TestAuthBaseDefault:
+    """Tests for the auth_base field and its default."""
+
+    def test_opencode_auth_base_defaults_to_data_home(self):
+        assert OPENCODE_TOOL_SPEC.auth_base == "data_home"
+
+    def test_qwen_auth_base_defaults_to_data_home(self):
+        assert QWEN_TOOL_SPEC.auth_base == "data_home"
+
+    def test_dsh_auth_base_is_home(self):
+        assert DSH_TOOL_SPEC.auth_base == "home"
+
+
+class TestDshSpec:
+    """Tests for dsh-specific spec values."""
+
+    def test_binary_and_service_name(self):
+        assert DSH_TOOL_SPEC.name == "dsh"
+        assert DSH_TOOL_SPEC.binary == "dsh"
+        assert DSH_TOOL_SPEC.config_dirname == ".dsh"
+
+    def test_serve_spec(self):
+        serve = DSH_TOOL_SPEC.serve
+        assert serve.port == 3080
+        assert serve.token_env == ""
+        assert serve.token_required is False
+        assert serve.serve_args[0] == "web"
+        assert str(serve.port) in serve.serve_args
+        assert "--no-open" in serve.serve_args
+
+    def test_serve_args_patch_precedes_web_flags(self):
+        # The launcher stops collecting its own flags at the first
+        # unrecognized token, so --patch must come before --no-open.
+        serve_args = DSH_TOOL_SPEC.serve.serve_args
+        assert serve_args.index("--patch") < serve_args.index("--no-open")
+
+    def test_serve_args_patch_targets_dsh_overlay(self):
+        serve_args = DSH_TOOL_SPEC.serve.serve_args
+        patch = serve_args[serve_args.index("--patch") + 1]
+        assert patch == ("/opt/ocframework/config/dsh/web-bind-all.patch.yml")
+
+    def test_install_uses_dockerfile(self):
+        install = DSH_TOOL_SPEC.install
+        assert install.kind == "dockerfile"
+        assert install.devcontainer_feature is None
+        assert install.feature_version_env is None
+        assert install.build_args == ("OCF_AGENT_VERSION",)
+
+    def test_dockerfile_snippet_installs_dsh(self):
+        snippet = DSH_TOOL_SPEC.install.dockerfile_snippet
+        assert snippet is not None
+        assert "deb.nodesource.com/node_22.x" in snippet
+        assert "npm install -g @deepseek-ai/dsh@${OCF_AGENT_VERSION}" in snippet
+
+    def test_compose_env_pins_dsh_home(self):
+        assert (
+            "DSH_HOME=/home/${REMOTE_USER}/.dsh" in DSH_TOOL_SPEC.compose_env_fragment
+        )
+
+    def test_global_layer_shape(self):
+        assert DSH_TOOL_SPEC.global_config_base == "home"
+        assert DSH_TOOL_SPEC.global_config_is_dir is False
+        assert DSH_TOOL_SPEC.global_config_relpath == (".dsh", "settings.yaml")
+        assert DSH_TOOL_SPEC.auth_relpath == (".dsh", ".credentials.yaml")
+
+    def test_stub_relpath(self):
+        assert DSH_TOOL_SPEC.stub_relpath == (
+            "dsh",
+            "stubs",
+            "stub-credentials.yaml",
+        )
+
+    def test_context_files(self):
+        assert DSH_TOOL_SPEC.context_files == ("AGENTS.md", "CLAUDE.md")
+
+
 class TestComposeEnvFragment:
     """Tests for the {{AGENT_ENV}} fragment content."""
 
@@ -173,6 +253,7 @@ class TestComposeEnvFragment:
         for fragment in (
             OPENCODE_TOOL_SPEC.compose_env_fragment,
             QWEN_TOOL_SPEC.compose_env_fragment,
+            DSH_TOOL_SPEC.compose_env_fragment,
         ):
             for line in fragment.splitlines():
                 assert line.startswith("      - ")
@@ -193,8 +274,19 @@ class TestComposeMountFragment:
         assert "/opt/ocframework/global/qwen-settings.json:ro" in fragment
         assert "/home/${REMOTE_USER}/.qwen/settings.json:ro" in fragment
 
-    def test_both_tools_mount_nuts_subdirs(self):
-        for spec in (OPENCODE_TOOL_SPEC, QWEN_TOOL_SPEC):
+    def test_dsh_mounts_settings_and_credentials_read_only(self):
+        fragment = DSH_TOOL_SPEC.compose_mount_fragment
+        assert (
+            "${OCF_GLOBAL_CONFIG_PATH:-/dev/null}:"
+            "/home/${REMOTE_USER}/.dsh/settings.yaml:ro" in fragment
+        )
+        assert (
+            "${OCF_GLOBAL_AUTH_PATH:-/dev/null}:"
+            "/home/${REMOTE_USER}/.dsh/.credentials.yaml:ro" in fragment
+        )
+
+    def test_all_tools_mount_nuts_subdirs(self):
+        for spec in (OPENCODE_TOOL_SPEC, QWEN_TOOL_SPEC, DSH_TOOL_SPEC):
             fragment = spec.compose_mount_fragment
             source = "${OCF_LOCAL_FRAMEWORK_PATH}/framework-nuts-and-bolts"
             target = (
@@ -220,6 +312,12 @@ class TestEnvTemplateFragment:
         assert "OCF_GLOBAL_CONFIG_PATH={{OCF_GLOBAL_CONFIG_PATH}}" in fragment
         assert "OCF_GLOBAL_AUTH_PATH" not in fragment
 
+    def test_dsh_fragment_declares_tool_and_paths(self):
+        fragment = DSH_TOOL_SPEC.env_template_fragment
+        assert "OCF_AGENT_TOOL=dsh" in fragment
+        assert "OCF_GLOBAL_CONFIG_PATH={{OCF_GLOBAL_CONFIG_PATH}}" in fragment
+        assert "OCF_GLOBAL_AUTH_PATH={{OCF_GLOBAL_AUTH_PATH}}" in fragment
+
 
 class TestGlobalEnvRelpath:
     """Tests for the per-tool global .env relpath."""
@@ -229,3 +327,6 @@ class TestGlobalEnvRelpath:
 
     def test_qwen_global_env_relpath(self):
         assert QWEN_TOOL_SPEC.global_env_relpath == (".qwen", ".env")
+
+    def test_dsh_global_env_relpath(self):
+        assert DSH_TOOL_SPEC.global_env_relpath == (".dsh", ".env")

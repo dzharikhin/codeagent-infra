@@ -56,7 +56,7 @@ def validate_runtime_context(
     Args:
         cwd: directory launch was invoked from.
         config_dirname: name of the agent tool's config worktree directory
-            (e.g. ".opencode" or ".qwen").
+            (e.g. ".opencode", ".qwen" or ".dsh").
         repo_root: caller-verified repository root; when given, the git
             tree/root checks are skipped to avoid re-querying git.
 

@@ -6,9 +6,14 @@ from opencode_framework.agent.layers import (
     QWEN_PROJECT_SETTINGS_STUB,
     discover_global_layer,
     ensure_qwen_project_layer,
+    expected_global_auth_path,
     expected_global_env_path,
 )
-from opencode_framework.agent.registry import OPENCODE_TOOL_SPEC, QWEN_TOOL_SPEC
+from opencode_framework.agent.registry import (
+    DSH_TOOL_SPEC,
+    OPENCODE_TOOL_SPEC,
+    QWEN_TOOL_SPEC,
+)
 
 
 class TestExpectedGlobalEnvPath:
@@ -124,6 +129,75 @@ class TestStubFallback:
     def test_no_stub_path_without_framework_repo(self, tmp_path):
         layer = discover_global_layer(QWEN_TOOL_SPEC, home=tmp_path)
         assert layer.stub_path is None
+
+
+class TestExpectedGlobalAuthPath:
+    """Tests for auth path base resolution (opencode data home, dsh home)."""
+
+    def test_dsh_resolves_under_home(self, tmp_path):
+        path = expected_global_auth_path(
+            DSH_TOOL_SPEC,
+            data_home=tmp_path / "unused-data",
+            home=tmp_path,
+        )
+        assert path == tmp_path / ".dsh" / ".credentials.yaml"
+
+    def test_opencode_resolves_under_data_home(self, tmp_path):
+        path = expected_global_auth_path(
+            OPENCODE_TOOL_SPEC,
+            data_home=tmp_path,
+            home=tmp_path / "unused-home",
+        )
+        assert path == tmp_path / "opencode" / "auth.json"
+
+    def test_qwen_has_no_auth_layer(self, tmp_path):
+        assert expected_global_auth_path(QWEN_TOOL_SPEC, home=tmp_path) is None
+
+
+class TestDiscoverGlobalLayerDsh:
+    """Tests for dsh global layer discovery (settings + credentials)."""
+
+    def test_finds_settings_and_credentials(self, tmp_path):
+        home = tmp_path / "home"
+        settings = home / ".dsh" / "settings.yaml"
+        credentials = home / ".dsh" / ".credentials.yaml"
+        settings.parent.mkdir(parents=True)
+        settings.write_text("{}")
+        credentials.write_text("{}")
+
+        layer = discover_global_layer(DSH_TOOL_SPEC, home=home)
+        assert layer.global_found is True
+        assert layer.global_path == str(settings)
+        assert layer.auth_found is True
+        assert layer.auth_path == str(credentials)
+
+    def test_missing_paths_reported_not_found(self, tmp_path):
+        layer = discover_global_layer(DSH_TOOL_SPEC, home=tmp_path / "empty")
+        assert layer.global_found is False
+        assert layer.global_path is None
+        assert layer.auth_found is False
+        assert layer.auth_path is None
+
+    def test_settings_only_found_auth_missing(self, tmp_path):
+        home = tmp_path / "home"
+        settings = home / ".dsh" / "settings.yaml"
+        settings.parent.mkdir(parents=True)
+        settings.write_text("{}")
+
+        layer = discover_global_layer(DSH_TOOL_SPEC, home=home)
+        assert layer.global_found is True
+        assert layer.auth_found is False
+        assert layer.auth_path is None
+
+    def test_stub_path_derived_from_framework_repo(self, tmp_path):
+        layer = discover_global_layer(
+            DSH_TOOL_SPEC,
+            home=tmp_path,
+            framework_repo_path=str(tmp_path),
+        )
+        assert layer.stub_path == str(
+            tmp_path / "framework-config" / "dsh" / "stubs" / "stub-credentials.yaml"
+        )
 
 
 class TestQwenProjectLayer:

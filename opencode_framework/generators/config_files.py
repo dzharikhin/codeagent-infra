@@ -1,5 +1,6 @@
 """Configuration file generation (.env, .gitignore)."""
 
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -8,6 +9,27 @@ from opencode_framework.agent.registry import ToolSpec, get_tool_spec
 
 from .base import FileGenerator, GenerationContext
 from .templates import TemplateHandler
+
+
+def _ensure_owner_only(path: str) -> None:
+    """Best-effort chmod 0600 on a credentials fallback stub.
+
+    dsh refuses to boot when its ``.credentials.yaml`` is readable
+    beyond its owner (``credentials-local`` enforces owner-only mode),
+    and git does not track file modes, so a fresh framework clone
+    checks the stub out world-readable. The mount is consumed read-
+    only by root inside the sandbox, so owner-only mode stays usable.
+    Failures are ignored: a read-only framework checkout must not
+    block init.
+
+    Args:
+        path: absolute path of the framework stub being wired in as the
+            auth fallback.
+    """
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
 
 
 def _stub_reference(spec: ToolSpec, stub_path: Optional[str]) -> Optional[str]:
@@ -42,8 +64,9 @@ class ConfigFilesGenerator(FileGenerator):
         """Generate the config worktree's .env from template.
 
         Template contains defaults with placeholders; global-layer paths
-        are resolved per the tool spec (dir + auth for opencode, settings
-        file for qwen) with framework stub fallback.
+        are resolved per the tool spec (dir + auth for opencode,
+        settings file for qwen, settings + credentials files for dsh)
+        with framework stub fallback.
         """
         settings = ctx.global_settings
         spec = get_tool_spec(ctx.agent_tool)
@@ -57,6 +80,8 @@ class ConfigFilesGenerator(FileGenerator):
         global_auth_path: Optional[str] = None
         if spec.auth_relpath is not None:
             global_auth_path = layer.auth_path or stub_ref
+            if layer.auth_path is None and stub_ref is not None and layer.stub_path:
+                _ensure_owner_only(layer.stub_path)
         elif global_config_path is None:
             global_config_path = stub_ref
 

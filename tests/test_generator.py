@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 
+from opencode_framework.agent.registry import DSH_TOOL_SPEC
 from opencode_framework.config import GlobalSettings
 from opencode_framework.generators.base import GenerationContext
 from opencode_framework.generators.config_files import ConfigFilesGenerator
@@ -320,9 +321,35 @@ class TestReadmeToolSections:
         assert "https://opencode.ai" not in readme
         assert "devcontainer-features/opencode" not in readme
 
+    def test_dsh_sections(self):
+        """dsh README shows dsh serve/token/settings wording."""
+        readme = self._render("dsh")
+        assert "container port 3080" in readme
+        assert "DEEPSEEK_API_KEY" in readme
+        assert "@deepseek-ai/dsh" in readme
+        assert "?token=" in readme
+        assert "no TUI" in readme
+        assert "/opt/ocframework/config/dsh/web-bind-all.patch.yml" in readme
+        assert "ocframework launch --server" in readme
+
+    def test_dsh_sections_order_patch_before_web_flags(self):
+        """serve command must place --patch before the web app flags."""
+        readme = self._render("dsh")
+        patch_idx = readme.index("--patch")
+        no_open_idx = readme.index("--no-open")
+        assert patch_idx < no_open_idx
+
+    def test_dsh_sections_exclude_other_tool_wording(self):
+        """dsh README must not leak opencode/qwen-specific content."""
+        readme = self._render("dsh")
+        assert "OPENCODE_SERVER_PASSWORD" not in readme
+        assert "QWEN_SERVER_TOKEN" not in readme
+        assert "opencode models" not in readme
+        assert "devcontainer-features/opencode" not in readme
+
     def test_no_unresolved_placeholders(self):
         """Rendered README must not contain any template placeholders."""
-        for tool in ("opencode", "qwen"):
+        for tool in ("opencode", "qwen", "dsh"):
             readme = self._render(tool)
             assert "{{" not in readme
 
@@ -665,3 +692,125 @@ class TestComposeGenerator:
         assert "    ports:" in compose_content
         assert "      - 8080:8080" in compose_content
         assert "    privileged: true" in compose_content
+
+
+class TestDshConfigGeneration:
+    """Tests for dsh .env and compose generation."""
+
+    def test_dsh_env_declares_tool_and_global_keys(self, tmp_path: Path, monkeypatch):
+        monkeypatch.delenv("SUDO_USER", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        dsh_dir = tmp_path / ".dsh"
+        dsh_dir.mkdir()
+        ctx = _make_generation_context(tmp_path, config_dir=dsh_dir, agent_tool="dsh")
+
+        ConfigFilesGenerator().generate(ctx)
+
+        env_content = (dsh_dir / ".env").read_text()
+        assert "OCF_AGENT_TOOL=dsh" in env_content
+        assert "OCF_GLOBAL_CONFIG_PATH" in env_content
+        assert "OCF_GLOBAL_AUTH_PATH" in env_content
+
+    def test_dsh_compose_pins_dsh_home_and_mounts_global_files(self, tmp_path: Path):
+        repo_root = tmp_path / "myproject"
+        repo_root.mkdir()
+        dsh_dir = repo_root / ".dsh"
+        dsh_dir.mkdir()
+        ctx = _make_generation_context(repo_root, config_dir=dsh_dir, agent_tool="dsh")
+
+        ComposeGenerator().generate(ctx)
+
+        compose_content = (dsh_dir / "docker-compose.yaml").read_text()
+        assert "DSH_HOME=/home/${REMOTE_USER}/.dsh" in compose_content
+        assert (
+            "- ${OCF_GLOBAL_CONFIG_PATH:-/dev/null}:"
+            "/home/${REMOTE_USER}/.dsh/settings.yaml:ro" in compose_content
+        )
+        assert (
+            "- ${OCF_GLOBAL_AUTH_PATH:-/dev/null}:"
+            "/home/${REMOTE_USER}/.dsh/.credentials.yaml:ro" in compose_content
+        )
+        assert 'command: ""' in compose_content
+
+    def test_opencode_compose_keeps_empty_default_command(self, tmp_path: Path):
+        """No compose template change for dsh: default command stays empty."""
+        repo_root = tmp_path / "myproject"
+        repo_root.mkdir()
+        opencode_dir = repo_root / ".opencode"
+        opencode_dir.mkdir()
+        ctx = _make_generation_context(repo_root)
+
+        ComposeGenerator().generate(ctx)
+
+        compose_content = (opencode_dir / "docker-compose.yaml").read_text()
+        assert 'command: ""' in compose_content
+
+
+class TestAuthStubPermissions:
+    """The auth fallback stub must be owner-only (dsh enforces 0600)."""
+
+    @staticmethod
+    def _framework_repo_with_stub(tmp_path: Path) -> Path:
+        framework_repo = tmp_path / "framework"
+        stub = framework_repo.joinpath("framework-config", *DSH_TOOL_SPEC.stub_relpath)
+        stub.parent.mkdir(parents=True)
+        stub.write_text("{}\n")
+        stub.chmod(0o644)
+        return framework_repo
+
+    def test_stub_hardened_when_wired_as_auth_fallback(
+        self, tmp_path: Path, monkeypatch
+    ):
+        monkeypatch.delenv("SUDO_USER", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        framework_repo = self._framework_repo_with_stub(tmp_path)
+        stub = framework_repo / "framework-config" / "dsh" / "stubs"
+        dsh_dir = tmp_path / ".dsh"
+        dsh_dir.mkdir()
+        ctx = _make_generation_context(
+            tmp_path,
+            config_dir=dsh_dir,
+            agent_tool="dsh",
+            global_settings=_make_global_settings(
+                framework_repo_path=str(framework_repo)
+            ),
+        )
+
+        ConfigFilesGenerator().generate(ctx)
+
+        env_content = (dsh_dir / ".env").read_text()
+        assert (
+            "OCF_GLOBAL_AUTH_PATH=${OCF_LOCAL_FRAMEWORK_PATH}/"
+            "framework-config/dsh/stubs/stub-credentials.yaml"
+        ) in env_content
+        assert (stub / "stub-credentials.yaml").stat().st_mode & 0o777 == 0o600
+
+    def test_existing_host_credentials_left_untouched(
+        self, tmp_path: Path, monkeypatch
+    ):
+        home = tmp_path / "home"
+        monkeypatch.delenv("SUDO_USER", raising=False)
+        monkeypatch.setenv("HOME", str(home))
+        credentials = home / ".dsh" / ".credentials.yaml"
+        credentials.parent.mkdir(parents=True)
+        credentials.write_text("providers: {}\n")
+        credentials.chmod(0o644)
+        framework_repo = self._framework_repo_with_stub(tmp_path)
+        stub = framework_repo / "framework-config" / "dsh" / "stubs"
+        dsh_dir = tmp_path / ".dsh"
+        dsh_dir.mkdir()
+        ctx = _make_generation_context(
+            tmp_path,
+            config_dir=dsh_dir,
+            agent_tool="dsh",
+            global_settings=_make_global_settings(
+                framework_repo_path=str(framework_repo)
+            ),
+        )
+
+        ConfigFilesGenerator().generate(ctx)
+
+        env_content = (dsh_dir / ".env").read_text()
+        assert f"OCF_GLOBAL_AUTH_PATH={credentials}" in env_content
+        assert credentials.stat().st_mode & 0o777 == 0o644
+        assert (stub / "stub-credentials.yaml").stat().st_mode & 0o777 == 0o644

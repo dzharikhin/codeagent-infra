@@ -62,14 +62,23 @@ def expected_global_env_path(
 def expected_global_auth_path(
     spec: ToolSpec,
     data_home: Optional[Path] = None,
+    home: Optional[Path] = None,
 ) -> Optional[Path]:
     """Expected host path of a tool's global auth file, if it has one.
 
-    Returns None for tools without an auth layer (qwen).
+    The base directory follows ``spec.auth_base``: ``"data_home"``
+    (opencode's ``auth.json`` under XDG data home) or ``"home"`` (dsh's
+    ``.credentials.yaml`` under the user home, next to its settings
+    file). Returns None for tools without an auth layer (qwen).
+    Injectable roots override the host defaults (XDG-aware) for
+    testing.
     """
     if spec.auth_relpath is None:
         return None
-    root = data_home if data_home is not None else get_local_data_home()
+    if spec.auth_base == "home":
+        root = home if home is not None else get_local_home()
+    else:
+        root = data_home if data_home is not None else get_local_data_home()
     return root.joinpath(*spec.auth_relpath)
 
 
@@ -118,7 +127,7 @@ def discover_global_layer(
     else:
         global_found = global_path.is_file()
 
-    auth_candidate = expected_global_auth_path(spec, data_home=data_home)
+    auth_candidate = expected_global_auth_path(spec, data_home=data_home, home=home)
     auth_found = auth_candidate is not None and auth_candidate.is_file()
     auth_path = auth_candidate if auth_found else None
 

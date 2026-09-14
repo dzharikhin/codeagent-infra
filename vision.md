@@ -34,19 +34,20 @@ Tool-agnostic isolation around the project: devcontainer image build, Docker Com
 
 ### Part 2: Agent Tool Integration
 
-Integration of agent tools (opencode, qwen) and their layered configuration. A project may host several harnesses side by side — one per tool — each isolated and independent: its own config worktree, `.env`, container, volumes, and image tag. This part absorbs the tools' configuration complexity:
+Integration of agent tools (opencode, qwen, dsh) and their layered configuration. A project may host several harnesses side by side — one per tool — each isolated and independent: its own config worktree, `.env`, container, volumes, and image tag. This part absorbs the tools' configuration complexity:
 
 effective config = global < framework < project (optional) < env < CLI args
 
 - Code: `opencode_framework/agent/` — `registry.py` (one ToolSpec per tool: binary, install, env/mount fragments, serve, version pin), `layers.py` (env sections, project stubs, stub fallbacks)
 - Payloads: `framework-config/<tool>/` — the framework layer, mounted read-only
-- Env: `OCF_AGENT_*` (tool selection and version), `OCF_GLOBAL_*` (global layer source), agent defaults as env (`OCF_MAIN/BUILD/SMALL_MODEL`, `OCF_PLAN_/OCF_BUILD_MAX_BEFORE_RESPONSE_STEPS`). Tool-native variables (`OPENCODE_*`, `QWEN_*`) are the agent's own contract — used unprefixed, only for the active tool.
+- Env: `OCF_AGENT_*` (tool selection and version), `OCF_GLOBAL_*` (global layer source), agent defaults as env (`OCF_MAIN/BUILD/SMALL_MODEL`, `OCF_PLAN_/OCF_BUILD_MAX_BEFORE_RESPONSE_STEPS`). Tool-native variables (`OPENCODE_*`, `QWEN_*`, `DSH_*`, `DEEPSEEK_*`) are the agent's own contract — used unprefixed, only for the active tool.
 
 #### Layer 1: Global User Level
 
 Global settings are discovered automatically at fixed per-tool paths:
 - opencode: `~/.config/opencode` (configuration directory), `~/.local/share/opencode/auth.json` (authentication)
 - qwen: `~/.qwen/settings.json`
+- dsh: `~/.dsh/settings.yaml` (configuration), `~/.dsh/.credentials.yaml` (credential store), `~/.dsh/.env` (global env)
 
 This level contains elements reused across projects:
 - provider blacklists/whitelists
@@ -82,7 +83,7 @@ Individual settings for each project:
 Configuration at this level:
 - is part of the project thus can be modified by the agent
 - is controlled by the developer outside agent sessions
-- is version-controlled within the project: on the per-developer agent branch (opencode) or, for tool-native project paths (`.qwen/`), deliberately committed as team config (gitignored by default otherwise)
+- is version-controlled within the project: on the per-developer agent branch (opencode) or, for tool-native project paths (`.qwen/`, `.dsh/`), deliberately committed as team config (gitignored by default otherwise)
 - the framework generates the initial project layer only if missing; existing content is never overwritten
 
 ### Part 3: Nuts-and-bolts
@@ -91,7 +92,7 @@ A snippet library showing how to configure a tool properly. Split into:
 - common - tool-agnostic concepts: agents, commands, skills, MCP examples
 - tool-specific - how to make something work in the specific tool
 
-Content lives at `framework-nuts-and-bolts/{common,opencode,qwen}/`. Delivery is tool-conditional: `common/` plus the active tool's folder are mounted read-only into `.opencode/framework-nuts-and-bolts/`. The library is a reference, not a native discovery path — contents are copied or adapted into the project layer.
+Content lives at `framework-nuts-and-bolts/{common,opencode,qwen,dsh}/`. Delivery is tool-conditional: `common/` plus the active tool's folder are mounted read-only into `.opencode/framework-nuts-and-bolts/`. The library is a reference, not a native discovery path — contents are copied or adapted into the project layer.
 
 ## Usage Concept
 
@@ -118,21 +119,21 @@ Content lives at `framework-nuts-and-bolts/{common,opencode,qwen}/`. Delivery is
 
 ## Main Decisions
 
-- Each `init --tool <name>` creates one independent harness with fully isolated configuration: per-tool config worktree (`.opencode/`, `.qwen/`), `.env`, container, named volumes, and image tag. Adding another tool is a second `init --tool`; existing harnesses are never touched
-- Config branches are per-tool and marked: `codeagent-<user>-<tool>` (e.g. `codeagent-alice-opencode`, `codeagent-alice-qwen`) — git refuses to check out one branch in two worktrees
+- Each `init --tool <name>` creates one independent harness with fully isolated configuration: per-tool config worktree (`.opencode/`, `.qwen/`, `.dsh/`), `.env`, container, named volumes, and image tag. Adding another tool is a second `init --tool`; existing harnesses are never touched
+- Config branches are per-tool and marked: `codeagent-<user>-<tool>` (e.g. `codeagent-alice-opencode`, `codeagent-alice-qwen`, `codeagent-alice-dsh`) — git refuses to check out one branch in two worktrees
 - `launch` auto-detects configured harnesses: a single valid config launches directly; several valid configs prompt for a choice (interactive TTY) or fail with a `--tool` remediation (non-interactive)
-- The agent tool is configurable via a ToolSpec registry (opencode, qwen), persisted per harness as `OCF_AGENT_TOOL`
+- The agent tool is configurable via a ToolSpec registry (opencode, qwen, dsh), persisted per harness as `OCF_AGENT_TOOL`
 - The sandbox (Part 1) is tool-agnostic and usable without an agent
 - Config precedence: global < framework < project < env < CLI args; the framework only wires configuration layers, the agent tool computes the effective configuration
 - Project-local root is `.opencode/`
-- `.opencode/` is both the per-developer configuration worktree and the standard framework entry point; project-level agent config lands in the worktree (opencode) or the tool-native project path (`.qwen/`, gitignored by default or committed as team config)
+- `.opencode/` is both the per-developer configuration worktree and the standard framework entry point; project-level agent config lands in the worktree (opencode) or the tool-native project path (`.qwen/`, `.dsh/`, gitignored by default or committed as team config)
 - Main project branch stays free of framework-specific committed artifacts
 - Per-developer project config is versioned on a separate branch, local by default
 - Framework never auto-commits; developer controls commits
 
 ## Success Criteria
 
-- `init` works in a supported Git repo for both tools (`--tool opencode|qwen`) and produces `.opencode/` (plus `.qwen/` for qwen)
+- `init` works in a supported Git repo for every tool (`--tool opencode|qwen|dsh`) and produces `.opencode/` (plus `.qwen/` for qwen, `.dsh/` for dsh)
 - Generated config is sufficient to launch the container with the selected agent on board
 - The agent starts automatically from the generated setup
 - Project config can be versioned independently from the main project branch, or deliberately committed as team-shared config
