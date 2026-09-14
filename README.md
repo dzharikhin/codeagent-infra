@@ -12,9 +12,11 @@ Framework for attaching AI coding agents to existing projects safely.
 
 See [vision.md](vision.md) for project goals, scope, and architecture.
 
-> **Roadmap:** the agent tool is becoming configurable (`opencode` | `qwen`) as
-> part of a 3-part restructure (sandbox / agent integration / nuts-and-bolts).
-> Design and implementation plan: [tool-adoption.md](tool-adoption.md).
+> **Roadmap:** the agent tool is becoming configurable (`opencode` | `qwen` |
+> `dsh`) as part of a 3-part restructure (sandbox / agent integration /
+> nuts-and-bolts). Design and implementation plan:
+> [tool-adoption.md](tool-adoption.md); third-tool plan:
+> [dsh.md](dsh.md).
 
 ## Requirements
 
@@ -110,7 +112,7 @@ scripts).
 
 The `init` command generates `.opencode/.env` with placeholder values. Edit this file to configure environment variables for your project.
 
-You can also use a global environment file at `~/.config/opencode/.env` for opencode projects (on Unix-like systems) or `%APPDATA%\opencode\.env` on Windows; qwen projects use `~/.qwen/.env`. This file is automatically loaded if present, with the lowest priority.
+You can also use a global environment file at `~/.config/opencode/.env` for opencode projects (on Unix-like systems) or `%APPDATA%\opencode\.env` on Windows; qwen projects use `~/.qwen/.env`, dsh projects use `~/.dsh/.env`. This file is automatically loaded if present, with the lowest priority.
 
 At launch time, you can override environment variables:
 
@@ -123,7 +125,7 @@ ocframework launch -e API_KEY=secret123 -e DEBUG=true
 ```
 
 Environment precedence (lowest to highest):
-1. Global env file (`~/.config/opencode/.env` for opencode, `~/.qwen/.env` for qwen; auto-loaded)
+1. Global env file (`~/.config/opencode/.env` for opencode, `~/.qwen/.env` for qwen, `~/.dsh/.env` for dsh; auto-loaded)
 2. Base `.opencode/.env` file
 3. Override file (`--env-file`)
 4. Command-line variables (`-e KEY=VALUE`)
@@ -208,7 +210,10 @@ ocframework --version
 ocframework
 ```
 
-Both print version info, framework repo path, global config status, and auth.json status.
+Both print version info, framework repo path, and the global config/auth
+status for every supported tool: opencode config dir + `auth.json`, qwen
+`~/.qwen/settings.json`, dsh `~/.dsh/settings.yaml` + `~/.dsh/.credentials.yaml`
+(found/path, or expected path when missing).
 
 ### Remove the Container
 
@@ -249,6 +254,14 @@ to it. This combines the `serve` subcommand with port mappings.
 
 Set `OPENCODE_SERVER_PASSWORD` (and optionally `OPENCODE_SERVER_USERNAME`) in
 `.opencode/.env` to enable HTTP basic auth on the server.
+
+The `--server` shorthand wraps the per-tool serve command and publishes the
+tool's container port (opencode 4096, qwen Web Shell 4170, dsh Web UI 3080).
+For qwen the framework auto-generates a `QWEN_SERVER_TOKEN` when none is set.
+For dsh there is no TUI and no framework-managed token: it prints a one-time
+`?token=…` URL at startup that you copy into the browser, and plain
+`ocframework launch --tool dsh` (without `--server`) exits with a usage error
+by design. See the generated `<config-dir>/README.md` for the exact commands.
 
 ## Architecture
 

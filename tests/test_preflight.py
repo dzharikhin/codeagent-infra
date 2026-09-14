@@ -88,6 +88,13 @@ class TestConfigDirectoryExists:
         (tmp_path / ".qwen").mkdir()
         assert config_directory_exists(tmp_path, agent_tool="qwen") is True
 
+    def test_dsh_tool_checks_dsh_dir(self, tmp_path: Path):
+        """agent_tool='dsh' should check .dsh/, not .opencode/."""
+        (tmp_path / ".opencode").mkdir()
+        assert config_directory_exists(tmp_path, agent_tool="dsh") is False
+        (tmp_path / ".dsh").mkdir()
+        assert config_directory_exists(tmp_path, agent_tool="dsh") is True
+
 
 class TestDetectFrameworkRepoPath:
     """Tests for framework repo detection from an editable install."""

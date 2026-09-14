@@ -80,7 +80,7 @@ class GenerationOrchestrator:
 
         Args:
             repo_root: Root of the repository
-            agent_tool: Agent tool name ("opencode" | "qwen")
+            agent_tool: Agent tool name ("opencode" | "qwen" | "dsh")
 
         Returns:
             Path to backup directory, or None if nothing to backup

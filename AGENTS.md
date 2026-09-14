@@ -4,7 +4,8 @@ Technical details and code conventions for the OpenCode Framework.
 
 **Active plan:** [tool-adoption.md](tool-adoption.md) — configurable agent tool
 (`opencode` | `qwen`), 3-part restructure, and env-var taxonomy.
-The layout and conventions on this page describe the target state of that plan.
+[dsh.md](dsh.md) — adds `dsh` (DeepSeek Harness) as the third supported tool.
+The layout and conventions on this page describe the target state of those plans.
 
 ## Setup
 
@@ -21,7 +22,7 @@ opencode_framework/
 ├── __init__.py          # Package init, version
 ├── __main__.py          # Entry point for python -m
 ├── agent/               # PART 2: agent tool integration
-│   ├── registry.py      # ToolSpec registry (opencode | qwen)
+│   ├── registry.py      # ToolSpec registry (opencode | qwen | dsh)
 │   ├── discovery.py     # Config directory discovery + OCF_AGENT_TOOL cross-check
 │   └── layers.py        # .env tool sections, project stubs, stub fallbacks
 ├── sandbox/             # PART 1: tool-agnostic sandbox
@@ -259,18 +260,18 @@ poetry run pytest            # Run tests
 
 ### CLI Contract
 
-- `ocframework init [--tool opencode|qwen]` - Initialize framework in a Git repository
-- `ocframework launch [--tool opencode|qwen]` - Launch container with the configured agent
+- `ocframework init [--tool opencode|qwen|dsh]` - Initialize framework in a Git repository
+- `ocframework launch [--tool opencode|qwen|dsh]` - Launch container with the configured agent
 - `ocframework --version` - Print version and configuration status
 
 All commands require a valid framework repository (installed via `pipx install -e <path>`).
 
 Multiple harnesses can coexist in one project — one per tool, each with its own
-isolated config directory (`.opencode/`, `.qwen/`), `.env`, container, volumes,
-and image tag. `init --tool <name>` adds a harness without touching existing
-ones. `launch` detects configured harnesses: one valid config launches directly,
-several valid configs prompt for a choice (interactive TTY; hard error with
-`--tool` remediation when non-interactive).
+isolated config directory (`.opencode/`, `.qwen/`, `.dsh/`), `.env`, container,
+volumes, and image tag. `init --tool <name>` adds a harness without touching
+existing ones. `launch` detects configured harnesses: one valid config launches
+directly, several valid configs prompt for a choice (interactive TTY; hard error
+with `--tool` remediation when non-interactive).
 
 Launch target selection precedence: `--tool` flag > auto-detect (exactly one
 valid config dir) > interactive prompt (multiple valid, interactive TTY);
@@ -311,8 +312,8 @@ This hybrid approach enables:
 The framework splits into three parts with explicit borders (module names in code, variable prefixes in `.env`, directory structure for content) — see [vision.md](vision.md) and [tool-adoption.md](tool-adoption.md):
 
 1. **Sandbox** (`opencode_framework/sandbox/`) — tool-agnostic isolation: devcontainer image build, compose runtime, mounts, ports. Never imports tool knowledge; renders agent slots only (`{{AGENT_FEATURE}}`, `{{AGENT_INSTALL}}`, `{{AGENT_ENV}}`, `{{AGENT_MOUNTS}}`, `{{SERVICE_NAME}}`/`{{ENTRYPOINT}}`, build args).
-2. **Agent integration** (`opencode_framework/agent/`) — `registry.py` holds one ToolSpec per tool (opencode, qwen); `layers.py` wires the config layers global < framework < project (+ env, CLI args).
-3. **Nuts-and-bolts** (repo content `framework-nuts-and-bolts/{common,opencode,qwen}/`) — snippet library; `common/` + the active tool's folder are mounted read-only into `.opencode/framework-nuts-and-bolts/`.
+2. **Agent integration** (`opencode_framework/agent/`) — `registry.py` holds one ToolSpec per tool (opencode, qwen, dsh); `layers.py` wires the config layers global < framework < project (+ env, CLI args).
+3. **Nuts-and-bolts** (repo content `framework-nuts-and-bolts/{common,opencode,qwen,dsh}/`) — snippet library; `common/` + the active tool's folder are mounted read-only into `.opencode/framework-nuts-and-bolts/`.
 
 ### Environment Variable Taxonomy
 
@@ -323,34 +324,36 @@ Rule: variables shared across parts/tools may be unprefixed; part- or tool-speci
 | shared (no prefix) | `REMOTE_USER`, `XDG_*` |
 | sandbox | `OCF_IMAGE_ID`, `OCF_LOCAL_FRAMEWORK_PATH`, `OCF_REMOTE_FRAMEWORK_CONFIG_PATH` |
 | agent tool | `OCF_AGENT_TOOL`, `OCF_AGENT_VERSION` |
-| agent layers | `OCF_GLOBAL_CONFIG_PATH` (dir for opencode, file for qwen), `OCF_GLOBAL_AUTH_PATH` (opencode only) |
+| agent layers | `OCF_GLOBAL_CONFIG_PATH` (dir for opencode, file for qwen/dsh), `OCF_GLOBAL_AUTH_PATH` (opencode, dsh) |
 | agent defaults via env | `OCF_MAIN_MODEL`, `OCF_BUILD_MODEL`, `OCF_SMALL_MODEL`, `OCF_PLAN_MAX_BEFORE_RESPONSE_STEPS`, `OCF_BUILD_MAX_BEFORE_RESPONSE_STEPS` |
-| tool-native (agent's own contract, never OCF-prefixed) | `OPENCODE_*`, `QWEN_*` |
+| tool-native (agent's own contract, never OCF-prefixed) | `OPENCODE_*`, `QWEN_*`, `DSH_*`, `DEEPSEEK_API_KEY`, `DEEPSEEK_SEARCH_BASE_URL` |
 
 Renamed keys are not migrated: a `.env` whose `OCF_AGENT_TOOL` is missing or
-contradicts its config directory (`.opencode/` = opencode, `.qwen/` = qwen) is
-a hard launch error with a re-init remediation — regenerate via
-`ocframework init --force --tool <tool>` (existing directory backed up first).
+contradicts its config directory (`.opencode/` = opencode, `.qwen/` = qwen,
+`.dsh/` = dsh) is a hard launch error with a re-init remediation — regenerate
+via `ocframework init --force --tool <tool>` (existing directory backed up
+first).
 
 ### Git Worktree Model
 
 - The config worktree lives in a per-tool native dir: `.opencode/`
-  (opencode) or `.qwen/` (qwen) — a nested linked Git worktree on a
-  separate branch
+  (opencode), `.qwen/` (qwen) or `.dsh/` (dsh) — a nested linked Git
+  worktree on a separate branch
 - Branch name suggested: `codeagent-{username}-{tool}` for every tool
-  (e.g. `codeagent-alice-opencode`, `codeagent-alice-qwen`); git refuses
-  to check out one branch in two worktrees, hence the per-tool mark
+  (e.g. `codeagent-alice-opencode`, `codeagent-alice-qwen`,
+  `codeagent-alice-dsh`); git refuses to check out one branch in two
+  worktrees, hence the per-tool mark
 - If branch exists, reuse it; otherwise create orphan branch
 - Framework never auto-commits; developer controls commits
 
 ### Per-Tool Naming
 
-- Containers: `ocf_<repo>_<tool>` (e.g. `ocf_myrepo_qwen`)
+- Containers: `ocf_<repo>_<tool>` (e.g. `ocf_myrepo_dsh`)
 - Managed named volumes: `{kind}-{repo}-{tool}` (e.g. `venv-myrepo-qwen`,
   `m2-myrepo-qwen`, `gradle-myrepo-qwen`, `docker-myrepo-qwen`) via
   `managed_volume_name(prefix, repo_name, tool)` in `agent/registry.py` —
   two agents can run concurrently on one repo without sharing mutable state
-- Built images: `ocf-<repo>-<tool>:latest` (e.g. `ocf-myrepo-qwen:latest`),
+- Built images: `ocf-<repo>-<tool>:latest` (e.g. `ocf-myrepo-dsh:latest`),
   applied via `devcontainer build --image-name` after the `devcontainer up`
   step; persisted in the tool's `<config_dir>/runtime_data/.image_id` and
   surfaced as `OCF_IMAGE_ID` — avoids collision on the devcontainer CLI's
@@ -364,14 +367,23 @@ a hard launch error with a re-init remediation — regenerate via
 
 Read-only mounts:
 - Framework repository, `framework-config/`, and `framework-nuts-and-bolts/{common,<tool>}/`
-- Global layer, per tool: opencode — global config directory (host: `~/.config/opencode`) + auth file (global auth if present, else framework stub); qwen — `~/.qwen/settings.json` (global if present, else framework stub)
+- Global layer, per tool: opencode — global config directory (host: `~/.config/opencode`) + auth file (global auth if present, else framework stub); qwen — `~/.qwen/settings.json` (global if present, else framework stub); dsh — `~/.dsh/settings.yaml` (global if present, else `/dev/null`) + `~/.dsh/.credentials.yaml` (global if present, else framework stub)
 - qwen framework settings at `/home/$REMOTE_USER/.qwen/settings.json`
 
 Read-write mounts:
-- `<config_dir>/runtime_data/` (`.opencode/runtime_data/` or `.qwen/runtime_data/`)
+- `<config_dir>/runtime_data/` (`.opencode/runtime_data/`, `.qwen/runtime_data/` or `.dsh/runtime_data/`)
 - Project source repository (including `.qwen/` for qwen)
 
 qwen has no auth file: API keys (`DASHSCOPE_API_KEY`, `OPENAI_API_KEY` + `OPENAI_BASE_URL`) are injected via the env layer.
+
+dsh is env-based too: `DEEPSEEK_API_KEY` (and friends) come from the env layer
+(`.dsh/.env`, host `~/.dsh/.env`, or `launch -e`); the host `.credentials.yaml`
+store is mounted read-only and must be owner-only (mode 0600 — dsh refuses to
+boot otherwise; `init` chmods the framework stub, re-run `init --force --tool
+dsh` after a fresh framework clone). `DSH_HOME` is pinned to
+`/home/$REMOTE_USER/.dsh`, i.e. inside the read-write `runtime_data` home, so
+profiles/sessions persist. Web UI saves to settings/credentials fail against
+the read-only mounts by design — edit on the host (settings hot-reload).
 
 ### Docker-in-Docker Support
 

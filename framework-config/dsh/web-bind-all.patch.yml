@@ -1,0 +1,14 @@
+# OCF overlay: bind the dsh web server to all interfaces *inside the
+# sandbox* so docker port publishing reaches it. The dsh CLI rejects
+# `--host 0.0.0.0` by design; the webserver config row explicitly supports
+# it ("deliberate network exposure"). The UI still requires the one-time
+# ?token= URL printed at startup, and the container network is not
+# published unless you ask for it.
+- id: webserver
+  name: '@deepseek-ai/dsh-host-webserver'
+  config:
+    host: 0.0.0.0
+    port: !!js ctx.webStartup.port ?? 3080
+    compression: gzip
+    compressionLevel: 1
+    compressionThresholdBytes: 1024

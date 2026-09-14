@@ -166,9 +166,9 @@ def update_features(config_dir: Path, repo_name: str, agent_tool: str) -> bool:
 
     Args:
         config_dir: Path to the agent tool's config worktree
-            (e.g. .opencode/ or .qwen/)
+            (e.g. .opencode/, .qwen/ or .dsh/)
         repo_name: Repository name (used in managed compose volume names)
-        agent_tool: Agent tool name ("opencode" | "qwen"); drives the
+        agent_tool: Agent tool name ("opencode" | "qwen" | "dsh"); drives the
             tool-suffixed volume names and entrypoint binary written by
             the compose reconciler
 

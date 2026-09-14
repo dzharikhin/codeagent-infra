@@ -26,6 +26,7 @@ from opencode_framework.agent.layers import (
 )
 from opencode_framework.agent.registry import (
     DEFAULT_TOOL,
+    DSH_TOOL_SPEC,
     OPENCODE_TOOL_SPEC,
     QWEN_TOOL_SPEC,
     SUPPORTED_TOOLS,
@@ -103,6 +104,20 @@ def _print_version_info() -> None:
     else:
         expected_qwen_path = expected_global_path(QWEN_TOOL_SPEC)
         typer.echo(f"expected qwen global settings path: {expected_qwen_path}")
+
+    dsh_layer = discover_global_layer(DSH_TOOL_SPEC)
+    typer.echo(f"dsh global settings found: {dsh_layer.global_found}")
+    if dsh_layer.global_found:
+        typer.echo(f"dsh global settings path: {dsh_layer.global_path}")
+    else:
+        expected_dsh_path = expected_global_path(DSH_TOOL_SPEC)
+        typer.echo(f"expected dsh global settings path: {expected_dsh_path}")
+    typer.echo(f"dsh credentials found: {dsh_layer.auth_found}")
+    if dsh_layer.auth_found:
+        typer.echo(f"dsh credentials path: {dsh_layer.auth_path}")
+    else:
+        expected_dsh_auth = expected_global_auth_path(DSH_TOOL_SPEC)
+        typer.echo(f"expected dsh credentials path: {expected_dsh_auth}")
 
 
 def _peek_env_agent_tool(
@@ -276,7 +291,7 @@ def _select_launch_target(
                 err=True,
             )
             typer.secho(
-                "Remediation: pass --tool (opencode | qwen) to choose one.",
+                "Remediation: pass --tool (opencode | qwen | dsh) to choose one.",
                 fg=typer.colors.YELLOW,
                 err=True,
             )
@@ -401,19 +416,22 @@ def init(
     tool: Optional[str] = typer.Option(
         None,
         "--tool",
-        help="Agent CLI tool to configure (opencode | qwen); prompted when omitted",
+        help=(
+            "Agent CLI tool to configure (opencode | qwen | dsh); prompted when omitted"
+        ),
     ),
 ) -> None:
     """Initialize the framework in a Git repository.
 
     Creates the selected agent CLI tool's config worktree (.opencode/ for
-    opencode, .qwen/ for qwen) with the framework configuration.
+    opencode, .qwen/ for qwen, .dsh/ for dsh) with the framework
+    configuration.
     """
     repo_path = Path.cwd()
 
     if tool is None:
         tool = typer.prompt(
-            "\nAgent CLI tool (opencode | qwen)",
+            "\nAgent CLI tool (opencode | qwen | dsh)",
             default=DEFAULT_TOOL,
             type=str,
         )
@@ -554,7 +572,7 @@ def _per_tool_image_tag(repo_name: str, agent_tool: str) -> str:
 
     Args:
         repo_name: Repository directory name.
-        agent_tool: Agent tool name ("opencode" | "qwen").
+        agent_tool: Agent tool name ("opencode" | "qwen" | "dsh").
 
     Returns:
         Image tag such as ``ocf-my-repo-opencode:latest``.
@@ -887,14 +905,14 @@ def _build_image(
        https://github.com/devcontainers/cli/issues/190 — so `up` stays
        the first step.
     2. ``devcontainer build --image-name`` — replays from layer cache and
-       applies the per-tool tag, so opencode and qwen never collide on the
-       workspace-derived vsc-... image name.
+       applies the per-tool tag, so opencode, qwen and dsh never collide on
+       the workspace-derived vsc-... image name.
 
     Args:
         config_dir: Agent tool's config worktree directory.
         repo_root: Repository root (workspace folder).
         subprocess_env: Environment variables for subprocess.
-        agent_tool: Agent tool name ("opencode" | "qwen").
+        agent_tool: Agent tool name ("opencode" | "qwen" | "dsh").
 
     Returns:
         The per-tool image tag (persisted as OCF_IMAGE_ID).
@@ -1010,7 +1028,9 @@ def launch(
     tool: Optional[str] = typer.Option(
         None,
         "--tool",
-        help="Agent tool to launch (opencode | qwen); auto-detected when omitted",
+        help=(
+            "Agent tool to launch (opencode | qwen | dsh); auto-detected when omitted"
+        ),
     ),
     rebuild: bool = typer.Option(
         False,
@@ -1024,7 +1044,7 @@ def launch(
         help="Remove any existing container and cached image ID, forcing a fresh build",
     ),
 ) -> None:
-    """Launch the configured agent (opencode or qwen) in a container.
+    """Launch the configured agent (opencode, qwen or dsh) in a container.
 
     Builds the devcontainer image (if needed) and runs the agent using
     docker compose. The config worktree is chosen by --tool when given,
@@ -1034,7 +1054,7 @@ def launch(
 
     Environment variables are loaded with precedence (lowest to highest):
     1. Global env file (~/.config/opencode/.env for opencode, ~/.qwen/.env
-       for qwen; auto-loaded if present)
+       for qwen, ~/.dsh/.env for dsh; auto-loaded if present)
     2. Base <config-dir>/.env file
     3. Override file (--env-file)
     4. Command-line variables (-e KEY=VALUE)
@@ -1050,6 +1070,7 @@ def launch(
     Examples:
         ocframework launch
         ocframework launch --tool qwen
+        ocframework launch --tool dsh --server
         ocframework launch --rebuild
         ocframework launch --env-file prod.env
         ocframework launch -e API_KEY=$HOME/.key -e DEBUG=true

@@ -94,7 +94,7 @@ class ComposeGenerator(FileGenerator):
             port_mappings: Desired port mappings, or None to leave ports as-is
             java_build_tools: Enabled Java build tools (e.g., ["maven"], ["gradle"]).
                 Empty/None mounts no build-tool volumes.
-            agent_tool: Agent tool name ("opencode" | "qwen")
+            agent_tool: Agent tool name ("opencode" | "qwen" | "dsh")
 
         Returns:
             Updated compose file content

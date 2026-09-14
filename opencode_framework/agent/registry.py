@@ -1,9 +1,9 @@
 """Agent tool registry: one ToolSpec per supported agent CLI.
 
-Holds every piece of tool-specific knowledge (opencode, qwen) as frozen
-data: binary/service name, serve command, install mechanism, and the
-compose/env fragments that fill the agent slots in the sandbox templates
-(``{{AGENT_ENV}}``, ``{{AGENT_MOUNTS}}``, ``{{AGENT_FEATURE}}``,
+Holds every piece of tool-specific knowledge (opencode, qwen, dsh) as
+frozen data: binary/service name, serve command, install mechanism, and
+the compose/env fragments that fill the agent slots in the sandbox
+templates (``{{AGENT_ENV}}``, ``{{AGENT_MOUNTS}}``, ``{{AGENT_FEATURE}}``,
 ``{{AGENT_INSTALL}}``). Sandbox code consumes these specs but never
 defines tool knowledge itself.
 """
@@ -42,7 +42,10 @@ class ServeSpec:
 
     Attributes:
         port: container port the server listens on.
-        token_env: environment variable carrying the auth token.
+        token_env: environment variable carrying the auth token. An
+            empty string means the tool manages its own auth surface
+            (dsh prints a per-boot URL token), so the framework
+            generates no token for it.
         token_required: whether the tool refuses non-loopback binds
             without a token.
         serve_args: full argument vector after the binary name.
@@ -102,10 +105,12 @@ class ToolSpec:
     auth_relpath: Optional[Tuple[str, ...]]
     stub_relpath: Tuple[str, ...]
     context_files: Tuple[str, ...]
+    auth_base: Literal["data_home", "home"] = "data_home"
 
 
 _OPENCODE_CONFIG_DIRNAME = ".opencode"
 _QWEN_CONFIG_DIRNAME = ".qwen"
+_DSH_CONFIG_DIRNAME = ".dsh"
 
 _QWEN_DOCKERFILE_INSTALL = (
     "# qwen (Qwen Code) CLI: Node 22 (nodesource) + npm install\n"
@@ -125,6 +130,24 @@ _QWEN_DOCKERFILE_INSTALL = (
     "    && rm -rf /var/lib/apt/lists/*"
 )
 
+_DSH_DOCKERFILE_INSTALL = (
+    "# dsh (DeepSeek Harness) CLI: Node 22 (nodesource) + npm install\n"
+    "RUN apt-get update \\\n"
+    "    && apt-get install -y --no-install-recommends ca-certificates curl gnupg \\\n"
+    "    && mkdir -p /etc/apt/keyrings \\\n"
+    "    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \\\n"
+    "       | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \\\n"
+    '    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg]'
+    ' https://deb.nodesource.com/node_22.x nodistro main" \\\n'
+    "       > /etc/apt/sources.list.d/nodesource.list \\\n"
+    "    && apt-get update \\\n"
+    "    && apt-get install -y --no-install-recommends nodejs \\\n"
+    "    && npm install -g @deepseek-ai/dsh@${OCF_AGENT_VERSION} \\\n"
+    "    && apt-get purge -y gnupg \\\n"
+    "    && apt-get autoremove -y \\\n"
+    "    && rm -rf /var/lib/apt/lists/*"
+)
+
 _OPENCODE_AUTH_MOUNT = (
     "${OCF_GLOBAL_AUTH_PATH:-/dev/null}:"
     "${XDG_DATA_HOME:-/home/${REMOTE_USER}/.local/share}/opencode/auth.json"
@@ -139,6 +162,12 @@ _QWEN_GLOBAL_FILE_MOUNT = (
 _QWEN_FRAMEWORK_SETTINGS_MOUNT = (
     "${OCF_LOCAL_FRAMEWORK_PATH}/framework-config/qwen/qwen-settings.json:"
     "/home/${REMOTE_USER}/.qwen/settings.json"
+)
+_DSH_GLOBAL_SETTINGS_MOUNT = (
+    "${OCF_GLOBAL_CONFIG_PATH:-/dev/null}:/home/${REMOTE_USER}/.dsh/settings.yaml"
+)
+_DSH_AUTH_MOUNT = (
+    "${OCF_GLOBAL_AUTH_PATH:-/dev/null}:/home/${REMOTE_USER}/.dsh/.credentials.yaml"
 )
 
 OPENCODE_TOOL_SPEC = ToolSpec(
@@ -235,9 +264,60 @@ QWEN_TOOL_SPEC = ToolSpec(
     context_files=("QWEN.md", "AGENTS.md"),
 )
 
+DSH_TOOL_SPEC = ToolSpec(
+    name="dsh",
+    binary="dsh",
+    config_dirname=_DSH_CONFIG_DIRNAME,
+    # The dsh launcher stops collecting its own flags at the first
+    # unrecognized token, so --patch must precede the web app's flags.
+    serve=ServeSpec(
+        port=3080,
+        token_env="",
+        token_required=False,
+        serve_args=(
+            "web",
+            "--patch",
+            "/opt/ocframework/config/dsh/web-bind-all.patch.yml",
+            "--no-open",
+            "--port",
+            "3080",
+        ),
+    ),
+    install=InstallSpec(
+        devcontainer_feature=None,
+        feature_version_env=None,
+        dockerfile_snippet=_DSH_DOCKERFILE_INSTALL,
+        build_args=("OCF_AGENT_VERSION",),
+    ),
+    compose_env_fragment=_env_line("DSH_HOME", "/home/${REMOTE_USER}/.dsh"),
+    compose_mount_fragment="\n".join(
+        [
+            _mount(_DSH_GLOBAL_SETTINGS_MOUNT),
+            _mount(_DSH_AUTH_MOUNT),
+            _nuts_mount("common", _DSH_CONFIG_DIRNAME),
+            _nuts_mount("dsh", _DSH_CONFIG_DIRNAME),
+        ]
+    ),
+    env_template_fragment=(
+        "OCF_AGENT_TOOL=dsh\n"
+        "OCF_GLOBAL_CONFIG_PATH={{OCF_GLOBAL_CONFIG_PATH}}\n"
+        "OCF_GLOBAL_AUTH_PATH={{OCF_GLOBAL_AUTH_PATH}}"
+    ),
+    framework_config_subdir="dsh",
+    global_config_base="home",
+    global_config_is_dir=False,
+    global_config_relpath=(".dsh", "settings.yaml"),
+    global_env_relpath=(".dsh", ".env"),
+    auth_relpath=(".dsh", ".credentials.yaml"),
+    stub_relpath=("dsh", "stubs", "stub-credentials.yaml"),
+    context_files=("AGENTS.md", "CLAUDE.md"),
+    auth_base="home",
+)
+
 SUPPORTED_TOOLS: Dict[str, ToolSpec] = {
     OPENCODE_TOOL_SPEC.name: OPENCODE_TOOL_SPEC,
     QWEN_TOOL_SPEC.name: QWEN_TOOL_SPEC,
+    DSH_TOOL_SPEC.name: DSH_TOOL_SPEC,
 }
 
 DEFAULT_TOOL = "opencode"
@@ -257,7 +337,7 @@ def get_tool_spec(name: str) -> ToolSpec:
     """Return the ToolSpec for a tool name.
 
     Args:
-        name: tool identifier ("opencode" | "qwen").
+        name: tool identifier ("opencode" | "qwen" | "dsh").
 
     Returns:
         The frozen ToolSpec for the requested tool.

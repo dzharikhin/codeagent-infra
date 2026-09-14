@@ -85,6 +85,27 @@ class TestVersionOutput:
             or "expected global auth.json path:" in result.stdout
         )
 
+    def test_version_shows_qwen_settings_detection(self):
+        """Version output should show qwen global settings detection status."""
+        result = run_cli(["--version"])
+        assert result.returncode == 0
+        assert "qwen global settings found:" in result.stdout
+
+    def test_version_shows_dsh_detection(self):
+        """Version output should show dsh settings and credentials detection."""
+        result = run_cli(["--version"])
+        assert result.returncode == 0
+        assert "dsh global settings found:" in result.stdout
+        assert "dsh credentials found:" in result.stdout
+        assert (
+            "dsh global settings path:" in result.stdout
+            or "expected dsh global settings path:" in result.stdout
+        )
+        assert (
+            "dsh credentials path:" in result.stdout
+            or "expected dsh credentials path:" in result.stdout
+        )
+
 
 class TestHelpOutput:
     """Tests for help output."""
@@ -1024,7 +1045,7 @@ class TestInitToolOption:
 
         assert result.exit_code == 1
         assert "Unsupported agent tool" in result.output
-        assert "opencode, qwen" in result.output
+        assert "dsh, opencode, qwen" in result.output
         assert "Preflight" not in result.output
 
 
@@ -1032,7 +1053,7 @@ class TestLaunchToolSpec:
     """Tests for per-tool launch behavior driven by OCF_AGENT_TOOL."""
 
     def _setup_repo(self, tmp_path: Path, service: str = "opencode") -> Path:
-        dirname = ".qwen" if service == "qwen" else ".opencode"
+        dirname = {"dsh": ".dsh", "qwen": ".qwen"}.get(service, ".opencode")
         config = tmp_path / dirname
         config.mkdir()
         (config / "docker-compose.yaml").write_text(
@@ -1243,12 +1264,93 @@ class TestLaunchToolSpec:
         assert result.exit_code == 0
         assert "qwen serve will be available at http://127.0.0.1:5000" in result.output
 
+    def test_dsh_bare_launch_runs_bare_binary(self, tmp_path: Path, monkeypatch):
+        """Plain dsh launch runs bare `dsh` (documented usage-error dead end)."""
+        self._setup_repo(tmp_path, service="dsh")
+        app_module, captured = self._patch_launch_deps(
+            monkeypatch, tmp_path, {"OCF_AGENT_TOOL": "dsh"}
+        )
+
+        result = self._invoke(app_module, ["launch"])
+
+        assert result.exit_code == 0
+        assert len(captured) == 1
+        assert captured[0][-1] == "dsh"
+        assert "--publish" not in captured[0]
+
+    def test_dsh_server_command_and_port(self, tmp_path: Path, monkeypatch):
+        """--server with dsh publishes to 3080 and runs the web serve args."""
+        self._setup_repo(tmp_path, service="dsh")
+        app_module, captured = self._patch_launch_deps(
+            monkeypatch, tmp_path, {"OCF_AGENT_TOOL": "dsh"}
+        )
+
+        result = self._invoke(app_module, ["launch", "--server=5000"])
+
+        assert result.exit_code == 0
+        cmd = captured[0]
+        publish_pairs = [cmd[i + 1] for i, t in enumerate(cmd) if t == "--publish"]
+        assert "5000:3080" in publish_pairs
+        tail = cmd[-7:]
+        assert tail == [
+            "dsh",
+            "web",
+            "--patch",
+            "/opt/ocframework/config/dsh/web-bind-all.patch.yml",
+            "--no-open",
+            "--port",
+            "3080",
+        ]
+
+    def test_dsh_server_generates_no_token(self, tmp_path: Path, monkeypatch):
+        """dsh manages its own one-time URL token; the framework injects none."""
+        self._setup_repo(tmp_path, service="dsh")
+        app_module, captured = self._patch_launch_deps(
+            monkeypatch, tmp_path, {"OCF_AGENT_TOOL": "dsh"}
+        )
+
+        result = self._invoke(app_module, ["launch", "--server=5000"])
+
+        assert result.exit_code == 0
+        assert "Web Shell token" not in result.output
+        assert not any(p.startswith("=") for p in self._env_pairs(captured[0]))
+
+    def test_dsh_server_url_wording(self, tmp_path: Path, monkeypatch):
+        """--server with dsh echoes the dsh serve URL."""
+        self._setup_repo(tmp_path, service="dsh")
+        app_module, captured = self._patch_launch_deps(
+            monkeypatch, tmp_path, {"OCF_AGENT_TOOL": "dsh"}
+        )
+
+        result = self._invoke(app_module, ["launch", "--server=5000"])
+
+        assert result.exit_code == 0
+        assert "dsh serve will be available at http://127.0.0.1:5000" in result.output
+
+    def test_global_env_path_follows_dsh_tool(self, tmp_path: Path, monkeypatch):
+        """launch loads the global .env from the dsh tool's path."""
+        self._setup_repo(tmp_path, service="dsh")
+        app_module, _ = self._patch_launch_deps(monkeypatch, tmp_path)
+        load_calls: list = []
+
+        def fake_load(**kw):
+            load_calls.append(kw)
+            return {"REMOTE_USER": "root"}
+
+        monkeypatch.setattr(app_module, "load_env_with_overrides", fake_load)
+
+        result = self._invoke(app_module, ["launch"])
+
+        assert result.exit_code == 0
+        assert len(load_calls) == 1
+        assert str(load_calls[0]["global_env_path"]).endswith(".dsh/.env")
+
 
 class TestLaunchToolSelection:
     """Tests for launch config-directory selection (--tool / auto-detect)."""
 
     def _make_config(self, tmp_path: Path, tool: str) -> Path:
-        dirname = ".qwen" if tool == "qwen" else ".opencode"
+        dirname = {"dsh": ".dsh", "qwen": ".qwen"}.get(tool, ".opencode")
         config = tmp_path / dirname
         config.mkdir()
         (config / "docker-compose.yaml").write_text(
@@ -1328,7 +1430,23 @@ class TestLaunchToolSelection:
         assert result.exit_code == 1
         assert "multiple framework config directories found" in result.output
         assert ".opencode, .qwen" in result.output
-        assert "pass --tool (opencode | qwen)" in result.output
+        assert "pass --tool (opencode | qwen | dsh)" in result.output
+        assert captured == []
+
+    def test_three_valid_configs_non_interactive_error(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """Three valid configs list every dir in tool-sorted order."""
+        self._make_config(tmp_path, "opencode")
+        self._make_config(tmp_path, "qwen")
+        self._make_config(tmp_path, "dsh")
+        app_module, captured = self._patch_launch_deps(monkeypatch, tmp_path)
+
+        result = self._invoke(app_module, ["launch"])
+
+        assert result.exit_code == 1
+        assert ".dsh, .opencode, .qwen" in result.output
+        assert "pass --tool (opencode | qwen | dsh)" in result.output
         assert captured == []
 
     def test_tool_flag_with_missing_config_errors(self, tmp_path: Path, monkeypatch):
@@ -1389,7 +1507,7 @@ class _FakeProcess:
 class TestPerToolImageTag:
     """Tests for per-tool image tag construction."""
 
-    @pytest.mark.parametrize("tool", ["opencode", "qwen"])
+    @pytest.mark.parametrize("tool", ["opencode", "qwen", "dsh"])
     def test_tag_format(self, tool):
         assert _per_tool_image_tag("myrepo", tool) == f"ocf-myrepo-{tool}:latest"
 
@@ -1500,7 +1618,7 @@ class TestBuildImageTwoStep:
         assert commands[1][commands[1].index("--image-name") + 1] == expected_tag
         assert tag == expected_tag
 
-    @pytest.mark.parametrize("tool", ["opencode", "qwen"])
+    @pytest.mark.parametrize("tool", ["opencode", "qwen", "dsh"])
     def test_tag_is_per_tool(self, tmp_path: Path, monkeypatch, tool):
         """The applied tag carries the tool name."""
         config_dir = self._make_config(tmp_path, tool)

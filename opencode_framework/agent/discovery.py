@@ -2,11 +2,11 @@
 
 Each supported tool owns one config directory at the repo root
 (``ToolSpec.config_dirname``: ``.opencode`` for opencode, ``.qwen``
-for qwen). A directory qualifies as a framework config when it
-contains a ``.env``. The ``OCF_AGENT_TOOL`` value inside that ``.env``
-must agree with the directory-implied tool; mismatches (legacy or
-hand-edited layouts) are reported as invalid and excluded from
-launch, with re-init as remediation.
+for qwen, ``.dsh`` for dsh). A directory qualifies as a framework
+config when it contains a ``.env``. The ``OCF_AGENT_TOOL`` value inside
+that ``.env`` must agree with the directory-implied tool; mismatches
+(legacy or hand-edited layouts) are reported as invalid and excluded
+from launch, with re-init as remediation.
 """
 
 from dataclasses import dataclass

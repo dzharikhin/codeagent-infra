@@ -20,10 +20,16 @@ class TestSuggestBranchName:
         monkeypatch.setattr(getpass, "getuser", lambda: "alice")
         assert suggest_branch_name("qwen") == "codeagent-alice-qwen"
 
+    def test_dsh_branch_marked(self, monkeypatch: pytest.MonkeyPatch):
+        """dsh branch carries the tool suffix."""
+        monkeypatch.setattr(getpass, "getuser", lambda: "alice")
+        assert suggest_branch_name("dsh") == "codeagent-alice-dsh"
+
     def test_branches_differ_between_tools(self, monkeypatch: pytest.MonkeyPatch):
         """Two tools on one repo never suggest the same branch."""
         monkeypatch.setattr(getpass, "getuser", lambda: "bob")
         assert suggest_branch_name("opencode") != suggest_branch_name("qwen")
+        assert suggest_branch_name("qwen") != suggest_branch_name("dsh")
 
     def test_falls_back_to_user_when_getuser_fails(
         self, monkeypatch: pytest.MonkeyPatch
