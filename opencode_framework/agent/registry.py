@@ -30,8 +30,8 @@ def _nuts_mount(subdir: str, config_dirname: str) -> str:
     """Build the nuts-and-bolts per-tool subdir mount line."""
     source = f"${{OCF_LOCAL_FRAMEWORK_PATH}}/framework-nuts-and-bolts/{subdir}"
     target = (
-        f"/{{{{OCF_REPO_ROOT_NAME}}}}/{config_dirname}"
-        f"/framework-nuts-and-bolts/{subdir}"
+        f"${{OCF_LOCAL_REPO_ROOT:-${{PWD}}}}"
+        f"/{config_dirname}/framework-nuts-and-bolts/{subdir}"
     )
     return _mount(f"{source}:{target}")
 

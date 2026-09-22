@@ -29,7 +29,6 @@ The framework consists of three parts with explicit borders. Borders are express
 Tool-agnostic isolation around the project: devcontainer image build, Docker Compose runtime, mounts, networks, ports, and the environment variables belonging to this layer. Barely linked to the agent tool — valuable on its own, it creates a restricted, easily reusable sandbox around a project, better than plain devcontainers.
 
 - Code: `opencode_framework/sandbox/`
-- Env: `OCF_IMAGE_ID`, `OCF_LOCAL_FRAMEWORK_PATH`, `OCF_REMOTE_FRAMEWORK_CONFIG_PATH`; shared unprefixed: `REMOTE_USER`, `XDG_*`
 - Border rule: sandbox code never imports tool-specific knowledge. Tool installation details arrive only as slot values (`{{AGENT_FEATURE}}`, `{{AGENT_INSTALL}}`, build args, service/entrypoint names, `{{AGENT_ENV}}`, `{{AGENT_MOUNTS}}`) provided by Part 2. Not every tool has a devcontainer feature — installation may fall back to Dockerfile-based install; this remains a sandbox concern fed with tool-specific knowledge.
 
 ### Part 2: Agent Tool Integration
@@ -40,7 +39,6 @@ effective config = global < framework < project (optional) < env < CLI args
 
 - Code: `opencode_framework/agent/` — `registry.py` (one ToolSpec per tool: binary, install, env/mount fragments, serve, version pin), `layers.py` (env sections, project stubs, stub fallbacks)
 - Payloads: `framework-config/<tool>/` — the framework layer, mounted read-only
-- Env: `OCF_AGENT_*` (tool selection and version), `OCF_GLOBAL_*` (global layer source), agent defaults as env (`OCF_MAIN/BUILD/SMALL_MODEL`, `OCF_PLAN_/OCF_BUILD_MAX_BEFORE_RESPONSE_STEPS`). Tool-native variables (`OPENCODE_*`, `QWEN_*`, `DSH_*`, `DEEPSEEK_*`) are the agent's own contract — used unprefixed, only for the active tool.
 
 #### Layer 1: Global User Level
 

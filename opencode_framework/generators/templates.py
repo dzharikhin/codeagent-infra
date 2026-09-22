@@ -364,7 +364,7 @@ class TemplateHandler:
         if optional_features and "python" in optional_features:
             additional_volume_mounts += (
                 f"\n      - {managed_volume_name('venv', repo_name, tool)}:"
-                f"/{repo_name}/.venv"
+                f"${{OCF_LOCAL_REPO_ROOT:-${{PWD}}}}/.venv"
             )
 
         # Java build tools: maven or gradle, or both
@@ -413,8 +413,8 @@ class TemplateHandler:
             ports_section = f"    ports:\n{port_lines}"
 
         replacements = {
-            # Agent fragments first: they contain {{OCF_REPO_ROOT_NAME}}
-            # which the later pass must still resolve.
+            # Tool fragments first: replacement values may embed other
+            # placeholders, which the later passes must still resolve.
             "{{SERVICE_NAME}}": spec.name,
             "{{OCF_CONFIG_DIR}}": spec.config_dirname,
             "{{AGENT_ENV}}": spec.compose_env_fragment,

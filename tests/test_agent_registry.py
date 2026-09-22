@@ -290,7 +290,7 @@ class TestComposeMountFragment:
             fragment = spec.compose_mount_fragment
             source = "${OCF_LOCAL_FRAMEWORK_PATH}/framework-nuts-and-bolts"
             target = (
-                f"/{{{{OCF_REPO_ROOT_NAME}}}}/{spec.config_dirname}"
+                f"${{OCF_LOCAL_REPO_ROOT:-${{PWD}}}}/{spec.config_dirname}"
                 "/framework-nuts-and-bolts"
             )
             assert f"{source}/common:{target}/common:ro" in fragment

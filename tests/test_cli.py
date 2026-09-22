@@ -1717,3 +1717,171 @@ class TestLaunchBuildImageToolArg:
 
         assert result.exit_code == 0
         assert build_args == ["opencode"]
+
+
+class TestLaunchRepoRootComputation:
+    """OCF_LOCAL_REPO_ROOT derives from OCF_LOCAL_PROJECTS_DIR + repo name."""
+
+    @staticmethod
+    def _setup_repo(tmp_path: Path, projects_dir: Path) -> Path:
+        """Create a fake repo under projects_dir with a minimal harness."""
+        repo_root = projects_dir / "myrepo"
+        opencode = repo_root / ".opencode"
+        opencode.mkdir(parents=True)
+        (opencode / "docker-compose.yaml").write_text(
+            "services:\n  opencode:\n    container_name: ocf_repo\n"
+        )
+        (opencode / ".env").write_text("REMOTE_USER=root\nOCF_AGENT_TOOL=opencode\n")
+        return repo_root
+
+    def _invoke_launch(self, monkeypatch, app_module, repo_root: Path, final_env):
+        """Mock the launch pipeline and run CLI launch from repo_root."""
+        captured: dict = {}
+
+        def fake_build(config_dir, repo_root, subprocess_env, agent_tool):
+            captured.update(subprocess_env)
+            return "sha256:fake"
+
+        def mock_run(*args, **kw):
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(
+            app_module,
+            "validate_runtime_context",
+            lambda cwd, config_dirname, repo_root=None: (True, ""),
+        )
+        monkeypatch.setattr(
+            app_module, "get_repo_root", lambda cwd: repo_root.resolve()
+        )
+        monkeypatch.setattr(
+            app_module, "load_env_with_overrides", lambda **kw: dict(final_env)
+        )
+        monkeypatch.setattr(app_module, "build_docker_env", lambda env, ctx: {})
+        monkeypatch.setattr(app_module, "load_image_id", lambda d: None)
+        monkeypatch.setattr(app_module, "save_image_id", lambda *a, **kw: None)
+        monkeypatch.setattr(app_module, "_build_image", fake_build)
+        monkeypatch.setattr(app_module.subprocess, "run", mock_run)
+        monkeypatch.chdir(repo_root)
+
+        from typer.testing import CliRunner
+
+        result = CliRunner().invoke(app_module.app, ["launch"])
+        return result, captured
+
+    def _app_module(self):
+        import importlib
+
+        return importlib.import_module("opencode_framework.cli.app")
+
+    def test_projects_dir_setting_used(self, tmp_path: Path, monkeypatch):
+        app_module = self._app_module()
+        projects_dir = tmp_path / "projects"
+        repo_root = self._setup_repo(tmp_path, projects_dir)
+
+        result, env = self._invoke_launch(
+            monkeypatch,
+            app_module,
+            repo_root,
+            {"OCF_LOCAL_PROJECTS_DIR": str(projects_dir)},
+        )
+
+        assert result.exit_code == 0
+        assert env["OCF_LOCAL_REPO_ROOT"] == str(projects_dir / "myrepo")
+        assert "Note:" not in result.output
+
+    def test_unset_falls_back_to_repo_parent_with_note(
+        self, tmp_path: Path, monkeypatch
+    ):
+        app_module = self._app_module()
+        repo_root = self._setup_repo(tmp_path, tmp_path)
+
+        result, env = self._invoke_launch(monkeypatch, app_module, repo_root, {})
+
+        assert result.exit_code == 0
+        assert env["OCF_LOCAL_REPO_ROOT"] == str(repo_root)
+        assert "OCF_LOCAL_PROJECTS_DIR" in result.output
+        assert "Note:" in result.output
+
+    def test_mismatched_projects_dir_hard_error(self, tmp_path: Path, monkeypatch):
+        app_module = self._app_module()
+        repo_root = self._setup_repo(tmp_path, tmp_path)
+        elsewhere = tmp_path / "elsewhere"
+
+        result, env = self._invoke_launch(
+            monkeypatch,
+            app_module,
+            repo_root,
+            {"OCF_LOCAL_PROJECTS_DIR": str(elsewhere)},
+        )
+
+        assert result.exit_code == 1
+        assert "OCF_LOCAL_PROJECTS_DIR mismatch" in result.output
+        assert "launch -e OCF_LOCAL_PROJECTS_DIR" in result.output
+        assert "OCF_LOCAL_REPO_ROOT" not in env
+
+    def test_tilde_in_projects_dir_expanded(self, tmp_path: Path, monkeypatch):
+        app_module = self._app_module()
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        repo_root = self._setup_repo(home / "code-projects", home / "code-projects")
+
+        result, env = self._invoke_launch(
+            monkeypatch,
+            app_module,
+            repo_root,
+            {"OCF_LOCAL_PROJECTS_DIR": "~/code-projects"},
+        )
+
+        assert result.exit_code == 0
+        assert env["OCF_LOCAL_REPO_ROOT"] == str(home / "code-projects" / "myrepo")
+
+    def test_direct_repo_root_env_wins(self, tmp_path: Path, monkeypatch):
+        app_module = self._app_module()
+        projects_dir = tmp_path / "projects"
+        repo_root = self._setup_repo(tmp_path, projects_dir)
+
+        result, env = self._invoke_launch(
+            monkeypatch,
+            app_module,
+            repo_root,
+            {
+                "OCF_LOCAL_REPO_ROOT": str(repo_root),
+                "OCF_LOCAL_PROJECTS_DIR": str(projects_dir),
+            },
+        )
+
+        assert result.exit_code == 0
+        assert env["OCF_LOCAL_REPO_ROOT"] == str(repo_root)
+        assert "Note:" not in result.output
+
+    def test_direct_repo_root_tilde_expanded(self, tmp_path: Path, monkeypatch):
+        app_module = self._app_module()
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        repo_root = self._setup_repo(home / "code-projects", home / "code-projects")
+
+        result, env = self._invoke_launch(
+            monkeypatch,
+            app_module,
+            repo_root,
+            {"OCF_LOCAL_REPO_ROOT": "~/code-projects/myrepo"},
+        )
+
+        assert result.exit_code == 0
+        assert env["OCF_LOCAL_REPO_ROOT"] == str(home / "code-projects" / "myrepo")
+
+    def test_direct_repo_root_mismatch_hard_error(self, tmp_path: Path, monkeypatch):
+        app_module = self._app_module()
+        repo_root = self._setup_repo(tmp_path, tmp_path)
+
+        result, env = self._invoke_launch(
+            monkeypatch,
+            app_module,
+            repo_root,
+            {"OCF_LOCAL_REPO_ROOT": str(tmp_path / "elsewhere" / "myrepo")},
+        )
+
+        assert result.exit_code == 1
+        assert "OCF_LOCAL_REPO_ROOT mismatch" in result.output
+        assert "launch -e OCF_LOCAL_REPO_ROOT" in result.output
+        assert "OCF_LOCAL_REPO_ROOT" not in env

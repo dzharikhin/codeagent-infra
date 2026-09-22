@@ -251,10 +251,11 @@ class TestRebuildFeatures:
         assert ("    privileged: true" in text.split("\n")) is has_docker
         assert ("    init: true" in text.split("\n")) is True
         assert ("docker-init.sh" in text) is has_docker
-        # Python venv volume is mounted at /myrepo/.venv, not /home
-        assert (f"venv-{self.REPO}-opencode:/myrepo/.venv" in text) is (
-            "python" in features
-        )
+        # Python venv volume is mounted at ${OCF_LOCAL_REPO_ROOT:-${PWD}}/.venv
+        assert (
+            f"venv-{self.REPO}-opencode:${{OCF_LOCAL_REPO_ROOT:-${{PWD}}}}/.venv"
+            in text
+        ) is ("python" in features)
         # Maven m2 volume is mounted at /home/${REMOTE_USER}/.m2
         assert (f"m2-{self.REPO}-opencode:/home/${{REMOTE_USER}}/.m2" in text) is (
             "java" in features and ("maven" in (java_build_tools or []))
@@ -449,6 +450,20 @@ class TestRebuildFeatures:
         )
         assert "gradle-" in rebuilt
 
+    def test_legacy_repo_relative_venv_mount_migrated(self):
+        """Pre-OCF_LOCAL_REPO_ROOT files: legacy venv line stripped and re-added."""
+        text = _render_compose(self.REPO, ["python"])
+        legacy = text.replace(
+            f"venv-{self.REPO}-opencode:${{OCF_LOCAL_REPO_ROOT:-${{PWD}}}}/.venv",
+            f"venv-{self.REPO}-opencode:/{self.REPO}/.venv",
+        )
+        rebuilt = ComposeGenerator.rebuild_features(legacy, self.REPO, ["python"])
+        assert f"venv-{self.REPO}-opencode:/{self.REPO}/.venv" not in rebuilt
+        assert (
+            f"venv-{self.REPO}-opencode:${{OCF_LOCAL_REPO_ROOT:-${{PWD}}}}/.venv"
+            in rebuilt
+        )
+
 
 class TestDetectPorts:
     """Tests for ComposeGenerator.detect_ports."""
@@ -543,7 +558,10 @@ class TestRebuildPorts:
             text, self.REPO, ["python", "docker"], port_mappings=ports
         )
         assert "    privileged: true" in rebuilt
-        assert f"venv-{self.REPO}-opencode:/{self.REPO}/.venv" in rebuilt
+        assert (
+            f"venv-{self.REPO}-opencode:${{OCF_LOCAL_REPO_ROOT:-${{PWD}}}}/.venv"
+            in rebuilt
+        )
         assert ComposeGenerator.detect_ports(rebuilt) == ports
 
     def test_preserves_manual_env_var_with_ports(self):
