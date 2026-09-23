@@ -20,8 +20,14 @@ class DocumentationGenerator(FileGenerator):
         Returns CLI commands that handle environment loading and Docker context.
         """
         spec = get_tool_spec(agent_tool)
+        acp_command = (
+            f"ocframework launch --tool {spec.name} --acp"
+            if spec.acp.supported
+            else f"ocframework launch --tool {spec.name} --server"
+        )
         return {
             "launch": f"ocframework launch --tool {spec.name}",
+            "acp": acp_command,
             "debug": f"ocframework launch --tool {spec.name} -- debug config",
             "shell": "docker exec -it <container_name> /bin/bash",
         }

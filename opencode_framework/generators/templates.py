@@ -62,6 +62,33 @@ _README_SECTIONS: Dict[str, Dict[str, str]] = {
             "`--publish` are mutually exclusive in `docker compose run`). Set "
             "`OPENCODE_SERVER_PASSWORD` in `.env` to enable basic auth.\n"
         ),
+        "acp": (
+            "## Connect an Editor (ACP)\n"
+            "\n"
+            "OpenCode speaks the Agent Client Protocol (ACP), so "
+            "ACP-compatible editors (Zed, JetBrains, Neovim) can drive the "
+            "sandboxed agent over stdio JSON-RPC:\n"
+            "\n"
+            "```sh\n"
+            "{{LAUNCH_COMMAND}} --acp\n"
+            "```\n"
+            "\n"
+            "All launch chatter moves to stderr; stdout carries only the "
+            "protocol stream. In Zed, add a custom agent "
+            '(`"command"`/`"args"`/`"type"`):\n'
+            "\n"
+            "```json\n"
+            "{\n"
+            '  "agent": {\n'
+            '    "custom": {\n'
+            '      "command": "ocframework",\n'
+            '      "args": ["launch", "--tool", "opencode", "--acp"],\n'
+            '      "type": "custom"\n'
+            "    }\n"
+            "  }\n"
+            "}\n"
+            "```\n"
+        ),
         "docs": "- OpenCode docs: https://opencode.ai",
     },
     "qwen": {
@@ -111,6 +138,33 @@ _README_SECTIONS: Dict[str, Dict[str, str]] = {
             "free port is auto-assigned. Compose-configured ports are "
             "republished individually in this mode. `qwen serve` is "
             "experimental - the TUI remains the stable path.\n"
+        ),
+        "acp": (
+            "## Connect an Editor (ACP)\n"
+            "\n"
+            "Qwen Code supports ACP (Agent Client Protocol) via `--acp`, so "
+            "ACP-compatible editors (Zed, JetBrains, Neovim) can drive the "
+            "sandboxed agent over stdio JSON-RPC:\n"
+            "\n"
+            "```sh\n"
+            "{{LAUNCH_COMMAND}} --acp\n"
+            "```\n"
+            "\n"
+            "All launch chatter moves to stderr; stdout carries only the "
+            "protocol stream. In Zed, add a custom agent "
+            '(`"command"`/`"args"`/`"type"`):\n'
+            "\n"
+            "```json\n"
+            "{\n"
+            '  "agent": {\n'
+            '    "custom": {\n'
+            '      "command": "ocframework",\n'
+            '      "args": ["launch", "--tool", "qwen", "--acp"],\n'
+            '      "type": "custom"\n'
+            "    }\n"
+            "  }\n"
+            "}\n"
+            "```\n"
         ),
         "docs": "- Qwen Code docs: https://github.com/QwenLM/qwen-code",
     },
@@ -183,6 +237,16 @@ _README_SECTIONS: Dict[str, Dict[str, str]] = {
             "pass through explicitly, e.g. `{{LAUNCH_COMMAND}} -- web "
             "--no-open` or `{{LAUNCH_COMMAND}} -- --profile headless "
             '"run tests"`.\n'
+        ),
+        "acp": (
+            "## Editor Integration (ACP)\n"
+            "\n"
+            "dsh has no ACP/stdio mode - the Web UI is its interactive "
+            "surface for external clients:\n"
+            "\n"
+            "```sh\n"
+            "{{LAUNCH_COMMAND}} --server\n"
+            "```\n"
         ),
         "docs": (
             "- dsh repository: https://github.com/deepseek-ai/deepseek-harness\n"
@@ -465,6 +529,7 @@ class TemplateHandler:
             "{{AGENT_INSTALL_LINE}}": sections["install"],
             "{{AGENT_CONFIG_LAYERS_SECTION}}": sections["config_layers"],
             "{{AGENT_SERVE_SECTION}}": sections["serve"],
+            "{{AGENT_ACP_SECTION}}": sections["acp"],
             "{{AGENT_DOCS_LINE}}": sections["docs"],
             "{{LAUNCH_COMMAND}}": launch_command,
             "{{DEBUG_COMMAND}}": debug_command,

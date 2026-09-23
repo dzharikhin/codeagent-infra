@@ -58,6 +58,31 @@ class ServeSpec:
 
 
 @dataclass(frozen=True)
+class AcpSpec:
+    """How the agent runs in ACP (Agent Client Protocol) mode.
+
+    ACP agents speak newline-delimited JSON-RPC over stdio, letting
+    ACP-compatible editors (Zed, JetBrains, Neovim, ...) drive the
+    sandboxed agent.
+
+    Attributes:
+        args: argument vector appended after the binary in ACP mode. An
+            empty tuple means the tool has no ACP mode.
+        unsupported_remediation: console remediation shown for
+            ``launch --acp`` on a tool without ACP support. Empty for
+            supported tools.
+    """
+
+    args: Tuple[str, ...]
+    unsupported_remediation: str
+
+    @property
+    def supported(self) -> bool:
+        """Whether ``launch --acp`` is available for this tool."""
+        return bool(self.args)
+
+
+@dataclass(frozen=True)
 class InstallSpec:
     """How the agent binary gets into the sandbox image.
 
@@ -106,6 +131,7 @@ class ToolSpec:
     stub_relpath: Tuple[str, ...]
     context_files: Tuple[str, ...]
     auth_base: Literal["data_home", "home"] = "data_home"
+    acp: AcpSpec = AcpSpec(args=(), unsupported_remediation="")
 
 
 _OPENCODE_CONFIG_DIRNAME = ".opencode"
@@ -221,6 +247,7 @@ OPENCODE_TOOL_SPEC = ToolSpec(
     auth_relpath=("opencode", "auth.json"),
     stub_relpath=("opencode", "stubs", "stub-auth.json"),
     context_files=("AGENTS.md",),
+    acp=AcpSpec(args=("acp",), unsupported_remediation=""),
 )
 
 QWEN_TOOL_SPEC = ToolSpec(
@@ -262,6 +289,7 @@ QWEN_TOOL_SPEC = ToolSpec(
     auth_relpath=None,
     stub_relpath=("qwen", "stubs", "stub-qwen-settings.json"),
     context_files=("QWEN.md", "AGENTS.md"),
+    acp=AcpSpec(args=("--acp",), unsupported_remediation=""),
 )
 
 DSH_TOOL_SPEC = ToolSpec(
@@ -312,6 +340,13 @@ DSH_TOOL_SPEC = ToolSpec(
     stub_relpath=("dsh", "stubs", "stub-credentials.yaml"),
     context_files=("AGENTS.md", "CLAUDE.md"),
     auth_base="home",
+    acp=AcpSpec(
+        args=(),
+        unsupported_remediation=(
+            "Run the Web UI instead: ocframework launch --tool dsh --server "
+            "(dsh has no ACP/stdio mode)."
+        ),
+    ),
 )
 
 SUPPORTED_TOOLS: Dict[str, ToolSpec] = {

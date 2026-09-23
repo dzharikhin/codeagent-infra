@@ -1,13 +1,16 @@
 """CLI entrypoint for ocframework."""
 
 import json
+import os
 import re
 import secrets
 import shutil
+import signal
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, NoReturn, Optional, Tuple
+from typing import IO, Any, Dict, List, NoReturn, Optional, Tuple
 
 import typer
 from dotenv import dotenv_values
@@ -1048,6 +1051,179 @@ def _resolve_local_repo_root(
     return str(projects_dir / repo_name), note
 
 
+_ACP_ENVELOPE_PREFIX = b'{"jsonrpc"'
+
+
+def _acp_redirect_stdout_to_stderr() -> IO[bytes]:
+    """Move launch's stdout to stderr and return the real stdout handle.
+
+    In ACP mode the editor consumes launch's stdout as the JSON-RPC
+    transport, so every byte of launch chatter must move to stderr. The
+    redirection happens at the file-descriptor level (``fd 1`` → ``fd 2``),
+    which also captures stream caching inside click/typer. The returned
+    binary handle is a dup of the original stdout for the pump's envelope
+    writes; ``fd 1`` is never restored (an ACP session ends the process).
+    """
+    sys.stdout.flush()
+    real_stdout = os.fdopen(os.dup(1), "wb")
+    os.dup2(2, 1)
+    return real_stdout
+
+
+def _pump_acp_stdout(
+    process: subprocess.Popen,
+    real_stdout: IO[bytes],
+    stderr: IO[bytes],
+) -> None:
+    """Forward the container's stdout through the ACP envelope filter.
+
+    Lines whose first non-whitespace bytes are ``{"jsonrpc"`` are protocol
+    envelopes and go to the editor on the real stdout; every other line
+    (docker-init boot lines, plugin banners, agent chatter) is routed to
+    stderr. Both streams are flushed per line.
+
+    Args:
+        process: The spawned ``docker compose run`` child (bytes stdout).
+        real_stdout: Binary handle of launch's original stdout.
+        stderr: Binary stderr sink for non-protocol lines.
+    """
+    assert process.stdout is not None
+    while True:
+        line = process.stdout.readline()
+        if not line:
+            break
+        if line.lstrip().startswith(_ACP_ENVELOPE_PREFIX):
+            real_stdout.write(line)
+            real_stdout.flush()
+        else:
+            stderr.write(line)
+            stderr.flush()
+
+
+def _terminate_acp_child(process: subprocess.Popen) -> None:
+    """Terminate the docker child if it is still running."""
+    if process.poll() is None:
+        process.terminate()
+
+
+def _compose_cleanup(
+    container_name: Optional[str],
+    compose_path: Path,
+    subprocess_env: dict,
+) -> None:
+    """Best-effort container cleanup after an interrupted launch.
+
+    Force-removes the run container (when named) and tears down leftover
+    compose resources. Shared by the plain-launch and ACP interrupt paths.
+    """
+    typer.echo("\nInterrupted. Cleaning up container...", err=True)
+    if container_name:
+        cleanup_cmd = ["docker", "rm", "-f", container_name]
+        subprocess.run(cleanup_cmd, env=subprocess_env, capture_output=True)
+    # Also run docker compose down to clean up any remaining resources
+    down_cmd = [
+        "docker",
+        "compose",
+        "-f",
+        str(compose_path),
+        "down",
+        "--remove-orphans",
+    ]
+    subprocess.run(down_cmd, env=subprocess_env, capture_output=True)
+    typer.secho(
+        "Cleanup complete. Press Ctrl+C again to force exit.",
+        fg=typer.colors.YELLOW,
+        err=True,
+    )
+
+
+def _run_acp_session(
+    process: subprocess.Popen,
+    acp_stdout: IO[bytes],
+    compose_path: Path,
+    container_name: Optional[str],
+    subprocess_env: dict,
+) -> NoReturn:
+    """Run the ACP stdio session to completion and exit with its code.
+
+    Installs a SIGTERM handler that terminates the docker child (editors
+    stop the agent with SIGTERM). A KeyboardInterrupt (Ctrl+C) also
+    terminates the child, runs the standard cleanup and exits 130. A child
+    killed by a signal exits with the conventional ``128 + N`` code after
+    cleanup (SIGTERM → 143).
+
+    Args:
+        process: The spawned ``docker compose run`` child.
+        acp_stdout: Real stdout handle for the pump's envelope writes.
+        compose_path: Path to docker-compose.yaml (for cleanup).
+        container_name: Run container name, when the compose file sets one.
+        subprocess_env: Environment for the cleanup subprocesses.
+    """
+    previous_handler: Any = signal.getsignal(signal.SIGTERM)
+    signal.signal(
+        signal.SIGTERM,
+        lambda signum, frame: _terminate_acp_child(process),
+    )
+    interrupted = False
+    try:
+        stderr: IO[bytes] = sys.stderr.buffer
+        try:
+            _pump_acp_stdout(process, acp_stdout, stderr)
+        except KeyboardInterrupt:
+            interrupted = True
+            _terminate_acp_child(process)
+    finally:
+        signal.signal(signal.SIGTERM, previous_handler)
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        if not acp_stdout.closed:
+            acp_stdout.close()
+
+    if interrupted:
+        _compose_cleanup(container_name, compose_path, subprocess_env)
+        raise typer.Exit(130) from None
+
+    returncode = process.returncode
+    if returncode is not None and returncode < 0:
+        _compose_cleanup(container_name, compose_path, subprocess_env)
+        raise typer.Exit(128 - returncode)
+    raise typer.Exit(returncode)
+
+
+def _run_acp_launch(
+    run_cmd: List[str],
+    acp_stdout: IO[bytes],
+    subprocess_env: dict,
+    repo_root: Path,
+    compose_path: Path,
+    container_name: Optional[str],
+) -> NoReturn:
+    """Spawn the ACP container session and run it to completion.
+
+    The docker child inherits stdin and stderr (the editor's pipes) and
+    pipes its stdout through the envelope pump. Never returns normally:
+    exits with the child's exit code.
+
+    Args:
+        run_cmd: Full ``docker compose run`` command line.
+        acp_stdout: Real stdout handle for the pump's envelope writes.
+        subprocess_env: Environment variables for the child process.
+        repo_root: Repository root (child working directory).
+        compose_path: Path to docker-compose.yaml (for cleanup).
+        container_name: Run container name, when the compose file sets one.
+    """
+    process = subprocess.Popen(
+        run_cmd,
+        env=subprocess_env,
+        cwd=repo_root,
+        stdout=subprocess.PIPE,
+    )
+    _run_acp_session(process, acp_stdout, compose_path, container_name, subprocess_env)
+
+
 @app.command(
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True}
 )
@@ -1090,6 +1266,14 @@ def launch(
         "-f",
         help="Remove any existing container and cached image ID, forcing a fresh build",
     ),
+    acp: bool = typer.Option(
+        False,
+        "--acp",
+        help=(
+            "Run the agent in ACP (Agent Client Protocol) mode: the editor "
+            "speaks JSON-RPC to the sandboxed agent over stdio"
+        ),
+    ),
 ) -> None:
     """Launch the configured agent (opencode, qwen or dsh) in a container.
 
@@ -1098,6 +1282,12 @@ def launch(
     else by an OCF_AGENT_TOOL override from -e/--env or --env-file, else
     by auto-detecting the single valid config directory (a prompt is
     shown when several exist).
+
+    With --acp the agent runs in ACP mode (Agent Client Protocol): launch
+    speaks JSON-RPC over stdio so ACP-compatible editors (Zed, JetBrains,
+    Neovim) can drive the sandboxed agent. All launch chatter moves to
+    stderr; stdout carries only the protocol stream. --server conflicts
+    with --acp, and dsh (Web UI based) has no ACP mode.
 
     Environment variables are loaded with precedence (lowest to highest):
     1. Global env file (~/.config/opencode/.env for opencode, ~/.qwen/.env
@@ -1123,7 +1313,16 @@ def launch(
         ocframework launch -e API_KEY=$HOME/.key -e DEBUG=true
         ocframework launch --server
         ocframework launch --server=5000
+        ocframework launch --tool opencode --acp
     """
+    # In ACP mode the editor owns stdout (JSON-RPC transport), so move
+    # launch's own output to stderr before anything is printed. This also
+    # redirects chatter cached inside click/typer because it happens at
+    # the file-descriptor level.
+    acp_stdout: Optional[IO[bytes]] = None
+    if acp:
+        acp_stdout = _acp_redirect_stdout_to_stderr()
+
     cwd = Path.cwd()
 
     repo_root = get_repo_root(cwd)
@@ -1145,6 +1344,34 @@ def launch(
         raise typer.Exit(1)
 
     config_dir, spec = _select_launch_target(repo_root, tool, env_file, env_vars)
+
+    if acp:
+        peek_server, _peek_remaining = _extract_server_arg(list(ctx.args))
+        if peek_server is not None:
+            typer.secho(
+                "Error: --acp and --server are mutually exclusive: --acp "
+                "speaks JSON-RPC over stdio, --server serves the Web UI.",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            typer.secho(
+                "Remediation: use either --acp or --server, not both.",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+            raise typer.Exit(1)
+        if not spec.acp.supported:
+            typer.secho(
+                f"Error: {spec.name} does not support ACP mode.",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            typer.secho(
+                f"Remediation: {spec.acp.unsupported_remediation}",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+            raise typer.Exit(1)
 
     valid, error = validate_runtime_context(
         cwd, spec.config_dirname, repo_root=repo_root
@@ -1273,6 +1500,21 @@ def launch(
     if container_name:
         status = _get_container_status(container_name, subprocess_env)
         if status == "running" and not force:
+            if acp:
+                typer.secho(
+                    f"Error: container '{container_name}' is already running; "
+                    "ACP mode requires a fresh container so the stdio "
+                    "JSON-RPC stream starts with a new session.",
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+                typer.secho(
+                    "Remediation: run 'ocframework launch --acp --force' to "
+                    "remove the running container and start a new one.",
+                    fg=typer.colors.YELLOW,
+                    err=True,
+                )
+                raise typer.Exit(1)
             typer.echo(f"Container '{container_name}' is already running. Attaching...")
             ports = _get_container_ports(container_name, subprocess_env)
             if ports:
@@ -1341,8 +1583,13 @@ def launch(
         for mapping in detected_ports:
             run_cmd.extend(["--publish", mapping])
         run_cmd.extend(["--publish", f"{server_host_port}:{spec.serve.port}"])
-    elif detected_ports:
+    elif detected_ports and not acp:
         run_cmd.append("--service-ports")
+
+    if acp:
+        # No TTY: the JSON-RPC stdio transport is not interactive, and a
+        # pty would corrupt the protocol stream.
+        run_cmd.append("-T")
 
     if container_name:
         run_cmd.extend(["--name", container_name])
@@ -1353,31 +1600,26 @@ def launch(
     run_cmd.append(spec.binary)
     if server_host_port is not None:
         run_cmd.extend(spec.serve.serve_args)
+    elif acp:
+        run_cmd.extend(spec.acp.args)
     run_cmd.extend(args)
+
+    if acp:
+        assert acp_stdout is not None
+        _run_acp_launch(
+            run_cmd,
+            acp_stdout,
+            subprocess_env,
+            repo_root,
+            compose_path,
+            container_name,
+        )
 
     try:
         run_result = subprocess.run(run_cmd, env=subprocess_env, cwd=repo_root)
     except KeyboardInterrupt:
         # Cleanup: stop the container if it's still running
-        typer.echo("\nInterrupted. Cleaning up container...", err=True)
-        if container_name:
-            cleanup_cmd = ["docker", "rm", "-f", container_name]
-            subprocess.run(cleanup_cmd, env=subprocess_env, capture_output=True)
-        # Also run docker compose down to clean up any remaining resources
-        down_cmd = [
-            "docker",
-            "compose",
-            "-f",
-            str(compose_path),
-            "down",
-            "--remove-orphans",
-        ]
-        subprocess.run(down_cmd, env=subprocess_env, capture_output=True)
-        typer.secho(
-            "Cleanup complete. Press Ctrl+C again to force exit.",
-            fg=typer.colors.YELLOW,
-            err=True,
-        )
+        _compose_cleanup(container_name, compose_path, subprocess_env)
         raise typer.Exit(130) from None  # 130 is standard exit code for SIGINT
 
     raise typer.Exit(run_result.returncode)

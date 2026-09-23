@@ -253,6 +253,24 @@ class TestLaunchCommands:
         commands = DocumentationGenerator.get_launch_commands("opencode")
         assert commands["shell"] == "docker exec -it <container_name> /bin/bash"
 
+    def test_acp_command_for_supported_tools(self):
+        """ACP command uses --acp for tools with a stdio mode."""
+        assert (
+            DocumentationGenerator.get_launch_commands("opencode")["acp"]
+            == "ocframework launch --tool opencode --acp"
+        )
+        assert (
+            DocumentationGenerator.get_launch_commands("qwen")["acp"]
+            == "ocframework launch --tool qwen --acp"
+        )
+
+    def test_acp_command_falls_back_to_server_for_dsh(self):
+        """dsh has no ACP mode; docs point at the Web UI instead."""
+        assert (
+            DocumentationGenerator.get_launch_commands("dsh")["acp"]
+            == "ocframework launch --tool dsh --server"
+        )
+
 
 class TestReadmeLaunchCommand:
     """Tests for README launch command content."""
@@ -351,6 +369,23 @@ class TestReadmeToolSections:
         patch_idx = readme.index("--patch")
         no_open_idx = readme.index("--no-open")
         assert patch_idx < no_open_idx
+
+    def test_acp_sections(self):
+        """ACP section shows editor integration wording per tool."""
+        opencode_readme = self._render("opencode")
+        assert "## Connect an Editor (ACP)" in opencode_readme
+        assert '"args": ["launch", "--tool", "opencode", "--acp"]' in opencode_readme
+
+        qwen_readme = self._render("qwen")
+        assert "## Connect an Editor (ACP)" in qwen_readme
+        assert '"args": ["launch", "--tool", "qwen", "--acp"]' in qwen_readme
+        # qwen README must not leak opencode's ACP args
+        assert '"launch", "--tool", "opencode"' not in qwen_readme
+
+        dsh_readme = self._render("dsh")
+        assert "## Editor Integration (ACP)" in dsh_readme
+        assert "no ACP/stdio mode" in dsh_readme
+        assert "ocframework launch --server" in dsh_readme
 
     def test_dsh_sections_exclude_other_tool_wording(self):
         """dsh README must not leak opencode/qwen-specific content."""
