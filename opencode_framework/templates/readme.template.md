@@ -55,6 +55,7 @@ toggle features on or off. Only the feature-dependent parts of `devcontainer.jso
 context the prompt is skipped.
 
 {{AGENT_SERVE_SECTION}}
+{{AGENT_ACP_SECTION}}
 ## Version Control
 
 This directory is a linked Git worktree on branch `{{BRANCH_NAME}}`.

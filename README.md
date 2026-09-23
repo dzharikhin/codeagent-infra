@@ -263,6 +263,36 @@ For dsh there is no TUI and no framework-managed token: it prints a one-time
 `ocframework launch --tool dsh` (without `--server`) exits with a usage error
 by design. See the generated `<config-dir>/README.md` for the exact commands.
 
+### Connect an Editor (ACP)
+
+`ocframework launch --acp` runs the sandboxed agent in ACP (Agent Client
+Protocol) mode: the editor speaks JSON-RPC to the agent over stdio, while the
+container, mounts, env layers and ports stay exactly as in a normal launch.
+Supported for opencode and qwen; dsh has no stdio mode (use `--server` and the
+Web UI instead).
+
+```sh
+ocframework launch --tool opencode --acp
+```
+
+Launch chatter (image reuse, port notes, warnings) is redirected to stderr so
+stdout carries only the protocol stream. Because the session is owned by the
+editor, a running container is never attached in ACP mode: launch fails with a
+remediation unless `--force` removes it first. In Zed, register the launch
+command as a custom agent:
+
+```json
+{
+  "agent": {
+    "custom": {
+      "command": "ocframework",
+      "args": ["launch", "--tool", "opencode", "--acp"],
+      "type": "custom"
+    }
+  }
+}
+```
+
 ## Architecture
 
 ### DevContainer + Docker Compose

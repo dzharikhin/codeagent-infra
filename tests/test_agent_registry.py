@@ -330,3 +330,25 @@ class TestGlobalEnvRelpath:
 
     def test_dsh_global_env_relpath(self):
         assert DSH_TOOL_SPEC.global_env_relpath == (".dsh", ".env")
+
+
+class TestAcpSpec:
+    """Tests for the ACP spec field and per-tool values."""
+
+    def test_opencode_acp_args(self):
+        assert OPENCODE_TOOL_SPEC.acp.args == ("acp",)
+        assert OPENCODE_TOOL_SPEC.acp.supported is True
+
+    def test_qwen_acp_args(self):
+        assert QWEN_TOOL_SPEC.acp.args == ("--acp",)
+        assert QWEN_TOOL_SPEC.acp.supported is True
+
+    def test_dsh_has_no_acp_mode(self):
+        assert DSH_TOOL_SPEC.acp.args == ()
+        assert DSH_TOOL_SPEC.acp.supported is False
+        assert "--server" in DSH_TOOL_SPEC.acp.unsupported_remediation
+        assert "Web UI" in DSH_TOOL_SPEC.acp.unsupported_remediation
+
+    def test_acp_spec_is_frozen(self):
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            OPENCODE_TOOL_SPEC.acp.args = ()

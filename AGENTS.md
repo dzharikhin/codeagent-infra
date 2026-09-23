@@ -261,7 +261,7 @@ poetry run pytest            # Run tests
 ### CLI Contract
 
 - `ocframework init [--tool opencode|qwen|dsh]` - Initialize framework in a Git repository
-- `ocframework launch [--tool opencode|qwen|dsh]` - Launch container with the configured agent
+- `ocframework launch [--tool opencode|qwen|dsh] [--acp]` - Launch container with the configured agent (`--acp`: ACP stdio JSON-RPC mode for editors; supported for opencode and qwen)
 - `ocframework --version` - Print version and configuration status
 
 All commands require a valid framework repository (installed via `pipx install -e <path>`).

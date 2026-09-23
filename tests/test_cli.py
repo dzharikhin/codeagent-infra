@@ -1,5 +1,8 @@
 """Tests for CLI behavior."""
 
+import io
+import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -1029,6 +1032,402 @@ class TestLaunchServer:
         assert cmd[idx + 1] == "4096:4096"
         # --other-flag leaks through as pass-through arg
         assert "--other-flag" in cmd
+
+
+class _InterruptingReader(io.BytesIO):
+    """BytesIO whose readline raises KeyboardInterrupt (simulates Ctrl+C)."""
+
+    def readline(self, *args, **kwargs):
+        raise KeyboardInterrupt
+
+
+class _FakeAcpChild:
+    """Minimal subprocess.Popen stand-in for ACP launch tests."""
+
+    def __init__(
+        self,
+        stdout: bytes = b"",
+        returncode: int = 0,
+        interrupt_on_read: bool = False,
+    ):
+        if interrupt_on_read:
+            self.stdout: io.BytesIO = _InterruptingReader(stdout)
+        else:
+            self.stdout = io.BytesIO(stdout)
+        self._returncode = returncode
+        self.terminated = False
+
+    def poll(self):
+        return None
+
+    def terminate(self):
+        self.terminated = True
+
+    def kill(self):
+        self.terminated = True
+
+    def wait(self, timeout=None):
+        return self._returncode
+
+    @property
+    def returncode(self):
+        return self._returncode
+
+
+class TestLaunchAcp:
+    """Tests for the --acp option of ``ocframework launch``."""
+
+    def _setup_repo(
+        self,
+        tmp_path: Path,
+        tool: str = "opencode",
+        ports_block: str = "",
+    ) -> Path:
+        dirname = {"dsh": ".dsh", "qwen": ".qwen"}.get(tool, ".opencode")
+        config = tmp_path / dirname
+        config.mkdir()
+        compose = f"services:\n  {tool}:\n    container_name: ocf_repo\n"
+        if ports_block:
+            compose += ports_block
+        (config / "docker-compose.yaml").write_text(compose)
+        (config / ".env").write_text(f"REMOTE_USER=root\nOCF_AGENT_TOOL={tool}\n")
+        return config
+
+    def _patch_launch_deps(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+        tool: str = "opencode",
+        child: _FakeAcpChild = None,
+        container_status: str = "",
+    ):
+        import importlib
+
+        app_module = importlib.import_module("opencode_framework.cli.app")
+        captured: list = []
+        cleanups: list = []
+        redirected: list = []
+        child = child if child is not None else _FakeAcpChild()
+
+        def fake_popen(cmd, **kw):
+            captured.append(list(cmd))
+            return child
+
+        def mock_run(*args, **kw):
+            cmd = list(args[0]) if args else args[1].get("args", [])
+            result = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            if cmd[:2] == ["docker", "inspect"] and "--format" in cmd:
+                result.stdout = container_status
+            return result
+
+        def fake_redirect():
+            redirected.append(True)
+            return io.BytesIO()
+
+        monkeypatch.setattr(
+            app_module,
+            "validate_runtime_context",
+            lambda cwd, config_dirname, repo_root=None: (True, ""),
+        )
+        monkeypatch.setattr(app_module, "get_repo_root", lambda cwd: tmp_path.resolve())
+        monkeypatch.setattr(
+            app_module,
+            "load_env_with_overrides",
+            lambda **kw: {"OCF_AGENT_TOOL": tool},
+        )
+        monkeypatch.setattr(app_module, "build_docker_env", lambda env, ctx: {})
+        monkeypatch.setattr(app_module, "load_image_id", lambda d: "sha256:cached")
+        monkeypatch.setattr(app_module, "_build_image", lambda *a, **kw: "sha256:fake")
+        monkeypatch.setattr(app_module, "save_image_id", lambda *a, **kw: None)
+        monkeypatch.setattr(app_module.subprocess, "run", mock_run)
+        monkeypatch.setattr(app_module.subprocess, "Popen", fake_popen)
+        monkeypatch.setattr(app_module, "_acp_redirect_stdout_to_stderr", fake_redirect)
+        real_cleanup = app_module._compose_cleanup
+
+        def recording_cleanup(name, compose_path, env):
+            cleanups.append(name)
+            real_cleanup(name, compose_path, env)
+
+        monkeypatch.setattr(app_module, "_compose_cleanup", recording_cleanup)
+        monkeypatch.chdir(tmp_path)
+        return app_module, captured, cleanups, redirected
+
+    def _invoke(self, app_module, args: list):
+        from typer.testing import CliRunner
+
+        return CliRunner().invoke(app_module.app, args)
+
+    def test_acp_command_shape(self, tmp_path: Path, monkeypatch):
+        """--acp runs opencode acp with -T, no TTY flags, and no publishing."""
+        self._setup_repo(tmp_path)
+        app_module, captured, _, redirected = self._patch_launch_deps(
+            monkeypatch, tmp_path
+        )
+
+        result = self._invoke(app_module, ["launch", "--acp"])
+
+        assert result.exit_code == 0
+        assert redirected == [True]
+        assert len(captured) == 1
+        cmd = captured[0]
+        assert cmd[:6] == ["docker", "compose", "-f", cmd[3], "run", "--rm"]
+        assert "-T" in cmd
+        assert "--name" in cmd and "ocf_repo" in cmd
+        assert "--service-ports" not in cmd
+        assert "--publish" not in cmd
+        assert cmd[-2:] == ["opencode", "acp"]
+
+    def test_acp_qwen_command_tail(self, tmp_path: Path, monkeypatch):
+        """--acp with qwen appends the qwen --acp flag."""
+        self._setup_repo(tmp_path, tool="qwen")
+        app_module, captured, _, _ = self._patch_launch_deps(
+            monkeypatch, tmp_path, tool="qwen"
+        )
+
+        result = self._invoke(app_module, ["launch", "--acp"])
+
+        assert result.exit_code == 0
+        assert captured[0][-2:] == ["qwen", "--acp"]
+
+    def test_acp_pass_through_args_reach_container(self, tmp_path: Path, monkeypatch):
+        """Args after -- pass through to the ACP agent command."""
+        self._setup_repo(tmp_path)
+        app_module, captured, _, _ = self._patch_launch_deps(monkeypatch, tmp_path)
+
+        result = self._invoke(app_module, ["launch", "--acp", "--", "debug", "config"])
+
+        assert result.exit_code == 0
+        assert captured[0][-4:] == ["opencode", "acp", "debug", "config"]
+
+    def test_acp_skips_service_ports_with_wizard_ports(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """--acp neither republishes wizard ports nor uses --service-ports."""
+        self._setup_repo(tmp_path, ports_block="    ports:\n      - 8080:8080\n")
+        app_module, captured, _, _ = self._patch_launch_deps(monkeypatch, tmp_path)
+
+        result = self._invoke(app_module, ["launch", "--acp"])
+
+        assert result.exit_code == 0
+        cmd = captured[0]
+        assert "--service-ports" not in cmd
+        assert "--publish" not in cmd
+
+    def test_acp_exit_code_forwarded(self, tmp_path: Path, monkeypatch):
+        """launch exits with the ACP session's exit code."""
+        self._setup_repo(tmp_path)
+        child = _FakeAcpChild(returncode=7)
+        app_module, captured, _, _ = self._patch_launch_deps(
+            monkeypatch, tmp_path, child=child
+        )
+
+        result = self._invoke(app_module, ["launch", "--acp"])
+
+        assert result.exit_code == 7
+        assert len(captured) == 1
+
+    def test_acp_signal_death_maps_to_143(self, tmp_path: Path, monkeypatch):
+        """A child killed by SIGTERM (-15) exits 143 and cleans up."""
+        self._setup_repo(tmp_path)
+        child = _FakeAcpChild(returncode=-15)
+        app_module, captured, cleanups, _ = self._patch_launch_deps(
+            monkeypatch, tmp_path, child=child
+        )
+
+        result = self._invoke(app_module, ["launch", "--acp"])
+
+        assert result.exit_code == 143
+        assert cleanups == ["ocf_repo"]
+        assert len(captured) == 1
+
+    def test_acp_keyboard_interrupt_terminates_and_cleans_up(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """Ctrl+C during the ACP session terminates the child and exits 130."""
+        self._setup_repo(tmp_path)
+        child = _FakeAcpChild(interrupt_on_read=True)
+        app_module, captured, cleanups, _ = self._patch_launch_deps(
+            monkeypatch, tmp_path, child=child
+        )
+
+        result = self._invoke(app_module, ["launch", "--acp"])
+
+        assert result.exit_code == 130
+        assert child.terminated
+        assert cleanups == ["ocf_repo"]
+        assert len(captured) == 1
+
+    def test_acp_rejects_running_container(self, tmp_path: Path, monkeypatch):
+        """--acp never attaches: a running container is a hard error."""
+        self._setup_repo(tmp_path)
+        app_module, captured, cleanups, _ = self._patch_launch_deps(
+            monkeypatch, tmp_path, container_status="running"
+        )
+
+        result = self._invoke(app_module, ["launch", "--acp"])
+
+        assert result.exit_code == 1
+        assert "already running" in result.output
+        assert "--acp --force" in result.output
+        assert captured == []
+        assert cleanups == []
+
+    def test_acp_force_removes_running_container(self, tmp_path: Path, monkeypatch):
+        """--acp --force removes the running container and starts a session."""
+        self._setup_repo(tmp_path)
+        app_module, captured, _, redirected = self._patch_launch_deps(
+            monkeypatch, tmp_path, container_status="running"
+        )
+
+        result = self._invoke(app_module, ["launch", "--acp", "--force"])
+
+        assert result.exit_code == 0
+        assert redirected == [True]
+        assert len(captured) == 1
+
+    def test_acp_rejected_for_dsh(self, tmp_path: Path, monkeypatch):
+        """dsh has no ACP mode: hard error with a --server remediation."""
+        self._setup_repo(tmp_path, tool="dsh")
+        app_module, captured, _, _ = self._patch_launch_deps(
+            monkeypatch, tmp_path, tool="dsh"
+        )
+
+        result = self._invoke(app_module, ["launch", "--acp"])
+
+        assert result.exit_code == 1
+        assert "does not support ACP mode" in result.output
+        assert "--server" in result.output
+        assert captured == []
+
+    def test_acp_rejects_server_combination(self, tmp_path: Path, monkeypatch):
+        """--acp and --server are mutually exclusive."""
+        self._setup_repo(tmp_path)
+        app_module, captured, _, _ = self._patch_launch_deps(monkeypatch, tmp_path)
+
+        result = self._invoke(app_module, ["launch", "--acp", "--server"])
+
+        assert result.exit_code == 1
+        assert "mutually exclusive" in result.output
+        assert captured == []
+
+    def test_plain_launch_keyboard_interrupt_cleans_up(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """Regression: plain launch Ctrl+C still cleans up and exits 130."""
+        self._setup_repo(tmp_path)
+        app_module, captured, cleanups, _ = self._patch_launch_deps(
+            monkeypatch, tmp_path
+        )
+        cleanups.clear()  # reuse the recorder, not the Popen path
+
+        def raising_run(*args, **kw):
+            cmd = list(args[0]) if args else []
+            if cmd[:2] == ["docker", "compose"] and "run" in cmd:
+                raise KeyboardInterrupt
+            result = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            return result
+
+        monkeypatch.setattr(app_module.subprocess, "run", raising_run)
+
+        result = self._invoke(app_module, ["launch"])
+
+        assert result.exit_code == 130
+        assert "Interrupted. Cleaning up container..." in result.output
+        assert "Cleanup complete." in result.output
+
+    def test_pump_routes_envelope_and_chatter(self):
+        """_pump_acp_stdout sends JSON-RPC envelopes to stdout, chatter to stderr."""
+        import importlib
+
+        app_module = importlib.import_module("opencode_framework.cli.app")
+        child = _FakeAcpChild(
+            stdout=(
+                b'  {"jsonrpc":"2.0","id":1}\n'
+                b"[cost-guard] Active\n"
+                b'{"jsonrpc":"2.0","id":2}\n'
+            )
+        )
+        out = io.BytesIO()
+        err = io.BytesIO()
+
+        app_module._pump_acp_stdout(child, out, err)
+
+        assert out.getvalue() == (
+            b'  {"jsonrpc":"2.0","id":1}\n{"jsonrpc":"2.0","id":2}\n'
+        )
+        assert err.getvalue() == b"[cost-guard] Active\n"
+
+    def test_session_forwards_exit_code(self, monkeypatch):
+        """_run_acp_session exits with the child's return code, no cleanup."""
+        import importlib
+
+        app_module = importlib.import_module("opencode_framework.cli.app")
+        cleanups: list = []
+        monkeypatch.setattr(
+            app_module, "_compose_cleanup", lambda *a: cleanups.append(a[0])
+        )
+        child = _FakeAcpChild(stdout=b'{"jsonrpc":"2.0"}\n', returncode=7)
+
+        with pytest.raises(typer.Exit) as exc_info:
+            app_module._run_acp_session(
+                child, io.BytesIO(), Path("docker-compose.yaml"), "ocf_repo", {}
+            )
+
+        assert exc_info.value.exit_code == 7
+        assert cleanups == []
+        assert not child.terminated
+
+    def test_session_sigterm_terminates_child(self, monkeypatch):
+        """The SIGTERM handler installed by _run_acp_session stops the child."""
+        import importlib
+
+        app_module = importlib.import_module("opencode_framework.cli.app")
+        terminated: list = []
+        cleanups: list = []
+        monkeypatch.setattr(
+            app_module, "_terminate_acp_child", lambda p: terminated.append(p)
+        )
+        monkeypatch.setattr(
+            app_module, "_compose_cleanup", lambda *a: cleanups.append(a)
+        )
+        child = _FakeAcpChild()
+
+        def pump_then_sigterm(process, out, err):
+            os.kill(os.getpid(), signal.SIGTERM)
+
+        monkeypatch.setattr(app_module, "_pump_acp_stdout", pump_then_sigterm)
+        previous = signal.getsignal(signal.SIGTERM)
+        try:
+            with pytest.raises(typer.Exit) as exc_info:
+                app_module._run_acp_session(
+                    child, io.BytesIO(), Path("docker-compose.yaml"), "ocf_repo", {}
+                )
+        finally:
+            signal.signal(signal.SIGTERM, previous)
+
+        assert exc_info.value.exit_code == 0
+        assert terminated == [child]
+        assert cleanups == []
+
+    def test_session_interrupt_cleans_up(self, monkeypatch):
+        """A KeyboardInterrupt inside the session exits 130 after cleanup."""
+        import importlib
+
+        app_module = importlib.import_module("opencode_framework.cli.app")
+        cleanups: list = []
+        monkeypatch.setattr(
+            app_module, "_compose_cleanup", lambda *a: cleanups.append(a[0])
+        )
+        child = _FakeAcpChild(interrupt_on_read=True)
+
+        with pytest.raises(typer.Exit) as exc_info:
+            app_module._run_acp_session(
+                child, io.BytesIO(), Path("docker-compose.yaml"), "ocf_repo", {}
+            )
+
+        assert exc_info.value.exit_code == 130
+        assert cleanups == ["ocf_repo"]
+        assert child.terminated
 
 
 class TestInitToolOption:
