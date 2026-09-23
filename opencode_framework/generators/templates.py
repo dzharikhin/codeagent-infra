@@ -70,8 +70,13 @@ _README_SECTIONS: Dict[str, Dict[str, str]] = {
             "sandboxed agent over stdio JSON-RPC:\n"
             "\n"
             "```sh\n"
-            "{{LAUNCH_COMMAND}} --acp\n"
+            "{{LAUNCH_COMMAND}} --acp <postfix>\n"
             "```\n"
+            "\n"
+            "The postfix is required and becomes part of the container name "
+            "(`ocf_<repo>_<tool>_<postfix>`): an existing container with the "
+            "same name is removed first, so reuse a postfix to replace the "
+            "previous session and pick a unique one per editor instance.\n"
             "\n"
             "All launch chatter moves to stderr; stdout carries only the "
             "protocol stream. In Zed, add a custom agent "
@@ -82,7 +87,7 @@ _README_SECTIONS: Dict[str, Dict[str, str]] = {
             '  "agent": {\n'
             '    "custom": {\n'
             '      "command": "ocframework",\n'
-            '      "args": ["launch", "--tool", "opencode", "--acp"],\n'
+            '      "args": ["launch", "--tool", "opencode", "--acp", "zed"],\n'
             '      "type": "custom"\n'
             "    }\n"
             "  }\n"
@@ -147,8 +152,13 @@ _README_SECTIONS: Dict[str, Dict[str, str]] = {
             "sandboxed agent over stdio JSON-RPC:\n"
             "\n"
             "```sh\n"
-            "{{LAUNCH_COMMAND}} --acp\n"
+            "{{LAUNCH_COMMAND}} --acp <postfix>\n"
             "```\n"
+            "\n"
+            "The postfix is required and becomes part of the container name "
+            "(`ocf_<repo>_<tool>_<postfix>`): an existing container with the "
+            "same name is removed first, so reuse a postfix to replace the "
+            "previous session and pick a unique one per editor instance.\n"
             "\n"
             "All launch chatter moves to stderr; stdout carries only the "
             "protocol stream. In Zed, add a custom agent "
@@ -159,7 +169,7 @@ _README_SECTIONS: Dict[str, Dict[str, str]] = {
             '  "agent": {\n'
             '    "custom": {\n'
             '      "command": "ocframework",\n'
-            '      "args": ["launch", "--tool", "qwen", "--acp"],\n'
+            '      "args": ["launch", "--tool", "qwen", "--acp", "zed"],\n'
             '      "type": "custom"\n'
             "    }\n"
             "  }\n"

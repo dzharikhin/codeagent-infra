@@ -261,7 +261,7 @@ poetry run pytest            # Run tests
 ### CLI Contract
 
 - `ocframework init [--tool opencode|qwen|dsh]` - Initialize framework in a Git repository
-- `ocframework launch [--tool opencode|qwen|dsh] [--acp]` - Launch container with the configured agent (`--acp`: ACP stdio JSON-RPC mode for editors; supported for opencode and qwen)
+- `ocframework launch [--tool opencode|qwen|dsh] [--acp <postfix>]` - Launch container with the configured agent (`--acp <postfix>`: ACP stdio JSON-RPC mode for editors; supported for opencode and qwen. The postfix is required and appended to the container name; any existing container with that name is removed first — reuse a postfix to replace the previous session)
 - `ocframework --version` - Print version and configuration status
 
 All commands require a valid framework repository (installed via `pipx install -e <path>`).
@@ -374,7 +374,11 @@ but a hard launch error after moving it — re-init to regenerate.
 
 ### Per-Tool Naming
 
-- Containers: `ocf_<repo>_<tool>` (e.g. `ocf_myrepo_dsh`)
+- Containers: `ocf_<repo>_<tool>` (e.g. `ocf_myrepo_dsh`); ACP launches
+  append a required postfix — `ocf_<repo>_<tool>_<postfix>` (e.g.
+  `ocf_myrepo_opencode_zed`) — and remove an existing container of the same
+  name first, so concurrent ACP sessions never collide and a reused postfix
+  replaces the previous session
 - Managed named volumes: `{kind}-{repo}-{tool}` (e.g. `venv-myrepo-qwen`,
   `m2-myrepo-qwen`, `gradle-myrepo-qwen`, `docker-myrepo-qwen`) via
   `managed_volume_name(prefix, repo_name, tool)` in `agent/registry.py` —
