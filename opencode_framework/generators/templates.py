@@ -7,6 +7,7 @@ from typing import Dict, List, Optional
 from opencode_framework.agent.registry import (
     DEFAULT_TOOL,
     get_tool_spec,
+    managed_volume_keys,
     managed_volume_name,
 )
 
@@ -76,7 +77,9 @@ _README_SECTIONS: Dict[str, Dict[str, str]] = {
             "The postfix is required and becomes part of the container name "
             "(`ocf_<repo>_<tool>_<postfix>`): an existing container with the "
             "same name is removed first, so reuse a postfix to replace the "
-            "previous session and pick a unique one per editor instance.\n"
+            "previous session and pick a unique one per editor instance. "
+            "Managed volumes get the same postfix, so each session owns its "
+            "state (including the Docker-in-Docker data volume).\n"
             "\n"
             "All launch chatter moves to stderr; stdout carries only the "
             "protocol stream. In Zed, add a custom agent "
@@ -158,7 +161,9 @@ _README_SECTIONS: Dict[str, Dict[str, str]] = {
             "The postfix is required and becomes part of the container name "
             "(`ocf_<repo>_<tool>_<postfix>`): an existing container with the "
             "same name is removed first, so reuse a postfix to replace the "
-            "previous session and pick a unique one per editor instance.\n"
+            "previous session and pick a unique one per editor instance. "
+            "Managed volumes get the same postfix, so each session owns its "
+            "state (including the Docker-in-Docker data volume).\n"
             "\n"
             "All launch chatter moves to stderr; stdout carries only the "
             "protocol stream. In Zed, add a custom agent "
@@ -465,17 +470,15 @@ class TemplateHandler:
 
         volume_keys = []
         if optional_features and "python" in optional_features:
-            volume_keys.append(f"  {managed_volume_name('venv', repo_name, tool)}:")
+            volume_keys.extend(managed_volume_keys("venv", repo_name, tool))
         if optional_features and "docker" in optional_features:
-            volume_keys.append(f"  {managed_volume_name('docker', repo_name, tool)}:")
+            volume_keys.extend(managed_volume_keys("docker", repo_name, tool))
         if optional_features and "java" in optional_features:
             tools = java_build_tools or []
             if "maven" in tools:
-                volume_keys.append(f"  {managed_volume_name('m2', repo_name, tool)}:")
+                volume_keys.extend(managed_volume_keys("m2", repo_name, tool))
             if "gradle" in tools:
-                volume_keys.append(
-                    f"  {managed_volume_name('gradle', repo_name, tool)}:"
-                )
+                volume_keys.extend(managed_volume_keys("gradle", repo_name, tool))
 
         top_level_volumes_section = ""
         if volume_keys:

@@ -322,7 +322,7 @@ Rule: variables shared across parts/tools may be unprefixed; part- or tool-speci
 | Family | Variables |
 |---|---|
 | shared (no prefix) | `REMOTE_USER`, `XDG_*` |
-| sandbox | `OCF_IMAGE_ID`, `OCF_LOCAL_FRAMEWORK_PATH`, `OCF_LOCAL_PROJECTS_DIR`, `OCF_LOCAL_REPO_ROOT`, `OCF_REMOTE_FRAMEWORK_CONFIG_PATH` |
+| sandbox | `OCF_IMAGE_ID`, `OCF_LOCAL_FRAMEWORK_PATH`, `OCF_LOCAL_PROJECTS_DIR`, `OCF_LOCAL_REPO_ROOT`, `OCF_REMOTE_FRAMEWORK_CONFIG_PATH`, `OCF_SESSION_SUFFIX` |
 | agent tool | `OCF_AGENT_TOOL`, `OCF_AGENT_VERSION` |
 | agent layers | `OCF_GLOBAL_CONFIG_PATH` (dir for opencode, file for qwen/dsh), `OCF_GLOBAL_AUTH_PATH` (opencode, dsh) |
 | agent defaults via env | `OCF_MAIN_MODEL`, `OCF_BUILD_MODEL`, `OCF_SMALL_MODEL`, `OCF_PLAN_MAX_BEFORE_RESPONSE_STEPS`, `OCF_BUILD_MAX_BEFORE_RESPONSE_STEPS` |
@@ -382,7 +382,16 @@ but a hard launch error after moving it — re-init to regenerate.
 - Managed named volumes: `{kind}-{repo}-{tool}` (e.g. `venv-myrepo-qwen`,
   `m2-myrepo-qwen`, `gradle-myrepo-qwen`, `docker-myrepo-qwen`) via
   `managed_volume_name(prefix, repo_name, tool)` in `agent/registry.py` —
-  two agents can run concurrently on one repo without sharing mutable state
+  two agents can run concurrently on one repo without sharing mutable state.
+  Managed volume keys carry a `name:` attribute appending
+  `${OCF_SESSION_SUFFIX:-}` (`managed_volume_keys`): ACP launches set
+  `OCF_SESSION_SUFFIX=_<postfix>` (e.g. `docker-myrepo-opencode_zed`), so
+  every session owns its volumes — concurrent dockerd instances must never
+  share a `/var/lib/docker` volume (boltdb lock contention); plain/server
+  launches leave the suffix empty and keep the bare shared names. Stale
+  per-postfix volumes accumulate and are removed manually
+  (`docker volume rm`). Compose files generated before this change keep
+  shared volumes until re-init (`ocframework init --force --tool <tool>`)
 - Built images: `ocf-<repo>-<tool>:latest` (e.g. `ocf-myrepo-dsh:latest`),
   applied via `devcontainer build --image-name` after the `devcontainer up`
   step; persisted in the tool's `<config_dir>/runtime_data/.image_id` and

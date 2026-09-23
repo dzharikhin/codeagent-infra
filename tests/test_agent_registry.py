@@ -352,3 +352,24 @@ class TestAcpSpec:
     def test_acp_spec_is_frozen(self):
         with pytest.raises(dataclasses.FrozenInstanceError):
             OPENCODE_TOOL_SPEC.acp.args = ()
+
+
+class TestManagedVolumeKeys:
+    """Tests for the compose volume key + session-suffix name attribute."""
+
+    def test_key_pair_shape(self):
+        from opencode_framework.agent.registry import managed_volume_keys
+
+        assert managed_volume_keys("docker", "myrepo", "opencode") == [
+            "  docker-myrepo-opencode:",
+            "    name: docker-myrepo-opencode${OCF_SESSION_SUFFIX:-}",
+        ]
+
+    def test_all_prefixes(self):
+        from opencode_framework.agent.registry import managed_volume_keys
+
+        for prefix in ("venv", "m2", "gradle", "docker"):
+            key, name = managed_volume_keys(prefix, "r", "qwen")
+            assert key == f"  {prefix}-r-qwen:"
+            assert name.startswith(f"    name: {prefix}-r-qwen")
+            assert name.endswith("${OCF_SESSION_SUFFIX:-}")

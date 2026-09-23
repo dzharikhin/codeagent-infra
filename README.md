@@ -277,8 +277,11 @@ ocframework launch --tool opencode --acp zed
 
 The postfix is required and becomes part of the container name
 (`ocf_<repo>_<tool>_<postfix>`), so concurrent ACP sessions on one repository
-never collide. An existing container with the same name is removed first,
-making a reused postfix a session restart. Launch chatter (image reuse, port
+never collide. Managed volumes (including the Docker-in-Docker data volume)
+get the same postfix, so every session owns its state — a reused postfix
+replaces the session and keeps its warm caches, a new postfix starts fully
+isolated. An existing container with the same name is removed first.
+Launch chatter (image reuse, port
 notes, warnings) is redirected to stderr so stdout carries only the protocol
 stream. In Zed, register the launch command as a custom agent:
 

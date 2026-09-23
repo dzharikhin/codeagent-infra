@@ -1556,6 +1556,15 @@ def launch(
             )
             raise typer.Exit(1)
         container_name = f"{container_name}_{acp}"
+        # Managed volumes interpolate this suffix into their names
+        # (${OCF_SESSION_SUFFIX:-}), so each ACP session gets volumes
+        # unique to its container name — two sessions must never share
+        # /var/lib/docker (dockerd holds a per-volume boltdb lock).
+        subprocess_env["OCF_SESSION_SUFFIX"] = f"_{acp}"
+    else:
+        # Plain launches always use the bare volume names, regardless of
+        # any OCF_SESSION_SUFFIX leaked from the shell or env files.
+        subprocess_env.pop("OCF_SESSION_SUFFIX", None)
 
     # Handle existing container: ACP replaces it with a fresh session,
     # plain mode attaches if running, otherwise removes
