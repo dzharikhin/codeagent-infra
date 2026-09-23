@@ -9,7 +9,7 @@ defines tool knowledge itself.
 """
 
 from dataclasses import dataclass
-from typing import Dict, Literal, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 from opencode_framework.exceptions import ValidationError
 
@@ -366,6 +366,33 @@ def managed_volume_name(prefix: str, repo_name: str, tool: str) -> str:
     in particular must never share a /var/lib/docker volume).
     """
     return f"{prefix}-{repo_name}-{tool}"
+
+
+# Launch-time interpolation suffix appended to managed volume names.
+# ACP launches set OCF_SESSION_SUFFIX=_<postfix> so every session owns
+# its volumes (docker-in-docker boltdb locks are per-volume); plain
+# launches leave it empty and keep the bare shared names.
+VOLUME_SESSION_INTERPOLATION = "${OCF_SESSION_SUFFIX:-}"
+
+
+def managed_volume_keys(prefix: str, repo_name: str, tool: str) -> List[str]:
+    """Compose the top-level volume entry lines for a managed volume.
+
+    Returns the YAML key line plus a ``name:`` attribute that appends
+    ``${OCF_SESSION_SUFFIX:-}`` to the resolved volume name. Launch sets
+    that variable per session (ACP: ``_<postfix>``), so volumes become
+    unique per container name while plain launches keep the bare names.
+
+    Args:
+        prefix: Volume kind (e.g. "venv", "m2", "gradle", "docker").
+        repo_name: Repository name.
+        tool: Agent tool name.
+
+    Returns:
+        Two compose file lines: the key and the name attribute.
+    """
+    base = managed_volume_name(prefix, repo_name, tool)
+    return [f"  {base}:", f"    name: {base}{VOLUME_SESSION_INTERPOLATION}"]
 
 
 def get_tool_spec(name: str) -> ToolSpec:

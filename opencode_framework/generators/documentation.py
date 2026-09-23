@@ -21,7 +21,7 @@ class DocumentationGenerator(FileGenerator):
         """
         spec = get_tool_spec(agent_tool)
         acp_command = (
-            f"ocframework launch --tool {spec.name} --acp"
+            f"ocframework launch --tool {spec.name} --acp <postfix>"
             if spec.acp.supported
             else f"ocframework launch --tool {spec.name} --server"
         )

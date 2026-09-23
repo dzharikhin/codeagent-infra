@@ -6,6 +6,7 @@ from typing import List, Optional
 from opencode_framework.agent.registry import (
     DEFAULT_TOOL,
     get_tool_spec,
+    managed_volume_keys,
     managed_volume_name,
 )
 from opencode_framework.generators.base import FileGenerator, GenerationContext
@@ -122,6 +123,12 @@ class ComposeGenerator(FileGenerator):
             f"      - {managed_volume_name('docker', repo_name, spec.name)}:"
             f"/var/lib/docker"
         )
+        managed_volume_entries = (
+            managed_volume_keys("venv", repo_name, spec.name)
+            + managed_volume_keys("m2", repo_name, spec.name)
+            + managed_volume_keys("gradle", repo_name, spec.name)
+            + managed_volume_keys("docker", repo_name, spec.name)
+        )
         managed_lines = {
             venv_mount,
             legacy_venv_mount,
@@ -132,6 +139,7 @@ class ComposeGenerator(FileGenerator):
             f"  {managed_volume_name('m2', repo_name, spec.name)}:",
             f"  {managed_volume_name('gradle', repo_name, spec.name)}:",
             f"  {managed_volume_name('docker', repo_name, spec.name)}:",
+            *managed_volume_entries,
             "    privileged: true",
         }
 
@@ -193,16 +201,14 @@ class ComposeGenerator(FileGenerator):
 
         vol_keys: List[str] = []
         if "python" in optional_features:
-            vol_keys.append(f"  {managed_volume_name('venv', repo_name, spec.name)}:")
+            vol_keys.extend(managed_volume_keys("venv", repo_name, spec.name))
         if has_docker:
-            vol_keys.append(f"  {managed_volume_name('docker', repo_name, spec.name)}:")
+            vol_keys.extend(managed_volume_keys("docker", repo_name, spec.name))
         if "java" in optional_features:
             if has_maven:
-                vol_keys.append(f"  {managed_volume_name('m2', repo_name, spec.name)}:")
+                vol_keys.extend(managed_volume_keys("m2", repo_name, spec.name))
             if has_gradle:
-                vol_keys.append(
-                    f"  {managed_volume_name('gradle', repo_name, spec.name)}:"
-                )
+                vol_keys.extend(managed_volume_keys("gradle", repo_name, spec.name))
         if vol_keys:
             lines = ComposeGenerator._ensure_volumes_block_lines(lines, vol_keys)
 

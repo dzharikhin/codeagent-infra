@@ -1107,10 +1107,12 @@ class TestLaunchAcp:
         captured: list = []
         cleanups: list = []
         redirected: list = []
+        popen_envs: list = []
         child = child if child is not None else _FakeAcpChild()
 
         def fake_popen(cmd, **kw):
             captured.append(list(cmd))
+            popen_envs.append(kw.get("env", {}))
             return child
 
         def mock_run(*args, **kw):
@@ -1150,7 +1152,7 @@ class TestLaunchAcp:
 
         monkeypatch.setattr(app_module, "_compose_cleanup", recording_cleanup)
         monkeypatch.chdir(tmp_path)
-        return app_module, captured, cleanups, redirected
+        return app_module, captured, cleanups, redirected, popen_envs
 
     def _invoke(self, app_module, args: list):
         from typer.testing import CliRunner
@@ -1160,11 +1162,11 @@ class TestLaunchAcp:
     def test_acp_command_shape(self, tmp_path: Path, monkeypatch):
         """--acp runs opencode acp with -T, no TTY flags, and no publishing."""
         self._setup_repo(tmp_path)
-        app_module, captured, _, redirected = self._patch_launch_deps(
+        app_module, captured, _, redirected, _ = self._patch_launch_deps(
             monkeypatch, tmp_path
         )
 
-        result = self._invoke(app_module, ["launch", "--acp"])
+        result = self._invoke(app_module, ["launch", "--acp", "zed"])
 
         assert result.exit_code == 0
         assert redirected == [True]
@@ -1172,7 +1174,8 @@ class TestLaunchAcp:
         cmd = captured[0]
         assert cmd[:6] == ["docker", "compose", "-f", cmd[3], "run", "--rm"]
         assert "-T" in cmd
-        assert "--name" in cmd and "ocf_repo" in cmd
+        name_idx = cmd.index("--name")
+        assert cmd[name_idx + 1] == "ocf_repo_zed"
         assert "--service-ports" not in cmd
         assert "--publish" not in cmd
         assert cmd[-2:] == ["opencode", "acp"]
@@ -1180,11 +1183,11 @@ class TestLaunchAcp:
     def test_acp_qwen_command_tail(self, tmp_path: Path, monkeypatch):
         """--acp with qwen appends the qwen --acp flag."""
         self._setup_repo(tmp_path, tool="qwen")
-        app_module, captured, _, _ = self._patch_launch_deps(
+        app_module, captured, _, _, _ = self._patch_launch_deps(
             monkeypatch, tmp_path, tool="qwen"
         )
 
-        result = self._invoke(app_module, ["launch", "--acp"])
+        result = self._invoke(app_module, ["launch", "--acp", "zed"])
 
         assert result.exit_code == 0
         assert captured[0][-2:] == ["qwen", "--acp"]
@@ -1192,21 +1195,56 @@ class TestLaunchAcp:
     def test_acp_pass_through_args_reach_container(self, tmp_path: Path, monkeypatch):
         """Args after -- pass through to the ACP agent command."""
         self._setup_repo(tmp_path)
-        app_module, captured, _, _ = self._patch_launch_deps(monkeypatch, tmp_path)
+        app_module, captured, _, _, _ = self._patch_launch_deps(monkeypatch, tmp_path)
 
-        result = self._invoke(app_module, ["launch", "--acp", "--", "debug", "config"])
+        result = self._invoke(
+            app_module, ["launch", "--acp", "zed", "--", "debug", "config"]
+        )
 
         assert result.exit_code == 0
         assert captured[0][-4:] == ["opencode", "acp", "debug", "config"]
+
+    def test_acp_sets_session_suffix_env(self, tmp_path: Path, monkeypatch):
+        """ACP launch exports OCF_SESSION_SUFFIX=_<postfix> to the child."""
+        self._setup_repo(tmp_path)
+        app_module, _, _, _, popen_envs = self._patch_launch_deps(monkeypatch, tmp_path)
+
+        result = self._invoke(app_module, ["launch", "--acp", "zed"])
+
+        assert result.exit_code == 0
+        assert popen_envs
+        assert popen_envs[0]["OCF_SESSION_SUFFIX"] == "_zed"
+
+    def test_plain_launch_omits_session_suffix_env(self, tmp_path: Path, monkeypatch):
+        """Plain launch strips OCF_SESSION_SUFFIX so shared volumes stay bare."""
+        self._setup_repo(tmp_path)
+        app_module, captured, _, _, _ = self._patch_launch_deps(monkeypatch, tmp_path)
+        run_envs: list = []
+        real_mock_run = app_module.subprocess.run
+
+        def recording_run(*args, **kw):
+            cmd = list(args[0]) if args else []
+            if cmd[:2] == ["docker", "compose"] and "run" in cmd:
+                run_envs.append(dict(kw.get("env", {})))
+                captured.append(cmd)
+            return real_mock_run(*args, **kw)
+
+        monkeypatch.setattr(app_module.subprocess, "run", recording_run)
+
+        result = self._invoke(app_module, ["launch"])
+
+        assert result.exit_code == 0
+        assert run_envs
+        assert "OCF_SESSION_SUFFIX" not in run_envs[0]
 
     def test_acp_skips_service_ports_with_wizard_ports(
         self, tmp_path: Path, monkeypatch
     ):
         """--acp neither republishes wizard ports nor uses --service-ports."""
         self._setup_repo(tmp_path, ports_block="    ports:\n      - 8080:8080\n")
-        app_module, captured, _, _ = self._patch_launch_deps(monkeypatch, tmp_path)
+        app_module, captured, _, _, _ = self._patch_launch_deps(monkeypatch, tmp_path)
 
-        result = self._invoke(app_module, ["launch", "--acp"])
+        result = self._invoke(app_module, ["launch", "--acp", "zed"])
 
         assert result.exit_code == 0
         cmd = captured[0]
@@ -1217,11 +1255,11 @@ class TestLaunchAcp:
         """launch exits with the ACP session's exit code."""
         self._setup_repo(tmp_path)
         child = _FakeAcpChild(returncode=7)
-        app_module, captured, _, _ = self._patch_launch_deps(
+        app_module, captured, _, _, _ = self._patch_launch_deps(
             monkeypatch, tmp_path, child=child
         )
 
-        result = self._invoke(app_module, ["launch", "--acp"])
+        result = self._invoke(app_module, ["launch", "--acp", "zed"])
 
         assert result.exit_code == 7
         assert len(captured) == 1
@@ -1230,14 +1268,14 @@ class TestLaunchAcp:
         """A child killed by SIGTERM (-15) exits 143 and cleans up."""
         self._setup_repo(tmp_path)
         child = _FakeAcpChild(returncode=-15)
-        app_module, captured, cleanups, _ = self._patch_launch_deps(
+        app_module, captured, cleanups, _, _ = self._patch_launch_deps(
             monkeypatch, tmp_path, child=child
         )
 
-        result = self._invoke(app_module, ["launch", "--acp"])
+        result = self._invoke(app_module, ["launch", "--acp", "zed"])
 
         assert result.exit_code == 143
-        assert cleanups == ["ocf_repo"]
+        assert cleanups == ["ocf_repo_zed"]
         assert len(captured) == 1
 
     def test_acp_keyboard_interrupt_terminates_and_cleans_up(
@@ -1246,53 +1284,136 @@ class TestLaunchAcp:
         """Ctrl+C during the ACP session terminates the child and exits 130."""
         self._setup_repo(tmp_path)
         child = _FakeAcpChild(interrupt_on_read=True)
-        app_module, captured, cleanups, _ = self._patch_launch_deps(
+        app_module, captured, cleanups, _, _ = self._patch_launch_deps(
             monkeypatch, tmp_path, child=child
         )
 
-        result = self._invoke(app_module, ["launch", "--acp"])
+        result = self._invoke(app_module, ["launch", "--acp", "zed"])
 
         assert result.exit_code == 130
         assert child.terminated
-        assert cleanups == ["ocf_repo"]
+        assert cleanups == ["ocf_repo_zed"]
         assert len(captured) == 1
 
-    def test_acp_rejects_running_container(self, tmp_path: Path, monkeypatch):
-        """--acp never attaches: a running container is a hard error."""
+    def test_acp_replaces_running_container(self, tmp_path: Path, monkeypatch):
+        """--acp never attaches: existing container is removed for a fresh run."""
         self._setup_repo(tmp_path)
-        app_module, captured, cleanups, _ = self._patch_launch_deps(
+        app_module, captured, cleanups, redirected, _ = self._patch_launch_deps(
             monkeypatch, tmp_path, container_status="running"
         )
 
-        result = self._invoke(app_module, ["launch", "--acp"])
+        result = self._invoke(app_module, ["launch", "--acp", "zed"])
+
+        assert result.exit_code == 0
+        assert redirected == [True]
+        assert len(captured) == 1
+        assert "Removing existing container 'ocf_repo_zed'" in result.output
+        assert "Removed container 'ocf_repo_zed'" in result.output
+        assert cleanups == []
+
+    def test_acp_replaces_stopped_container(self, tmp_path: Path, monkeypatch):
+        """--acp removes a stopped container too and starts a session."""
+        self._setup_repo(tmp_path)
+        app_module, captured, _, redirected, _ = self._patch_launch_deps(
+            monkeypatch, tmp_path, container_status="exited"
+        )
+
+        result = self._invoke(app_module, ["launch", "--acp", "zed"])
+
+        assert result.exit_code == 0
+        assert redirected == [True]
+        assert len(captured) == 1
+        assert "Removing existing container 'ocf_repo_zed'" in result.output
+
+    def test_acp_removal_failure_is_fatal(self, tmp_path: Path, monkeypatch):
+        """--acp aborts when the existing container cannot be removed."""
+        self._setup_repo(tmp_path)
+        app_module, captured, cleanups, _, _ = self._patch_launch_deps(
+            monkeypatch, tmp_path, container_status="running"
+        )
+        monkeypatch.setattr(app_module, "_remove_container", lambda name, env: False)
+
+        result = self._invoke(app_module, ["launch", "--acp", "zed"])
 
         assert result.exit_code == 1
-        assert "already running" in result.output
-        assert "--acp --force" in result.output
+        assert "failed to remove container 'ocf_repo_zed'" in result.output
+        assert "docker rm -f ocf_repo_zed" in result.output
         assert captured == []
         assert cleanups == []
 
     def test_acp_force_removes_running_container(self, tmp_path: Path, monkeypatch):
         """--acp --force removes the running container and starts a session."""
         self._setup_repo(tmp_path)
-        app_module, captured, _, redirected = self._patch_launch_deps(
+        app_module, captured, _, redirected, _ = self._patch_launch_deps(
             monkeypatch, tmp_path, container_status="running"
         )
 
-        result = self._invoke(app_module, ["launch", "--acp", "--force"])
+        result = self._invoke(app_module, ["launch", "--acp", "zed", "--force"])
 
         assert result.exit_code == 0
         assert redirected == [True]
         assert len(captured) == 1
 
+    def test_acp_requires_postfix(self, tmp_path: Path, monkeypatch):
+        """Bare --acp is a usage error: the postfix value is required."""
+        self._setup_repo(tmp_path)
+        app_module, captured, _, _, _ = self._patch_launch_deps(monkeypatch, tmp_path)
+
+        result = self._invoke(app_module, ["launch", "--acp"])
+
+        assert result.exit_code == 2
+        assert "requires an argument" in result.output
+        assert captured == []
+
+    def test_acp_rejects_invalid_postfix(self, tmp_path: Path, monkeypatch):
+        """A postfix outside the docker name charset is rejected."""
+        self._setup_repo(tmp_path)
+        app_module, captured, _, _, _ = self._patch_launch_deps(monkeypatch, tmp_path)
+
+        result = self._invoke(app_module, ["launch", "--acp", "bad postfix!"])
+
+        assert result.exit_code == 1
+        assert "invalid --acp postfix" in result.output
+        assert captured == []
+
+    def test_acp_leading_flag_becomes_invalid_postfix(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """--acp --server: click consumes the flag as the value; rejected."""
+        self._setup_repo(tmp_path)
+        app_module, captured, _, _, _ = self._patch_launch_deps(monkeypatch, tmp_path)
+
+        result = self._invoke(app_module, ["launch", "--acp", "--server"])
+
+        assert result.exit_code == 1
+        assert "invalid --acp postfix" in result.output
+        assert captured == []
+
+    def test_acp_requires_container_name_in_compose(self, tmp_path: Path, monkeypatch):
+        """ACP needs a deterministic base name: missing container_name is fatal."""
+        config = tmp_path / ".opencode"
+        config.mkdir()
+        (config / "docker-compose.yaml").write_text(
+            "services:\n  opencode:\n    image: busybox\n"
+        )
+        (config / ".env").write_text("REMOTE_USER=root\nOCF_AGENT_TOOL=opencode\n")
+        app_module, captured, _, _, _ = self._patch_launch_deps(monkeypatch, tmp_path)
+
+        result = self._invoke(app_module, ["launch", "--acp", "zed"])
+
+        assert result.exit_code == 1
+        assert "container_name" in result.output
+        assert "init --force" in result.output
+        assert captured == []
+
     def test_acp_rejected_for_dsh(self, tmp_path: Path, monkeypatch):
         """dsh has no ACP mode: hard error with a --server remediation."""
         self._setup_repo(tmp_path, tool="dsh")
-        app_module, captured, _, _ = self._patch_launch_deps(
+        app_module, captured, _, _, _ = self._patch_launch_deps(
             monkeypatch, tmp_path, tool="dsh"
         )
 
-        result = self._invoke(app_module, ["launch", "--acp"])
+        result = self._invoke(app_module, ["launch", "--acp", "zed"])
 
         assert result.exit_code == 1
         assert "does not support ACP mode" in result.output
@@ -1302,9 +1423,9 @@ class TestLaunchAcp:
     def test_acp_rejects_server_combination(self, tmp_path: Path, monkeypatch):
         """--acp and --server are mutually exclusive."""
         self._setup_repo(tmp_path)
-        app_module, captured, _, _ = self._patch_launch_deps(monkeypatch, tmp_path)
+        app_module, captured, _, _, _ = self._patch_launch_deps(monkeypatch, tmp_path)
 
-        result = self._invoke(app_module, ["launch", "--acp", "--server"])
+        result = self._invoke(app_module, ["launch", "--acp", "zed", "--server"])
 
         assert result.exit_code == 1
         assert "mutually exclusive" in result.output
@@ -1315,7 +1436,7 @@ class TestLaunchAcp:
     ):
         """Regression: plain launch Ctrl+C still cleans up and exits 130."""
         self._setup_repo(tmp_path)
-        app_module, captured, cleanups, _ = self._patch_launch_deps(
+        app_module, captured, cleanups, _, _ = self._patch_launch_deps(
             monkeypatch, tmp_path
         )
         cleanups.clear()  # reuse the recorder, not the Popen path

@@ -844,6 +844,24 @@ def _extract_container_name(compose_path: Path) -> Optional[str]:
     return None
 
 
+_ACP_POSTFIX_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
+
+
+def _is_valid_acp_postfix(postfix: str) -> bool:
+    """Check the container-name postfix passed to ``--acp``.
+
+    The postfix becomes part of a Docker container name, which only
+    accepts ``[a-zA-Z0-9][a-zA-Z0-9_.-]*``.
+
+    Args:
+        postfix: Value passed via ``--acp``.
+
+    Returns:
+        True when the postfix is safe to append to a container name.
+    """
+    return bool(_ACP_POSTFIX_RE.match(postfix))
+
+
 def _get_container_status(container_name: str, subprocess_env: dict) -> Optional[str]:
     """Get the status of a container.
 
@@ -1266,12 +1284,17 @@ def launch(
         "-f",
         help="Remove any existing container and cached image ID, forcing a fresh build",
     ),
-    acp: bool = typer.Option(
-        False,
+    acp: Optional[str] = typer.Option(
+        None,
         "--acp",
+        metavar="POSTFIX",
         help=(
             "Run the agent in ACP (Agent Client Protocol) mode: the editor "
-            "speaks JSON-RPC to the sandboxed agent over stdio"
+            "speaks JSON-RPC to the sandboxed agent over stdio. POSTFIX is "
+            "required and is appended to the container name "
+            "(ocf_<repo>_<tool>_<postfix>); an existing container with that "
+            "name is replaced, so reuse a postfix to restart a session or "
+            "pick a unique one per editor instance"
         ),
     ),
 ) -> None:
@@ -1285,7 +1308,10 @@ def launch(
 
     With --acp the agent runs in ACP mode (Agent Client Protocol): launch
     speaks JSON-RPC over stdio so ACP-compatible editors (Zed, JetBrains,
-    Neovim) can drive the sandboxed agent. All launch chatter moves to
+    Neovim) can drive the sandboxed agent. A POSTFIX is required and is
+    appended to the container name (ocf_<repo>_<tool>_<postfix>); any
+    existing container with that name is removed first, so reusing a
+    postfix replaces the previous session. All launch chatter moves to
     stderr; stdout carries only the protocol stream. --server conflicts
     with --acp, and dsh (Web UI based) has no ACP mode.
 
@@ -1313,7 +1339,7 @@ def launch(
         ocframework launch -e API_KEY=$HOME/.key -e DEBUG=true
         ocframework launch --server
         ocframework launch --server=5000
-        ocframework launch --tool opencode --acp
+        ocframework launch --tool opencode --acp zed
     """
     # In ACP mode the editor owns stdout (JSON-RPC transport), so move
     # launch's own output to stderr before anything is printed. This also
@@ -1345,7 +1371,21 @@ def launch(
 
     config_dir, spec = _select_launch_target(repo_root, tool, env_file, env_vars)
 
-    if acp:
+    if acp is not None:
+        if not _is_valid_acp_postfix(acp):
+            typer.secho(
+                f"Error: invalid --acp postfix '{acp}': use letters, digits, "
+                "'_', '.' or '-', starting with a letter or digit.",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            typer.secho(
+                "Remediation: pass a short unique name after --acp, e.g. "
+                "'ocframework launch --acp zed'.",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+            raise typer.Exit(1)
         peek_server, _peek_remaining = _extract_server_arg(list(ctx.args))
         if peek_server is not None:
             typer.secho(
@@ -1496,25 +1536,64 @@ def launch(
 
     container_name = _extract_container_name(compose_path)
 
-    # Handle existing container: attach if running, otherwise remove
+    if acp:
+        # ACP names the run container deterministically: the compose base
+        # name plus the editor-provided postfix, so concurrent ACP sessions
+        # (different editors) never collide and a reused postfix
+        # deterministically replaces the previous session.
+        if not container_name:
+            typer.secho(
+                f"Error: no 'container_name' entry in {compose_path}; "
+                "ACP mode needs a deterministic container name.",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            typer.secho(
+                "Remediation: run 'ocframework init --force --tool "
+                f"{spec.name}' to regenerate the compose file.",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+            raise typer.Exit(1)
+        container_name = f"{container_name}_{acp}"
+        # Managed volumes interpolate this suffix into their names
+        # (${OCF_SESSION_SUFFIX:-}), so each ACP session gets volumes
+        # unique to its container name — two sessions must never share
+        # /var/lib/docker (dockerd holds a per-volume boltdb lock).
+        subprocess_env["OCF_SESSION_SUFFIX"] = f"_{acp}"
+    else:
+        # Plain launches always use the bare volume names, regardless of
+        # any OCF_SESSION_SUFFIX leaked from the shell or env files.
+        subprocess_env.pop("OCF_SESSION_SUFFIX", None)
+
+    # Handle existing container: ACP replaces it with a fresh session,
+    # plain mode attaches if running, otherwise removes
     if container_name:
         status = _get_container_status(container_name, subprocess_env)
-        if status == "running" and not force:
-            if acp:
+        if acp and status is not None:
+            # ACP never attaches: remove any existing container (running
+            # or stopped) so the stdio JSON-RPC stream starts with a new
+            # session. A removal failure is fatal — a leftover container
+            # would surface as a confusing docker name conflict inside
+            # the protocol stream.
+            typer.secho(
+                f"Removing existing container '{container_name}' (status: {status})...",
+                fg=typer.colors.YELLOW,
+            )
+            if not _remove_container(container_name, subprocess_env):
                 typer.secho(
-                    f"Error: container '{container_name}' is already running; "
-                    "ACP mode requires a fresh container so the stdio "
-                    "JSON-RPC stream starts with a new session.",
+                    f"Error: failed to remove container '{container_name}'.",
                     fg=typer.colors.RED,
                     err=True,
                 )
                 typer.secho(
-                    "Remediation: run 'ocframework launch --acp --force' to "
-                    "remove the running container and start a new one.",
+                    f"Remediation: run 'docker rm -f {container_name}' and retry.",
                     fg=typer.colors.YELLOW,
                     err=True,
                 )
                 raise typer.Exit(1)
+            typer.secho(f"Removed container '{container_name}'.", fg=typer.colors.GREEN)
+        elif status == "running" and not force:
             typer.echo(f"Container '{container_name}' is already running. Attaching...")
             ports = _get_container_ports(container_name, subprocess_env)
             if ports:
