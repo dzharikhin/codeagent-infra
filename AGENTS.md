@@ -322,17 +322,43 @@ Rule: variables shared across parts/tools may be unprefixed; part- or tool-speci
 | Family | Variables |
 |---|---|
 | shared (no prefix) | `REMOTE_USER`, `XDG_*` |
-| sandbox | `OCF_IMAGE_ID`, `OCF_LOCAL_FRAMEWORK_PATH`, `OCF_REMOTE_FRAMEWORK_CONFIG_PATH` |
+| sandbox | `OCF_IMAGE_ID`, `OCF_LOCAL_FRAMEWORK_PATH`, `OCF_LOCAL_PROJECTS_DIR`, `OCF_LOCAL_REPO_ROOT`, `OCF_REMOTE_FRAMEWORK_CONFIG_PATH` |
 | agent tool | `OCF_AGENT_TOOL`, `OCF_AGENT_VERSION` |
 | agent layers | `OCF_GLOBAL_CONFIG_PATH` (dir for opencode, file for qwen/dsh), `OCF_GLOBAL_AUTH_PATH` (opencode, dsh) |
 | agent defaults via env | `OCF_MAIN_MODEL`, `OCF_BUILD_MODEL`, `OCF_SMALL_MODEL`, `OCF_PLAN_MAX_BEFORE_RESPONSE_STEPS`, `OCF_BUILD_MAX_BEFORE_RESPONSE_STEPS` |
 | tool-native (agent's own contract, never OCF-prefixed) | `OPENCODE_*`, `QWEN_*`, `DSH_*`, `DEEPSEEK_API_KEY`, `DEEPSEEK_SEARCH_BASE_URL` |
 
+`OCF_LOCAL_REPO_ROOT` is the project repository's absolute host path; the
+project is mounted read-write at that identical path inside the container
+(`working_dir` matches). `launch` computes it as
+`OCF_LOCAL_PROJECTS_DIR / <repo-name>`: the projects directory comes from the
+env layers (global `.env` < project `.env` < override file < CLI `-e`, `~`
+expanded) and stays host-side — only `OCF_LOCAL_REPO_ROOT` is exported into
+the container. A directly set `OCF_LOCAL_REPO_ROOT` (any env layer) wins
+over the derivation and is also `~`-expanded. When `OCF_LOCAL_PROJECTS_DIR`
+is unset, launch falls back to the repository's parent directory with a
+console note; when the resolved value (direct or derived) is not the actual
+repository root, launch is a hard error with source-specific remediation
+(fix the env file or override per-launch with
+`-e OCF_LOCAL_REPO_ROOT=...` / `-e OCF_LOCAL_PROJECTS_DIR=...`) — this
+prevents Docker from silently auto-creating an empty directory at the wrong
+path.
+Compose references use `${OCF_LOCAL_REPO_ROOT:-${PWD}}`: when the variable is
+unset or empty (e.g. running `docker compose -f <config_dir>/docker-compose.yaml`
+directly), they fall back to `PWD` — invoke from the repository root for the
+fallback to resolve correctly.
+
 Renamed keys are not migrated: a `.env` whose `OCF_AGENT_TOOL` is missing or
 contradicts its config directory (`.opencode/` = opencode, `.qwen/` = qwen,
 `.dsh/` = dsh) is a hard launch error with a re-init remediation — regenerate
 via `ocframework init --force --tool <tool>` (existing directory backed up
-first).
+first). The same applies to harnesses generated before `OCF_LOCAL_REPO_ROOT`
+existed: their compose files still mount the project at `/<repo>` (only the
+python venv mount line is migrated by a feature rebuild); re-run
+`ocframework init --force --tool <tool>` to get host-path mounting. Harnesses
+from before the `OCF_LOCAL_PROJECTS_DIR` split baked the full repo path into
+`.env`: correct while the repository stays put (the direct value is honored),
+but a hard launch error after moving it — re-init to regenerate.
 
 ### Git Worktree Model
 

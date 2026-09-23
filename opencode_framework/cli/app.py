@@ -1001,6 +1001,53 @@ def _build_image(
     return tagged
 
 
+def _resolve_local_repo_root(
+    final_env: Dict[str, str],
+    repo_root: Path,
+    global_env_path: Path,
+) -> Tuple[str, Optional[str]]:
+    """Resolve OCF_LOCAL_REPO_ROOT from the env layers.
+
+    A directly set ``OCF_LOCAL_REPO_ROOT`` (any env layer) wins;
+    otherwise the identity ``${OCF_LOCAL_PROJECTS_DIR}/${repo_name}`` is
+    used. The projects directory comes from the env layers (global .env <
+    project .env < overrides < CLI); ``~`` is expanded. When unset or
+    empty, falls back to the repository's parent directory — consistent
+    with the compose ``${PWD}`` fallback for direct compose runs.
+
+    Args:
+        final_env: Merged environment from the config dir's env layers
+        repo_root: Git-verified repository root
+        global_env_path: Host path of the tool's global .env file,
+            named in the fallback note
+
+    Returns:
+        (repo_root_str, fallback_note). The note is None when the value
+        was set directly or derived from a configured projects dir;
+        otherwise it is a console message naming the global env file and
+        the line to add.
+    """
+    direct_raw = final_env.get("OCF_LOCAL_REPO_ROOT", "").strip()
+    if direct_raw:
+        return str(Path(direct_raw).expanduser()), None
+
+    repo_name = repo_root.name
+    projects_dir_raw = final_env.get("OCF_LOCAL_PROJECTS_DIR", "").strip()
+    if not projects_dir_raw:
+        projects_dir = repo_root.parent
+        note = (
+            "OCF_LOCAL_PROJECTS_DIR not set; deriving project location from "
+            f"the repository path ({projects_dir}). Add "
+            "'OCF_LOCAL_PROJECTS_DIR=<your-projects-dir>' to "
+            f"{global_env_path} to pin where projects live."
+        )
+    else:
+        projects_dir = Path(projects_dir_raw).expanduser()
+        note = None
+
+    return str(projects_dir / repo_name), note
+
+
 @app.command(
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True}
 )
@@ -1133,6 +1180,45 @@ def launch(
         typer.secho(f"Warning: {warning}", fg=typer.colors.YELLOW)
 
     subprocess_env = build_docker_env(final_env, docker_context)
+
+    local_repo_root, fallback_note = _resolve_local_repo_root(
+        final_env, repo_root, global_env_path
+    )
+    if fallback_note:
+        typer.secho(f"Note: {fallback_note}", fg=typer.colors.YELLOW)
+    direct_set = bool(final_env.get("OCF_LOCAL_REPO_ROOT", "").strip())
+    if Path(local_repo_root).resolve() != repo_root.resolve():
+        if direct_set:
+            typer.secho(
+                f"Error: OCF_LOCAL_REPO_ROOT mismatch: {local_repo_root} does "
+                f"not match the actual repository root {repo_root}.",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            typer.secho(
+                "Remediation: fix or remove OCF_LOCAL_REPO_ROOT in the env "
+                "files, or override it for this launch with "
+                "'ocframework launch -e OCF_LOCAL_REPO_ROOT=<repo-root>'.",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+        else:
+            typer.secho(
+                f"Error: OCF_LOCAL_PROJECTS_DIR mismatch: derived project path "
+                f"{local_repo_root} does not match the actual repository root "
+                f"{repo_root}.",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            typer.secho(
+                "Remediation: update OCF_LOCAL_PROJECTS_DIR in "
+                f"{global_env_path}, or override it for this project with "
+                "'ocframework launch -e OCF_LOCAL_PROJECTS_DIR=<projects-dir>'.",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+        raise typer.Exit(1)
+    subprocess_env["OCF_LOCAL_REPO_ROOT"] = local_repo_root
 
     compose_path = config_dir / "docker-compose.yaml"
 

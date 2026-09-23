@@ -102,6 +102,12 @@ class ComposeGenerator(FileGenerator):
         spec = get_tool_spec(agent_tool)
         venv_mount = (
             f"      - {managed_volume_name('venv', repo_name, spec.name)}:"
+            f"${{OCF_LOCAL_REPO_ROOT:-${{PWD}}}}/.venv"
+        )
+        # Pre-OCF_LOCAL_REPO_ROOT files mounted the venv at /<repo>/.venv;
+        # kept here so feature rebuilds strip the legacy line too.
+        legacy_venv_mount = (
+            f"      - {managed_volume_name('venv', repo_name, spec.name)}:"
             f"/{repo_name}/.venv"
         )
         m2_mount = (
@@ -118,6 +124,7 @@ class ComposeGenerator(FileGenerator):
         )
         managed_lines = {
             venv_mount,
+            legacy_venv_mount,
             m2_mount,
             gradle_mount,
             docker_mount,

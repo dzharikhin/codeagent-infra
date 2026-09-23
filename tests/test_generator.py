@@ -221,6 +221,19 @@ class TestEnvFileGeneration:
         assert "OCF_BUILD_MODEL" in env_content
         assert "OCF_SMALL_MODEL" in env_content
 
+    def test_env_does_not_bake_repo_root_path(self, tmp_path: Path):
+        """.env must not bake the repo location; launch derives it per-run."""
+        repo_root = tmp_path / "myproject"
+        repo_root.mkdir()
+        (repo_root / ".opencode").mkdir()
+        ctx = _make_generation_context(repo_root)
+
+        gen = ConfigFilesGenerator()
+        gen.generate(ctx)
+
+        env_content = (repo_root / ".opencode" / ".env").read_text()
+        assert "OCF_LOCAL_REPO_ROOT" not in env_content
+
 
 class TestLaunchCommands:
     """Tests for host-side launch command generation."""
@@ -477,7 +490,28 @@ class TestComposeGenerator:
         compose_content = (opencode_dir / "docker-compose.yaml").read_text()
         assert "venv-myproject-opencode" in compose_content
         assert "volumes:" in compose_content
-        assert "/myproject/.venv" in compose_content
+        assert "${OCF_LOCAL_REPO_ROOT:-${PWD}}/.venv" in compose_content
+
+    def test_project_mounted_at_host_path(self, tmp_path: Path):
+        """Compose mounts the project at its host path and sets working_dir."""
+        repo_root = tmp_path / "myproject"
+        repo_root.mkdir()
+        opencode_dir = repo_root / ".opencode"
+        opencode_dir.mkdir()
+
+        ctx = _make_generation_context(repo_root)
+
+        gen = ComposeGenerator()
+        gen.generate(ctx)
+
+        compose_content = (opencode_dir / "docker-compose.yaml").read_text()
+        assert "working_dir: ${OCF_LOCAL_REPO_ROOT:-${PWD}}" in compose_content
+        assert (
+            "- ${OCF_LOCAL_REPO_ROOT:-${PWD}}:${OCF_LOCAL_REPO_ROOT:-${PWD}}"
+            in compose_content
+        )
+        assert "- OCF_LOCAL_REPO_ROOT=${OCF_LOCAL_REPO_ROOT:-${PWD}}" in compose_content
+        assert "/myproject" not in compose_content
 
     def test_no_python_feature_no_venv_volume(self, tmp_path: Path):
         """Without Python feature, no venv volume should be added."""
@@ -631,7 +665,7 @@ class TestComposeGenerator:
         compose_content = (opencode_dir / "docker-compose.yaml").read_text()
         assert "venv-myproject-opencode" in compose_content
         assert "m2-myproject-opencode" in compose_content
-        assert "/myproject/.venv" in compose_content
+        assert "${OCF_LOCAL_REPO_ROOT:-${PWD}}/.venv" in compose_content
         assert "/home/${REMOTE_USER}/.m2" in compose_content
         assert (
             compose_content.count("volumes:") == 2

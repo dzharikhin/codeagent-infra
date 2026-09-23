@@ -147,7 +147,7 @@ class TestGeneratedConfig:
         assert "name" in result
         assert "features" in result
         assert "workspaceFolder" in result
-        assert result["workspaceFolder"] == "/${localWorkspaceFolderBasename}"
+        assert result["workspaceFolder"] == "${localWorkspaceFolder}"
 
     def test_devcontainer_no_remote_env(self, tmp_path: Path):
         """Test that generated devcontainer has no remoteEnv (moved to compose)."""
