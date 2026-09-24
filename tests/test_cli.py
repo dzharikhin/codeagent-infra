@@ -5,6 +5,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -1074,6 +1075,42 @@ class _FakeAcpChild:
         return self._returncode
 
 
+class _BlockingAcpStdout:
+    """stdout stand-in that blocks on readline until the child is signaled."""
+
+    def __init__(self, done: threading.Event):
+        self._done = done
+
+    def readline(self) -> bytes:
+        self._done.wait(timeout=10)
+        return b""
+
+
+class _HungAcpChild(_FakeAcpChild):
+    """ACP child whose stdout never reaches EOF until it is signaled.
+
+    Simulates a hung ``docker compose run`` client: the ACP pump blocks
+    on readline forever unless the watchdog terminates the child.
+    """
+
+    def __init__(self):
+        super().__init__(stdout=b"", returncode=0)
+        self._done = threading.Event()
+        self.stdout = _BlockingAcpStdout(self._done)
+        self.terminated = False
+
+    def poll(self):
+        return None
+
+    def terminate(self):
+        self.terminated = True
+        self._done.set()
+
+    def kill(self):
+        self.terminated = True
+        self._done.set()
+
+
 class TestLaunchAcp:
     """Tests for the --acp option of ``ocframework launch``."""
 
@@ -1100,6 +1137,7 @@ class TestLaunchAcp:
         tool: str = "opencode",
         child: _FakeAcpChild = None,
         container_status: str = "",
+        container_status_sequence: list | None = None,
     ):
         import importlib
 
@@ -1109,6 +1147,7 @@ class TestLaunchAcp:
         redirected: list = []
         popen_envs: list = []
         child = child if child is not None else _FakeAcpChild()
+        inspect_calls = {"count": 0}
 
         def fake_popen(cmd, **kw):
             captured.append(list(cmd))
@@ -1119,7 +1158,14 @@ class TestLaunchAcp:
             cmd = list(args[0]) if args else args[1].get("args", [])
             result = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
             if cmd[:2] == ["docker", "inspect"] and "--format" in cmd:
-                result.stdout = container_status
+                if container_status_sequence is not None:
+                    idx = min(
+                        inspect_calls["count"], len(container_status_sequence) - 1
+                    )
+                    inspect_calls["count"] += 1
+                    result.stdout = container_status_sequence[idx]
+                else:
+                    result.stdout = container_status
             return result
 
         def fake_redirect():
@@ -1146,9 +1192,9 @@ class TestLaunchAcp:
         monkeypatch.setattr(app_module, "_acp_redirect_stdout_to_stderr", fake_redirect)
         real_cleanup = app_module._compose_cleanup
 
-        def recording_cleanup(name, compose_path, env):
+        def recording_cleanup(name, compose_path, env, **kw):
             cleanups.append(name)
-            real_cleanup(name, compose_path, env)
+            real_cleanup(name, compose_path, env, **kw)
 
         monkeypatch.setattr(app_module, "_compose_cleanup", recording_cleanup)
         monkeypatch.chdir(tmp_path)
@@ -1324,6 +1370,72 @@ class TestLaunchAcp:
         assert redirected == [True]
         assert len(captured) == 1
         assert "Removing existing container 'ocf_repo_zed'" in result.output
+
+    def test_acp_watchdog_exits_137_when_container_removed(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """External container removal ends a hung ACP session with exit 137."""
+        from opencode_framework.sandbox.watchdog import WatchdogConfig
+
+        self._setup_repo(tmp_path)
+        child = _HungAcpChild()
+        app_module, captured, cleanups, _, _ = self._patch_launch_deps(
+            monkeypatch,
+            tmp_path,
+            child=child,
+            # inspect calls: pre-launch check, watchdog arm, watchdog trigger
+            container_status_sequence=["running", "running", "removed"],
+        )
+        real_watchdog = app_module.ContainerExitWatchdog
+
+        def fast_watchdog(**kw):
+            return real_watchdog(
+                config=WatchdogConfig(
+                    poll_interval=0.05, grace_period=0.2, terminate_grace=0.1
+                ),
+                **kw,
+            )
+
+        monkeypatch.setattr(app_module, "ContainerExitWatchdog", fast_watchdog)
+
+        result = self._invoke(app_module, ["launch", "--acp", "zed"])
+
+        assert result.exit_code == 137
+        assert child.terminated
+        assert cleanups == ["ocf_repo_zed"]
+        assert "stopped or removed externally" in result.output
+        assert len(captured) == 1
+
+    def test_acp_watchdog_quiet_while_container_running(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """A running container never triggers the watchdog exit path."""
+        from opencode_framework.sandbox.watchdog import WatchdogConfig
+
+        self._setup_repo(tmp_path)
+        app_module, captured, cleanups, _, _ = self._patch_launch_deps(
+            monkeypatch,
+            tmp_path,
+            container_status_sequence=["running"],
+        )
+        real_watchdog = app_module.ContainerExitWatchdog
+
+        def fast_watchdog(**kw):
+            return real_watchdog(
+                config=WatchdogConfig(
+                    poll_interval=0.05, grace_period=0.2, terminate_grace=0.1
+                ),
+                **kw,
+            )
+
+        monkeypatch.setattr(app_module, "ContainerExitWatchdog", fast_watchdog)
+
+        result = self._invoke(app_module, ["launch", "--acp", "zed"])
+
+        assert result.exit_code == 0
+        assert "stopped or removed externally" not in result.output
+        assert cleanups == []
+        assert len(captured) == 1
 
     def test_acp_removal_failure_is_fatal(self, tmp_path: Path, monkeypatch):
         """--acp aborts when the existing container cannot be removed."""
@@ -2068,6 +2180,63 @@ class TestParseImageNameFromBuildJson:
     def test_ignores_missing_image_name(self):
         output = '{"outcome":"success"}\n'
         assert _parse_image_name_from_build_json(output) is None
+
+
+class TestGetContainerState:
+    """Tests for _get_container_state removal/status/failure distinction."""
+
+    def _patch_docker(
+        self,
+        monkeypatch,
+        returncode: int = 0,
+        stdout: str = "",
+        stderr: str = "",
+    ):
+        import importlib
+
+        app_module = importlib.import_module("opencode_framework.cli.app")
+        calls: list = []
+
+        def fake_docker(args, env=None, timeout=30):
+            calls.append((list(args), timeout))
+            return subprocess.CompletedProcess(args, returncode, stdout, stderr)
+
+        monkeypatch.setattr(app_module, "_docker", fake_docker)
+        return app_module, calls
+
+    def test_returns_removed_on_no_such_container(self, monkeypatch):
+        app_module, calls = self._patch_docker(
+            monkeypatch, returncode=1, stderr="Error: No such container: ocf_x"
+        )
+        assert app_module._get_container_state("ocf_x", {}) == "removed"
+        assert calls[0][1] == 5
+
+    def test_returns_removed_on_no_such_object(self, monkeypatch):
+        app_module, _ = self._patch_docker(
+            monkeypatch,
+            returncode=1,
+            stderr="Error response from daemon: No such object: ocf_x",
+        )
+        assert app_module._get_container_state("ocf_x", {}) == "removed"
+
+    def test_returns_status_when_container_exists(self, monkeypatch):
+        app_module, _ = self._patch_docker(monkeypatch, stdout="running\n")
+        assert app_module._get_container_state("ocf_x", {}) == "running"
+
+    def test_returns_none_on_daemon_error(self, monkeypatch):
+        app_module, _ = self._patch_docker(
+            monkeypatch,
+            returncode=1,
+            stderr="Cannot connect to the Docker daemon at unix:///x.sock",
+        )
+        assert app_module._get_container_state("ocf_x", {}) is None
+
+    def test_returns_none_when_docker_unavailable(self, monkeypatch):
+        import importlib
+
+        app_module = importlib.import_module("opencode_framework.cli.app")
+        monkeypatch.setattr(app_module, "_docker", lambda *a, **kw: None)
+        assert app_module._get_container_state("ocf_x", {}) is None
 
 
 class TestBuildImageTwoStep:

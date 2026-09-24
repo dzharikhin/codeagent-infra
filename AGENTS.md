@@ -261,7 +261,7 @@ poetry run pytest            # Run tests
 ### CLI Contract
 
 - `ocframework init [--tool opencode|qwen|dsh]` - Initialize framework in a Git repository
-- `ocframework launch [--tool opencode|qwen|dsh] [--acp <postfix>]` - Launch container with the configured agent (`--acp <postfix>`: ACP stdio JSON-RPC mode for editors; supported for opencode and qwen. The postfix is required and appended to the container name; any existing container with that name is removed first — reuse a postfix to replace the previous session)
+- `ocframework launch [--tool opencode|qwen|dsh] [--acp <postfix>]` - Launch container with the configured agent (`--acp <postfix>`: ACP stdio JSON-RPC mode for editors; supported for opencode and qwen. The postfix is required and appended to the container name; any existing container with that name is removed first — reuse a postfix to replace the previous session. A watchdog thread (`sandbox/watchdog.py`) polls the run container once it is observed running and terminates a hung docker client when the container is confirmed stopped/removed externally, so launch exits 137 instead of hanging)
 - `ocframework --version` - Print version and configuration status
 
 All commands require a valid framework repository (installed via `pipx install -e <path>`).

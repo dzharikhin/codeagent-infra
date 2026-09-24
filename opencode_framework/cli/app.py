@@ -64,6 +64,7 @@ from opencode_framework.sandbox.runtime import (
     save_image_id,
     validate_runtime_context,
 )
+from opencode_framework.sandbox.watchdog import ContainerExitWatchdog
 from opencode_framework.wizard import resolve_tool_or_exit, run_wizard
 
 app = typer.Typer(
@@ -883,6 +884,40 @@ def _get_container_status(container_name: str, subprocess_env: dict) -> Optional
     return None
 
 
+def _get_container_state(container_name: str, subprocess_env: dict) -> Optional[str]:
+    """Return the container's lifecycle state, distinguishing removal.
+
+    Unlike :func:`_get_container_status`, which conflates "absent" with
+    "docker failed", this separates the two so callers can react to a
+    confirmed removal without false positives when docker itself is
+    unavailable.
+
+    Args:
+        container_name: Name of the container
+        subprocess_env: Environment variables for subprocess
+
+    Returns:
+        "removed" when docker reports no such container, the state
+        string (e.g. 'running', 'exited') when the container exists, and
+        None only when the query itself failed (timeout, daemon
+        unreachable).
+    """
+    result = _docker(
+        ["inspect", "--format", "{{.State.Status}}", container_name],
+        env=subprocess_env,
+        timeout=5,
+    )
+    if result is None:
+        return None
+    if result.returncode != 0:
+        stderr = (result.stderr or "").lower()
+        if "no such container" in stderr or "no such object" in stderr:
+            return "removed"
+        return None
+    status = result.stdout.strip()
+    return status if status else None
+
+
 def _get_container_ports(container_name: str, subprocess_env: dict) -> Optional[str]:
     """Return the port mapping lines for a running container.
 
@@ -1128,13 +1163,20 @@ def _compose_cleanup(
     container_name: Optional[str],
     compose_path: Path,
     subprocess_env: dict,
+    banner: str = "\nInterrupted. Cleaning up container...",
 ) -> None:
     """Best-effort container cleanup after an interrupted launch.
 
     Force-removes the run container (when named) and tears down leftover
     compose resources. Shared by the plain-launch and ACP interrupt paths.
+
+    Args:
+        container_name: Run container name, when the compose file sets one.
+        compose_path: Path to docker-compose.yaml.
+        subprocess_env: Environment for the cleanup subprocesses.
+        banner: Message printed to stderr before the cleanup runs.
     """
-    typer.echo("\nInterrupted. Cleaning up container...", err=True)
+    typer.echo(banner, err=True)
     if container_name:
         cleanup_cmd = ["docker", "rm", "-f", container_name]
         subprocess.run(cleanup_cmd, env=subprocess_env, capture_output=True)
@@ -1170,6 +1212,11 @@ def _run_acp_session(
     killed by a signal exits with the conventional ``128 + N`` code after
     cleanup (SIGTERM → 143).
 
+    When the run container has a deterministic name, a watchdog thread
+    polls its state and terminates a hung docker child once the container
+    is confirmed stopped or removed externally; launch then cleans up and
+    exits 137.
+
     Args:
         process: The spawned ``docker compose run`` child.
         acp_stdout: Real stdout handle for the pump's envelope writes.
@@ -1177,6 +1224,14 @@ def _run_acp_session(
         container_name: Run container name, when the compose file sets one.
         subprocess_env: Environment for the cleanup subprocesses.
     """
+    watchdog: Optional[ContainerExitWatchdog] = None
+    if container_name:
+        watchdog = ContainerExitWatchdog(
+            container_name=container_name,
+            status_fn=lambda name: _get_container_state(name, subprocess_env),
+            child=process,
+        )
+        watchdog.start()
     previous_handler: Any = signal.getsignal(signal.SIGTERM)
     signal.signal(
         signal.SIGTERM,
@@ -1197,12 +1252,28 @@ def _run_acp_session(
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
+        if watchdog is not None:
+            watchdog.stop()
         if not acp_stdout.closed:
             acp_stdout.close()
 
     if interrupted:
         _compose_cleanup(container_name, compose_path, subprocess_env)
         raise typer.Exit(130) from None
+
+    if watchdog is not None and watchdog.triggered:
+        typer.secho(
+            f"Container '{container_name}' was stopped or removed externally; exiting.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        _compose_cleanup(
+            container_name,
+            compose_path,
+            subprocess_env,
+            banner="Cleaning up after external container stop...",
+        )
+        raise typer.Exit(137) from None
 
     returncode = process.returncode
     if returncode is not None and returncode < 0:
