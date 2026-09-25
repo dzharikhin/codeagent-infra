@@ -303,8 +303,8 @@ class TestLaunchCommand:
         assert ".env" in result.stdout or ".env" in result.stderr
 
 
-class TestLaunchRebuildFeaturePrompt:
-    """Tests that --rebuild wires into interactive feature management.
+class TestReconfigure:
+    """Tests that ``ocframework reconfigure`` wires into feature management.
 
     Heavy runtime/docker dependencies are monkeypatched so the wiring can be
     exercised without Docker or the devcontainer CLI.
@@ -344,14 +344,17 @@ class TestLaunchRebuildFeaturePrompt:
         monkeypatch.setattr(app_module, "load_env_with_overrides", lambda **kw: {})
         monkeypatch.setattr(app_module, "build_docker_env", lambda env, ctx: {})
         monkeypatch.setattr(app_module, "load_image_id", lambda d: None)
+        monkeypatch.setattr(
+            app_module, "_inspect_image_id", lambda ref, env: "sha256:ok"
+        )
         monkeypatch.setattr(app_module, "_build_image", lambda *a, **kw: "sha256:fake")
         monkeypatch.setattr(app_module, "save_image_id", lambda *a, **kw: None)
         monkeypatch.setattr(app_module.subprocess, "run", mock_run)
         monkeypatch.chdir(tmp_path)
         return app_module
 
-    def test_rebuild_invokes_update_features(self, tmp_path: Path, monkeypatch):
-        """--rebuild must call update_features before building."""
+    def test_reconfigure_invokes_update_features(self, tmp_path: Path, monkeypatch):
+        """reconfigure must call update_features before building."""
         self._setup_repo(tmp_path)
         app_module = self._patch_launch_deps(monkeypatch, tmp_path)
 
@@ -365,7 +368,7 @@ class TestLaunchRebuildFeaturePrompt:
 
         from typer.testing import CliRunner
 
-        result = CliRunner().invoke(app_module.app, ["launch", "--rebuild"])
+        result = CliRunner().invoke(app_module.app, ["reconfigure"])
 
         assert result.exit_code == 0
         assert "args" in calls
@@ -373,34 +376,126 @@ class TestLaunchRebuildFeaturePrompt:
         assert calls["args"][1] == tmp_path.name
         assert calls["args"][2] == "opencode"
 
-    def test_rebuild_changed_message(self, tmp_path: Path, monkeypatch):
-        """When features change, the changed message is shown."""
+    def test_reconfigure_builds_and_saves_image_id(self, tmp_path: Path, monkeypatch):
+        """reconfigure always rebuilds and persists the image ID."""
         self._setup_repo(tmp_path)
         app_module = self._patch_launch_deps(monkeypatch, tmp_path)
-        monkeypatch.setattr(app_module, "update_features", lambda *a, **kw: True)
+        saved: list = []
+        monkeypatch.setattr(app_module, "update_features", lambda *a, **kw: False)
+        monkeypatch.setattr(app_module, "_build_image", lambda *a, **kw: "sha256:fresh")
+        monkeypatch.setattr(
+            app_module, "save_image_id", lambda d, image_id: saved.append(image_id)
+        )
 
         from typer.testing import CliRunner
 
-        result = CliRunner().invoke(app_module.app, ["launch", "--rebuild"])
+        result = CliRunner().invoke(app_module.app, ["reconfigure"])
 
         assert result.exit_code == 0
-        assert "Feature configuration changed" in result.output
+        assert saved == ["sha256:fresh"]
+        assert "Reconfiguration complete!" in result.output
+        assert "ocframework launch" in result.output
 
-    def test_rebuild_no_change_message(self, tmp_path: Path, monkeypatch):
-        """When features are unchanged, the normal rebuild message is shown."""
+    def test_reconfigure_never_runs_containers(self, tmp_path: Path, monkeypatch):
+        """reconfigure must not invoke docker compose run."""
         self._setup_repo(tmp_path)
         app_module = self._patch_launch_deps(monkeypatch, tmp_path)
         monkeypatch.setattr(app_module, "update_features", lambda *a, **kw: False)
 
+        compose_calls: list = []
+
+        real_run = app_module.subprocess.run
+
+        def recording_run(*args, **kw):
+            cmd = list(args[0]) if args else args[1].get("args", [])
+            if cmd[:2] == ["docker", "compose"]:
+                compose_calls.append(cmd)
+            return real_run(*args, **kw)
+
+        monkeypatch.setattr(app_module.subprocess, "run", recording_run)
+
         from typer.testing import CliRunner
 
-        result = CliRunner().invoke(app_module.app, ["launch", "--rebuild"])
+        result = CliRunner().invoke(app_module.app, ["reconfigure"])
 
         assert result.exit_code == 0
-        assert "Building devcontainer image (--rebuild specified)" in result.output
+        assert compose_calls == []
 
-    def test_no_rebuild_skips_update_features(self, tmp_path: Path, monkeypatch):
-        """Without --rebuild, update_features must not be called."""
+    def test_reconfigure_removes_stale_container(self, tmp_path: Path, monkeypatch):
+        """After a successful build, the tool's existing container is removed."""
+        self._setup_repo(tmp_path)
+        app_module = self._patch_launch_deps(monkeypatch, tmp_path)
+        monkeypatch.setattr(app_module, "update_features", lambda *a, **kw: False)
+        monkeypatch.setattr(
+            app_module,
+            "_get_container_status",
+            lambda name, env: "running",
+        )
+        removed: list = []
+        monkeypatch.setattr(
+            app_module,
+            "_remove_container",
+            lambda name, env: removed.append(name) or True,
+        )
+
+        from typer.testing import CliRunner
+
+        result = CliRunner().invoke(app_module.app, ["reconfigure"])
+
+        assert result.exit_code == 0
+        assert removed == ["ocf_repo"]
+        assert "Removed container 'ocf_repo'" in result.output
+
+    def test_reconfigure_container_removal_failure_is_not_fatal(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """A failed stale-container removal only warns; exit code stays 0."""
+        self._setup_repo(tmp_path)
+        app_module = self._patch_launch_deps(monkeypatch, tmp_path)
+        monkeypatch.setattr(app_module, "update_features", lambda *a, **kw: False)
+        monkeypatch.setattr(
+            app_module,
+            "_get_container_status",
+            lambda name, env: "running",
+        )
+        monkeypatch.setattr(app_module, "_remove_container", lambda name, env: False)
+
+        from typer.testing import CliRunner
+
+        result = CliRunner().invoke(app_module.app, ["reconfigure"])
+
+        assert result.exit_code == 0
+        assert "failed to remove container" in result.output
+        assert "Reconfiguration complete!" in result.output
+
+    def test_reconfigure_tool_flag_selects_config(self, tmp_path: Path, monkeypatch):
+        """--tool selects the config worktree like launch does."""
+        qwen = tmp_path / ".qwen"
+        qwen.mkdir()
+        (qwen / "docker-compose.yaml").write_text(
+            "services:\n  qwen:\n    container_name: ocf_repo_qwen\n"
+        )
+        (qwen / ".env").write_text("REMOTE_USER=root\nOCF_AGENT_TOOL=qwen\n")
+        app_module = self._patch_launch_deps(monkeypatch, tmp_path)
+
+        calls = {}
+
+        def fake_update(config_dir, repo_name, agent_tool):
+            calls["args"] = (config_dir, repo_name, agent_tool)
+            return False
+
+        monkeypatch.setattr(app_module, "update_features", fake_update)
+
+        from typer.testing import CliRunner
+
+        result = CliRunner().invoke(app_module.app, ["reconfigure", "--tool", "qwen"])
+
+        assert result.exit_code == 0
+        assert calls["args"][0].name == ".qwen"
+        assert calls["args"][2] == "qwen"
+
+    def test_launch_does_not_call_update_features(self, tmp_path: Path, monkeypatch):
+        """Plain launch must never trigger the interactive feature prompt."""
         self._setup_repo(tmp_path)
         app_module = self._patch_launch_deps(monkeypatch, tmp_path)
         monkeypatch.setattr(app_module, "load_image_id", lambda d: "sha256:cached")
@@ -652,6 +747,69 @@ class TestLaunchAttachRemoveFeature:
 
         assert result.exit_code == 0
 
+    def test_launch_missing_cached_image_rebuilds(self, tmp_path: Path, monkeypatch):
+        """A cached image absent from Docker must trigger an automatic rebuild."""
+        self._setup_repo(tmp_path)
+        image_id_path = tmp_path / ".opencode" / "runtime_data" / ".image_id"
+        image_id_path.parent.mkdir(parents=True, exist_ok=True)
+        image_id_path.write_text("ocf-myrepo-opencode:latest")
+
+        build_calls = []
+        app_module = self._patch_launch_deps(
+            monkeypatch, tmp_path, attach_rc=0, inspect_status=None
+        )
+        monkeypatch.setattr(
+            app_module,
+            "_inspect_image_id",
+            lambda ref, env: None,  # image no longer exists
+        )
+        # real load/save_image_id so they reflect the seeded stale file
+        import opencode_framework.sandbox.runtime as rt_module
+
+        monkeypatch.setattr(app_module, "load_image_id", rt_module.load_image_id)
+        monkeypatch.setattr(app_module, "save_image_id", rt_module.save_image_id)
+        monkeypatch.setattr(
+            app_module,
+            "_build_image",
+            lambda *a, **kw: build_calls.append(True) or "sha256:new",
+        )
+
+        from typer.testing import CliRunner
+
+        result = CliRunner().invoke(app_module.app, ["launch"])
+
+        assert result.exit_code == 0
+        assert "not found in Docker; rebuilding" in result.output
+        assert len(build_calls) == 1
+        assert image_id_path.read_text() == "sha256:new"
+
+    def test_launch_present_cached_image_skips_build(self, tmp_path: Path, monkeypatch):
+        """A cached image that still exists must not trigger a rebuild."""
+        self._setup_repo(tmp_path)
+        app_module = self._patch_launch_deps(
+            monkeypatch, tmp_path, attach_rc=0, inspect_status=None
+        )
+        monkeypatch.setattr(app_module, "load_image_id", lambda d: "sha256:cached")
+        monkeypatch.setattr(
+            app_module,
+            "_inspect_image_id",
+            lambda ref, env: "sha256:cached",
+        )
+        monkeypatch.setattr(
+            app_module,
+            "_build_image",
+            lambda *a, **kw: (_ for _ in ()).throw(
+                AssertionError("must not rebuild when the image exists")
+            ),
+        )
+
+        from typer.testing import CliRunner
+
+        result = CliRunner().invoke(app_module.app, ["launch"])
+
+        assert result.exit_code == 0
+        assert "Using existing image: sha256:cached" in result.output
+
     def test_launch_attach_prints_port_mappings(self, tmp_path: Path, monkeypatch):
         """Port mappings must be shown when attaching to a running container."""
         self._setup_repo(tmp_path)
@@ -733,6 +891,9 @@ class TestLaunchServer:
         monkeypatch.setattr(app_module, "load_env_with_overrides", lambda **kw: {})
         monkeypatch.setattr(app_module, "build_docker_env", lambda env, ctx: {})
         monkeypatch.setattr(app_module, "load_image_id", lambda d: "sha256:cached")
+        monkeypatch.setattr(
+            app_module, "_inspect_image_id", lambda ref, env: "sha256:ok"
+        )
         monkeypatch.setattr(app_module, "_build_image", lambda *a, **kw: "sha256:fake")
         monkeypatch.setattr(app_module, "save_image_id", lambda *a, **kw: None)
         monkeypatch.setattr(app_module.subprocess, "run", mock_run)
@@ -1185,6 +1346,9 @@ class TestLaunchAcp:
         )
         monkeypatch.setattr(app_module, "build_docker_env", lambda env, ctx: {})
         monkeypatch.setattr(app_module, "load_image_id", lambda d: "sha256:cached")
+        monkeypatch.setattr(
+            app_module, "_inspect_image_id", lambda ref, env: "sha256:ok"
+        )
         monkeypatch.setattr(app_module, "_build_image", lambda *a, **kw: "sha256:fake")
         monkeypatch.setattr(app_module, "save_image_id", lambda *a, **kw: None)
         monkeypatch.setattr(app_module.subprocess, "run", mock_run)
@@ -1723,6 +1887,9 @@ class TestLaunchToolSpec:
         )
         monkeypatch.setattr(app_module, "build_docker_env", lambda env, ctx: {})
         monkeypatch.setattr(app_module, "load_image_id", lambda d: "sha256:cached")
+        monkeypatch.setattr(
+            app_module, "_inspect_image_id", lambda ref, env: "sha256:ok"
+        )
         monkeypatch.setattr(app_module, "_build_image", lambda *a, **kw: "sha256:fake")
         monkeypatch.setattr(app_module, "save_image_id", lambda *a, **kw: None)
         monkeypatch.setattr(app_module.subprocess, "run", mock_run)
@@ -2016,6 +2183,9 @@ class TestLaunchToolSelection:
         monkeypatch.setattr(app_module, "load_env_with_overrides", lambda **kw: {})
         monkeypatch.setattr(app_module, "build_docker_env", lambda env, ctx: {})
         monkeypatch.setattr(app_module, "load_image_id", lambda d: "sha256:cached")
+        monkeypatch.setattr(
+            app_module, "_inspect_image_id", lambda ref, env: "sha256:ok"
+        )
         monkeypatch.setattr(app_module, "_build_image", lambda *a, **kw: "sha256:fake")
         monkeypatch.setattr(app_module, "save_image_id", lambda *a, **kw: None)
         monkeypatch.setattr(app_module.subprocess, "run", mock_run)

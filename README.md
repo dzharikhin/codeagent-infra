@@ -148,15 +148,19 @@ ocframework launch --docker-context my-context
 
 By default, `DOCKER_CONTEXT=rootless` is used.
 
-To rebuild the image (e.g., after changing devcontainer features):
+To reconfigure the sandbox (e.g., change devcontainer features or port mappings):
 
 ```sh
-ocframework launch --rebuild
+ocframework reconfigure
 ```
 
-When run interactively (stdin is a TTY), `--rebuild` offers to **add or remove devcontainer features** before rebuilding. The current feature set and editor preference are shown, pre-filled as the defaults, so you can toggle docker/python/nodejs/java and the editor (vi/nano) on or off. Only the feature-dependent parts of `.opencode/devcontainer.json` and `.opencode/docker-compose.yaml` are updated; any manual customizations elsewhere are preserved.
+When run interactively (stdin is a TTY), `reconfigure` offers to **add or remove devcontainer features** before rebuilding. The current feature set and editor preference are shown, pre-filled as the defaults, so you can toggle docker/python/nodejs/java and the editor (vi/nano) on or off. Only the feature-dependent parts of `.opencode/devcontainer.json` and `.opencode/docker-compose.yaml` are updated; any manual customizations elsewhere are preserved.
+
+After the prompts it rebuilds the image, updates the cached image ID and removes the tool's existing container (it never starts containers) — the next `ocframework launch` picks up the new image.
 
 In a non-interactive context (e.g. CI, piped stdin) the prompt is skipped and the image rebuilds with the existing configuration.
+
+`launch` self-heals: when the cached image is missing (e.g. pruned by a Docker cleanup), it rebuilds automatically on the next launch. `launch --force` removes any existing container and the cached image ID for a fully fresh session.
 
 ### Docker-in-Docker
 
@@ -231,7 +235,7 @@ You can run the OpenCode server inside the container so that external clients
 to it. This combines the `serve` subcommand with port mappings.
 
 1. **Configure a port mapping.** During `ocframework init`, or interactively via
-   `ocframework launch --rebuild`, add a mapping such as `4096:4096`. Existing
+   `ocframework reconfigure`, add a mapping such as `4096:4096`. Existing
    mappings can be checked in `.opencode/docker-compose.yaml`.
 
 2. **Launch the server**, passing `serve` (and any of its flags) through `launch`:

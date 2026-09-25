@@ -316,6 +316,7 @@ class TestReadmeToolSections:
     def _render(agent_tool: str) -> str:
         return TemplateHandler.render_readme_template(
             launch_command="ocframework launch",
+            reconfigure_command="ocframework reconfigure",
             debug_command="ocframework launch -- debug config",
             shell_command="docker exec -it <container_name> /bin/bash",
             branch_name="codeagent-test",

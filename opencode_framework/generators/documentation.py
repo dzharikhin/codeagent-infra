@@ -27,6 +27,7 @@ class DocumentationGenerator(FileGenerator):
         )
         return {
             "launch": f"ocframework launch --tool {spec.name}",
+            "reconfigure": f"ocframework reconfigure --tool {spec.name}",
             "acp": acp_command,
             "debug": f"ocframework launch --tool {spec.name} -- debug config",
             "shell": "docker exec -it <container_name> /bin/bash",
@@ -39,6 +40,7 @@ class DocumentationGenerator(FileGenerator):
 
         readme_content = TemplateHandler.render_readme_template(
             launch_command=commands["launch"],
+            reconfigure_command=commands["reconfigure"],
             debug_command=commands["debug"],
             shell_command=commands["shell"],
             branch_name=ctx.branch_name,

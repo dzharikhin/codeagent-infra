@@ -39,20 +39,28 @@ launches; `docker-compose.yaml` wires runtime env, mounts and ports.
 Agent install: {{AGENT_INSTALL_LINE}}
 
 {{AGENT_CONFIG_LAYERS_SECTION}}
-## Rebuilding
+## Reconfiguring
 
-To rebuild the image (e.g., after changing features):
+To change the sandbox configuration (devcontainer features, port mappings):
 
 ```sh
-{{LAUNCH_COMMAND}} --rebuild
+{{RECONFIGURE_COMMAND}}
 ```
 
-When run interactively, `--rebuild` first offers to add or remove devcontainer features
+When run interactively, `reconfigure` offers to add or remove devcontainer features
 (docker/python/nodejs/java). For Java, you can also choose
 Maven and/or Gradle as build tools. The current settings are shown as defaults, so you can
 toggle features on or off. Only the feature-dependent parts of `devcontainer.json` and
 `docker-compose.yaml` are updated; manual customizations are preserved. In a non-interactive
 context the prompt is skipped.
+
+After the prompts it rebuilds the image, updates the cached image ID and removes the
+tool's existing container (it never starts containers) — the next `launch` picks up the
+new image.
+
+Plain `launch` self-heals: when the cached image is missing (e.g. pruned by a Docker
+cleanup), it rebuilds automatically. `launch --force` removes any existing container and
+the cached image ID for a fully fresh session.
 
 {{AGENT_SERVE_SECTION}}
 {{AGENT_ACP_SECTION}}

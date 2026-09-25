@@ -515,13 +515,8 @@ def init(
     orchestrator = GenerationOrchestrator()
     orchestrator.generate(repo_path, wizard_result)
 
-    commands = DocumentationGenerator.get_launch_commands(wizard_result.agent_tool)
-
     typer.secho("Initialization complete!", fg=typer.colors.GREEN)
-    typer.echo("\nCommands:")
-    typer.echo(f"  Launch: {commands['launch']}")
-    typer.echo(f"  Debug:  {commands['debug']}")
-    typer.echo(f"  Shell:  {commands['shell']}")
+    _echo_usage_commands(wizard_result.agent_tool)
 
 
 def _verify_build_output(output: str) -> bool:
@@ -671,7 +666,7 @@ def _extract_server_arg(
     - ``--server`` followed by an all-digit token of length 1-5 →
       server=<that token>, both consumed
     - ``--server`` otherwise (end of list, or next token is non-numeric like
-      ``--rebuild`` or ``serve``) → server=""
+      ``serve``) → server=""
     - No ``--server`` present → server=None, list unchanged
 
     Only the first --server occurrence is consumed.
@@ -1344,11 +1339,6 @@ def launch(
             "Agent tool to launch (opencode | qwen | dsh); auto-detected when omitted"
         ),
     ),
-    rebuild: bool = typer.Option(
-        False,
-        "--rebuild",
-        help="Force rebuild of the devcontainer image",
-    ),
     force: bool = typer.Option(
         False,
         "--force",
@@ -1405,7 +1395,6 @@ def launch(
         ocframework launch
         ocframework launch --tool qwen
         ocframework launch --tool dsh --server
-        ocframework launch --rebuild
         ocframework launch --env-file prod.env
         ocframework launch -e API_KEY=$HOME/.key -e DEBUG=true
         ocframework launch --server
@@ -1568,24 +1557,18 @@ def launch(
         )
         raise typer.Exit(1)
 
-    image_id = None
-
     if force and remove_image_id(config_dir):
         typer.echo("Removed cached image ID; image will be rebuilt.")
 
-    if rebuild:
-        if update_features(config_dir, repo_root.name, spec.name):
-            typer.echo("Feature configuration changed; rebuilding image...")
-        else:
-            typer.echo("Building devcontainer image (--rebuild specified)...")
-        image_id = _build_image(config_dir, repo_root, subprocess_env, spec.name)
+    image_id = load_image_id(config_dir)
+    if image_id and _inspect_image_id(image_id, subprocess_env):
+        typer.echo(f"Using existing image: {image_id}")
     else:
-        image_id = load_image_id(config_dir)
         if image_id:
-            typer.echo(f"Using existing image: {image_id}")
+            typer.echo(f"Cached image {image_id} not found in Docker; rebuilding...")
         else:
             typer.echo("Building devcontainer image (no cached image ID found)...")
-            image_id = _build_image(config_dir, repo_root, subprocess_env, spec.name)
+        image_id = _build_image(config_dir, repo_root, subprocess_env, spec.name)
 
     save_image_id(config_dir, image_id)
 
@@ -1773,6 +1756,136 @@ def launch(
         raise typer.Exit(130) from None  # 130 is standard exit code for SIGINT
 
     raise typer.Exit(run_result.returncode)
+
+
+def _echo_usage_commands(agent_tool: str) -> None:
+    """Print the per-tool command summary shared by init and reconfigure.
+
+    Args:
+        agent_tool: Agent tool name ("opencode" | "qwen" | "dsh").
+    """
+    commands = DocumentationGenerator.get_launch_commands(agent_tool)
+    typer.echo("\nCommands:")
+    typer.echo(f"  Launch:      {commands['launch']}")
+    typer.echo(f"  Reconfigure: {commands['reconfigure']}")
+    typer.echo(f"  Debug:       {commands['debug']}")
+    typer.echo(f"  Shell:       {commands['shell']}")
+
+
+@app.command()
+def reconfigure(
+    tool: Optional[str] = typer.Option(
+        None,
+        "--tool",
+        help=(
+            "Agent CLI tool to configure (opencode | qwen | dsh); "
+            "auto-detected when omitted"
+        ),
+    ),
+    docker_context: str = typer.Option(
+        "rootless",
+        "--docker-context",
+        help="Docker context to use",
+    ),
+) -> None:
+    """Reconfigure an existing framework harness interactively.
+
+    Prompts for devcontainer feature changes (docker/python/nodejs/java,
+    Maven/Gradle for Java) and port mappings, rebuilds the image, updates
+    the cached image ID and removes the tool's existing container (never
+    starts one) so the next launch picks up the new image. Feature prompts
+    are skipped silently when stdin is not a TTY.
+    """
+    cwd = Path.cwd()
+
+    repo_root = get_repo_root(cwd)
+    if repo_root is None:
+        typer.secho(
+            "Error: Current directory is not inside a Git working tree",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    if repo_root != cwd.resolve():
+        typer.secho(
+            "Error: Current directory is not the repository root. "
+            f"Run from: {repo_root}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    config_dir, spec = _select_launch_target(repo_root, tool, None, None)
+
+    valid, error = validate_runtime_context(
+        cwd, spec.config_dirname, repo_root=repo_root
+    )
+    if not valid:
+        typer.secho(f"Error: {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+
+    compose_path = config_dir / "docker-compose.yaml"
+    if not compose_path.exists():
+        typer.secho(
+            "Error: docker-compose.yaml not found. Run 'ocframework init' first.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    env_path = config_dir / ".env"
+    global_env_path = expected_global_env_path(spec)
+    warnings: List[str] = []
+
+    try:
+        final_env = load_env_with_overrides(
+            base_env_path=env_path,
+            global_env_path=global_env_path,
+            warnings=warnings,
+        )
+    except EnvError as e:
+        typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from None
+    except FileNotFoundError as e:
+        typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from None
+    except Exception as e:
+        typer.secho(f"Error loading environment: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from None
+
+    for warning in warnings:
+        typer.secho(f"Warning: {warning}", fg=typer.colors.YELLOW)
+
+    subprocess_env = build_docker_env(final_env, docker_context)
+
+    typer.echo("Checking feature configuration...")
+    update_features(config_dir, repo_root.name, spec.name)
+
+    typer.echo("Building devcontainer image...")
+    image_id = _build_image(config_dir, repo_root, subprocess_env, spec.name)
+    save_image_id(config_dir, image_id)
+
+    container_name = _extract_container_name(compose_path)
+    if container_name and _get_container_status(container_name, subprocess_env):
+        typer.secho(
+            f"Removing stale container '{container_name}'...",
+            fg=typer.colors.YELLOW,
+        )
+        if _remove_container(container_name, subprocess_env):
+            typer.secho(f"Removed container '{container_name}'.", fg=typer.colors.GREEN)
+        else:
+            typer.secho(
+                f"Warning: failed to remove container '{container_name}'; "
+                "remove it manually before the next launch.",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+
+    typer.secho("Reconfiguration complete!", fg=typer.colors.GREEN)
+    typer.echo(f"Image rebuilt: {image_id}")
+    typer.echo("Run 'ocframework launch' to start a session.")
+    _echo_usage_commands(spec.name)
 
 
 if __name__ == "__main__":

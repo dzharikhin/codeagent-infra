@@ -510,6 +510,7 @@ class TemplateHandler:
     def render_readme_template(
         cls,
         launch_command: str,
+        reconfigure_command: str,
         debug_command: str,
         shell_command: str,
         branch_name: str,
@@ -523,6 +524,7 @@ class TemplateHandler:
 
         Args:
             launch_command: CLI launch command
+            reconfigure_command: CLI reconfigure command
             debug_command: CLI debug command
             shell_command: CLI shell command
             branch_name: Git branch name for config worktree
@@ -545,6 +547,7 @@ class TemplateHandler:
             "{{AGENT_ACP_SECTION}}": sections["acp"],
             "{{AGENT_DOCS_LINE}}": sections["docs"],
             "{{LAUNCH_COMMAND}}": launch_command,
+            "{{RECONFIGURE_COMMAND}}": reconfigure_command,
             "{{DEBUG_COMMAND}}": debug_command,
             "{{SHELL_COMMAND}}": shell_command,
             "{{BRANCH_NAME}}": branch_name,
