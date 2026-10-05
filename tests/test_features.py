@@ -6,7 +6,13 @@ from typing import List
 
 import pytest
 
-from opencode_framework.generators.templates import TemplateHandler
+from opencode_framework.generators.templates import (
+    GRADLE_ENV_COMMENT,
+    GRADLE_OPTS_LINE,
+    M2_SETTINGS_MOUNT_LINE,
+    NPMRC_MOUNT_LINE,
+    TemplateHandler,
+)
 from opencode_framework.sandbox import features
 from opencode_framework.sandbox.compose import ComposeGenerator
 from opencode_framework.sandbox.devcontainer import DevcontainerGenerator
@@ -265,6 +271,12 @@ class TestRebuildFeatures:
             f"gradle-{self.REPO}-opencode:/home/${{REMOTE_USER}}/.gradle" in text
         ) is ("java" in features and ("gradle" in (java_build_tools or [])))
         assert (f"docker-{self.REPO}-opencode:/var/lib/docker" in text) is has_docker
+        # Host ~/.npmrc mirror mount is tool-agnostic and always present
+        assert NPMRC_MOUNT_LINE in text
+        # Host ~/.m2/settings.xml mirror mount accompanies the Maven feature
+        assert (M2_SETTINGS_MOUNT_LINE in text) is (
+            "java" in features and ("maven" in (java_build_tools or []))
+        )
         if (
             "python" in features
             or (
@@ -463,6 +475,26 @@ class TestRebuildFeatures:
             f"venv-{self.REPO}-opencode:${{OCF_LOCAL_REPO_ROOT:-${{PWD}}}}/.venv"
             in rebuilt
         )
+
+    def test_rebuild_upgrades_legacy_without_npmrc_mount(self):
+        """Harnesses generated before the npmrc mount get it on rebuild."""
+        text = _render_compose(self.REPO, ["python"])
+        legacy = "\n".join(
+            line for line in text.split("\n") if line != NPMRC_MOUNT_LINE
+        )
+        assert NPMRC_MOUNT_LINE not in legacy
+
+        rebuilt = self._rebuild(legacy, ["python"])
+        assert NPMRC_MOUNT_LINE in rebuilt
+        assert rebuilt.count("OCF_NPMRC_PATH") == 1
+
+    def test_rebuild_drops_m2_settings_mount_when_maven_removed(self):
+        """Disabling Maven strips the settings.xml mirror mount."""
+        text = _render_compose(self.REPO, ["java"], java_build_tools=["maven"])
+        assert M2_SETTINGS_MOUNT_LINE in text
+
+        rebuilt = self._rebuild(text, ["java"], java_build_tools=["gradle"])
+        assert M2_SETTINGS_MOUNT_LINE not in rebuilt
 
 
 class TestDetectPorts:
@@ -950,6 +982,30 @@ class TestUpdateFeatures:
         assert "    privileged: true" in compose_after
         assert '["/usr/local/share/docker-init.sh", "opencode"]' in compose_after
 
+    def test_env_reconciled_during_update(self, tmp_path: Path, monkeypatch):
+        """update_features refreshes the feature-dependent .env entries."""
+        monkeypatch.setattr(features, "is_interactive", lambda: True)
+        monkeypatch.setattr(
+            features,
+            "prompt_feature_changes",
+            lambda cur, jbt: (["java"], ["gradle"]),
+        )
+        monkeypatch.setattr(features, "prompt_port_mappings", lambda cur=None: [])
+        monkeypatch.setattr(features, "host_npmrc_path", lambda: "/home/alice/.npmrc")
+        monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
+        opencode_dir = self._seed_opencode(tmp_path, [])
+        env_path = opencode_dir / ".env"
+        env_path.write_text("OCF_AGENT_TOOL=opencode\n")
+
+        result = features.update_features(opencode_dir, tmp_path.name, "opencode")
+
+        assert result is True
+        content = env_path.read_text()
+        assert "OCF_NPMRC_PATH=/home/alice/.npmrc" in content
+        assert "OCF_M2_SETTINGS_PATH=\n" in content
+        assert GRADLE_OPTS_LINE in content
+        assert "OCF_AGENT_TOOL=opencode" in content
+
 
 class TestPromptJavaBuildTools:
     """Unit tests for _prompt_java_build_tools."""
@@ -1084,3 +1140,172 @@ class TestParsePortMappings:
 
     def test_protocol_suffix_preserved(self):
         assert features.parse_port_mappings("8443:443/tcp") == ["8443:443/tcp"]
+
+
+class TestReconcileEnvForFeatures:
+    """Tests for features.reconcile_env_for_features."""
+
+    BASE_ENV = (
+        "REMOTE_USER=root\n"
+        "OCF_LOCAL_FRAMEWORK_PATH=/opt/framework\n"
+        "OCF_REMOTE_FRAMEWORK_CONFIG_PATH=/opt/ocframework/config\n"
+        "OCF_NPMRC_PATH=\n"
+        "OCF_M2_SETTINGS_PATH=\n"
+        "OCF_AGENT_TOOL=opencode\n"
+        "OCF_MAIN_MODEL=anthropic/claude-opus-4-8\n"
+    )
+
+    def _seed(self, tmp_path: Path, text: str = None) -> Path:
+        env_path = tmp_path / ".env"
+        env_path.write_text(text or self.BASE_ENV)
+        return env_path
+
+    def test_no_change_returns_false(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
+        monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
+        env_path = self._seed(tmp_path)
+
+        assert features.reconcile_env_for_features(env_path, []) is False
+        assert env_path.read_text() == self.BASE_ENV
+
+    def test_sets_mirror_paths_from_host_state(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setattr(features, "host_npmrc_path", lambda: "/home/alice/.npmrc")
+        monkeypatch.setattr(
+            features,
+            "host_m2_settings_path",
+            lambda m: "/home/alice/.m2/settings.xml" if m else "",
+        )
+        env_path = self._seed(tmp_path)
+
+        assert features.reconcile_env_for_features(env_path, ["maven"]) is True
+        content = env_path.read_text()
+        assert "OCF_NPMRC_PATH=/home/alice/.npmrc" in content
+        assert "OCF_M2_SETTINGS_PATH=/home/alice/.m2/settings.xml" in content
+        # unrelated lines survive
+        assert "OCF_MAIN_MODEL=anthropic/claude-opus-4-8" in content
+
+    def test_clears_stale_mirror_paths(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
+        monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
+        env_path = self._seed(
+            tmp_path,
+            self.BASE_ENV.replace(
+                "OCF_NPMRC_PATH=", "OCF_NPMRC_PATH=/home/alice/.npmrc\n#dup\n"
+            ).replace(
+                "OCF_M2_SETTINGS_PATH=",
+                "OCF_M2_SETTINGS_PATH=/home/alice/.m2/settings.xml",
+            ),
+        )
+
+        assert features.reconcile_env_for_features(env_path, []) is True
+        content = env_path.read_text()
+        assert "OCF_NPMRC_PATH=\n" in content
+        assert "/home/alice/.npmrc" not in content
+        assert "OCF_M2_SETTINGS_PATH=\n" in content
+
+    def test_m2_settings_cleared_when_maven_deselected(
+        self, tmp_path: Path, monkeypatch
+    ):
+        monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
+        monkeypatch.setattr(
+            features,
+            "host_m2_settings_path",
+            lambda m: "/home/alice/.m2/settings.xml" if m else "",
+        )
+        env_path = self._seed(
+            tmp_path,
+            self.BASE_ENV.replace(
+                "OCF_M2_SETTINGS_PATH=",
+                "OCF_M2_SETTINGS_PATH=/home/alice/.m2/settings.xml",
+            ),
+        )
+
+        assert features.reconcile_env_for_features(env_path, ["gradle"]) is True
+        assert "OCF_M2_SETTINGS_PATH=\n" in env_path.read_text()
+
+    def test_adds_gradle_opts_when_selected(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
+        monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
+        env_path = self._seed(tmp_path)
+
+        assert features.reconcile_env_for_features(env_path, ["gradle"]) is True
+        content = env_path.read_text()
+        assert f"{GRADLE_ENV_COMMENT}\n{GRADLE_OPTS_LINE}" in content
+
+    def test_gradle_line_idempotent_when_already_present(
+        self, tmp_path: Path, monkeypatch
+    ):
+        monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
+        monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
+        seed = self.BASE_ENV.replace(
+            "OCF_AGENT_TOOL=opencode",
+            f"{GRADLE_ENV_COMMENT}\n{GRADLE_OPTS_LINE}\nOCF_AGENT_TOOL=opencode",
+        )
+        env_path = self._seed(tmp_path, seed)
+
+        assert features.reconcile_env_for_features(env_path, ["gradle"]) is False
+
+    def test_gradle_line_removed_when_deselected(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
+        monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
+        seed = self.BASE_ENV.replace(
+            "OCF_AGENT_TOOL=opencode",
+            f"{GRADLE_ENV_COMMENT}\n{GRADLE_OPTS_LINE}\nOCF_AGENT_TOOL=opencode",
+        )
+        env_path = self._seed(tmp_path, seed)
+
+        assert features.reconcile_env_for_features(env_path, []) is True
+        content = env_path.read_text()
+        assert "GRADLE_OPTS" not in content
+        assert GRADLE_ENV_COMMENT not in content
+
+    def test_pinned_over_custom_value_when_gradle_selected(
+        self, tmp_path: Path, monkeypatch
+    ):
+        monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
+        monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
+        seed = self.BASE_ENV.replace(
+            "OCF_AGENT_TOOL=opencode",
+            'GRADLE_OPTS="-Xmx1g"\nOCF_AGENT_TOOL=opencode',
+        )
+        env_path = self._seed(tmp_path, seed)
+
+        assert features.reconcile_env_for_features(env_path, ["gradle"]) is True
+        content = env_path.read_text()
+        assert GRADLE_OPTS_LINE in content
+        assert "-Xmx1g" not in content
+
+    def test_custom_gradle_opts_survive_deselection(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
+        monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
+        seed = self.BASE_ENV.replace(
+            "OCF_AGENT_TOOL=opencode",
+            'GRADLE_OPTS="-Xmx1g"\nOCF_AGENT_TOOL=opencode',
+        )
+        env_path = self._seed(tmp_path, seed)
+
+        assert features.reconcile_env_for_features(env_path, []) is False
+        assert 'GRADLE_OPTS="-Xmx1g"' in env_path.read_text()
+
+    def test_inserts_missing_keys_after_anchors(self, tmp_path: Path, monkeypatch):
+        """Legacy .env files without the mirror keys gain them in place."""
+        monkeypatch.setattr(features, "host_npmrc_path", lambda: "/home/alice/.npmrc")
+        monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
+        legacy = (
+            "REMOTE_USER=root\n"
+            "OCF_LOCAL_FRAMEWORK_PATH=/opt/framework\n"
+            "OCF_REMOTE_FRAMEWORK_CONFIG_PATH=/opt/ocframework/config\n"
+            "OCF_AGENT_TOOL=opencode\n"
+        )
+        env_path = self._seed(tmp_path, legacy)
+
+        assert features.reconcile_env_for_features(env_path, ["gradle"]) is True
+        content = env_path.read_text()
+        assert "OCF_NPMRC_PATH=/home/alice/.npmrc" in content
+        assert "OCF_M2_SETTINGS_PATH=" in content
+        assert GRADLE_OPTS_LINE in content
+        lines = content.split("\n")
+        npmrc_idx = lines.index("OCF_NPMRC_PATH=/home/alice/.npmrc")
+        m2_idx = lines.index("OCF_M2_SETTINGS_PATH=")
+        gradle_idx = lines.index(GRADLE_OPTS_LINE)
+        assert npmrc_idx < m2_idx < gradle_idx

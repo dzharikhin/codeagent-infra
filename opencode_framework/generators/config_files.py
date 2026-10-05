@@ -6,6 +6,7 @@ from typing import Optional
 
 from opencode_framework.agent.layers import discover_global_layer, ensure_project_layer
 from opencode_framework.agent.registry import ToolSpec, get_tool_spec
+from opencode_framework.config import host_m2_settings_path, host_npmrc_path
 
 from .base import FileGenerator, GenerationContext
 from .templates import TemplateHandler
@@ -90,6 +91,9 @@ class ConfigFilesGenerator(FileGenerator):
             global_auth_path=global_auth_path or "",
             framework_repo_path=settings.framework_repo_path,
             agent_tool=ctx.agent_tool,
+            npmrc_path=host_npmrc_path(),
+            m2_settings_path=host_m2_settings_path("maven" in ctx.java_build_tools),
+            java_build_tools=ctx.java_build_tools,
         )
 
         env_path = ctx.config_dir / ".env"

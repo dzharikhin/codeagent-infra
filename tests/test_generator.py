@@ -9,7 +9,11 @@ from opencode_framework.generators.base import GenerationContext
 from opencode_framework.generators.config_files import ConfigFilesGenerator
 from opencode_framework.generators.documentation import DocumentationGenerator
 from opencode_framework.generators.orchestrator import GenerationOrchestrator
-from opencode_framework.generators.templates import TemplateHandler
+from opencode_framework.generators.templates import (
+    M2_SETTINGS_MOUNT_LINE,
+    NPMRC_MOUNT_LINE,
+    TemplateHandler,
+)
 from opencode_framework.sandbox.compose import ComposeGenerator
 from opencode_framework.sandbox.devcontainer import DevcontainerGenerator
 from opencode_framework.wizard import WizardResult
@@ -889,3 +893,156 @@ class TestAuthStubPermissions:
         assert f"OCF_GLOBAL_AUTH_PATH={credentials}" in env_content
         assert credentials.stat().st_mode & 0o777 == 0o644
         assert (stub / "stub-credentials.yaml").stat().st_mode & 0o777 == 0o644
+
+
+class TestHostDotfileMirrorRendering:
+    """Rendering of the host ~/.npmrc and ~/.m2/settings.xml mirrors."""
+
+    def test_compose_has_npmrc_mount_for_every_tool(self):
+        for tool in ("opencode", "qwen", "dsh"):
+            content = TemplateHandler.render_compose_template("repo", agent_tool=tool)
+            assert NPMRC_MOUNT_LINE in content
+            assert (
+                "      - ${OCF_NPMRC_PATH:-/dev/null}:/home/${REMOTE_USER}/.npmrc:ro"
+            ) in content
+
+    def test_compose_npmrc_mount_without_any_features(self):
+        content = TemplateHandler.render_compose_template("repo")
+        assert NPMRC_MOUNT_LINE in content
+
+    def test_maven_adds_m2_settings_mount(self):
+        content = TemplateHandler.render_compose_template(
+            "repo", ["java"], java_build_tools=["maven"]
+        )
+        assert M2_SETTINGS_MOUNT_LINE in content
+
+    def test_gradle_alone_has_no_m2_settings_mount(self):
+        content = TemplateHandler.render_compose_template(
+            "repo", ["java"], java_build_tools=["gradle"]
+        )
+        assert M2_SETTINGS_MOUNT_LINE not in content
+
+    def test_no_m2_settings_mount_without_java(self):
+        content = TemplateHandler.render_compose_template("repo", ["python"])
+        assert M2_SETTINGS_MOUNT_LINE not in content
+
+    def test_env_renders_mirror_paths_and_gradle(self):
+        content = TemplateHandler.render_env_template(
+            npmrc_path="/home/alice/.npmrc",
+            m2_settings_path="/home/alice/.m2/settings.xml",
+            java_build_tools=["maven", "gradle"],
+        )
+        assert "OCF_NPMRC_PATH=/home/alice/.npmrc" in content
+        assert "OCF_M2_SETTINGS_PATH=/home/alice/.m2/settings.xml" in content
+        assert 'GRADLE_OPTS="-Dorg.gradle.daemon=false"' in content
+
+    def test_env_mirror_keys_empty_without_host_files(self):
+        content = TemplateHandler.render_env_template()
+        assert "OCF_NPMRC_PATH=\n" in content
+        assert "OCF_M2_SETTINGS_PATH=\n" in content
+        assert "GRADLE_OPTS" not in content
+
+    def test_env_gradle_opts_only_with_gradle(self):
+        content = TemplateHandler.render_env_template(java_build_tools=["maven"])
+        assert "GRADLE_OPTS" not in content
+        content = TemplateHandler.render_env_template(java_build_tools=["gradle"])
+        assert 'GRADLE_OPTS="-Dorg.gradle.daemon=false"' in content
+
+    def test_env_template_fully_resolved(self):
+        content = TemplateHandler.render_env_template()
+        assert "{{" not in content
+
+    def _generate_env(self, tmp_path, java_build_tools=None, agent_tool="opencode"):
+        config_dir = (
+            tmp_path
+            / {
+                "opencode": ".opencode",
+                "qwen": ".qwen",
+                "dsh": ".dsh",
+            }[agent_tool]
+        )
+        config_dir.mkdir(parents=True)
+        ctx = _make_generation_context(
+            tmp_path,
+            config_dir=config_dir,
+            agent_tool=agent_tool,
+            java_build_tools=java_build_tools or [],
+        )
+        ConfigFilesGenerator().generate(ctx)
+        return (config_dir / ".env").read_text()
+
+    def test_init_records_host_npmrc(self, tmp_path: Path, monkeypatch):
+        home = tmp_path / "home"
+        (home / ".npmrc").parent.mkdir(parents=True)
+        (home / ".npmrc").write_text("registry=https://example.invalid\n")
+        monkeypatch.delenv("SUDO_USER", raising=False)
+        monkeypatch.setenv("HOME", str(home))
+
+        content = self._generate_env(tmp_path)
+        assert f"OCF_NPMRC_PATH={home / '.npmrc'}" in content
+
+    def test_init_leaves_npmrc_empty_when_absent(self, tmp_path: Path, monkeypatch):
+        monkeypatch.delenv("SUDO_USER", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+        content = self._generate_env(tmp_path)
+        assert "OCF_NPMRC_PATH=\n" in content
+
+    def test_init_records_m2_settings_only_with_maven(
+        self, tmp_path: Path, monkeypatch
+    ):
+        home = tmp_path / "home"
+        (home / ".m2").mkdir(parents=True)
+        (home / ".m2" / "settings.xml").write_text("<settings/>\n")
+        monkeypatch.delenv("SUDO_USER", raising=False)
+        monkeypatch.setenv("HOME", str(home))
+
+        content = self._generate_env(tmp_path, java_build_tools=["maven"])
+        assert f"OCF_M2_SETTINGS_PATH={home / '.m2' / 'settings.xml'}" in content
+
+        gradle_only = self._generate_env(
+            tmp_path / "gradle-only", java_build_tools=["gradle"]
+        )
+        assert "OCF_M2_SETTINGS_PATH=\n" in gradle_only
+
+    def test_init_records_gradle_opts_only_with_gradle(
+        self, tmp_path: Path, monkeypatch
+    ):
+        monkeypatch.delenv("SUDO_USER", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+        content = self._generate_env(tmp_path, java_build_tools=["maven", "gradle"])
+        assert 'GRADLE_OPTS="-Dorg.gradle.daemon=false"' in content
+        assert "GRADLE_OPTS" not in self._generate_env(
+            tmp_path / "mv", java_build_tools=["maven"]
+        )
+
+
+class TestHostMirrorConfigHelpers:
+    """Tests for config.host_npmrc_path / config.host_m2_settings_path."""
+
+    def test_npmrc_path_found_and_missing(self, tmp_path: Path, monkeypatch):
+        from opencode_framework import config
+
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.delenv("SUDO_USER", raising=False)
+        monkeypatch.setenv("HOME", str(home))
+        assert config.host_npmrc_path() == ""
+        npmrc = home / ".npmrc"
+        npmrc.write_text("x=1\n")
+        assert config.host_npmrc_path() == str(npmrc)
+
+    def test_m2_settings_requires_maven(self, tmp_path: Path, monkeypatch):
+        from opencode_framework import config
+
+        home = tmp_path / "home"
+        monkeypatch.delenv("SUDO_USER", raising=False)
+        monkeypatch.setenv("HOME", str(home))
+        settings = home / ".m2" / "settings.xml"
+        settings.parent.mkdir(parents=True)
+        settings.write_text("<settings/>\n")
+        assert config.host_m2_settings_path(False) == ""
+        assert config.host_m2_settings_path(True) == str(settings)
+        settings.unlink()
+        assert config.host_m2_settings_path(True) == ""

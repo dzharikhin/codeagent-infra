@@ -10,7 +10,11 @@ from opencode_framework.agent.registry import (
     managed_volume_name,
 )
 from opencode_framework.generators.base import FileGenerator, GenerationContext
-from opencode_framework.generators.templates import TemplateHandler
+from opencode_framework.generators.templates import (
+    M2_SETTINGS_MOUNT_LINE,
+    NPMRC_MOUNT_LINE,
+    TemplateHandler,
+)
 
 
 class ComposeGenerator(FileGenerator):
@@ -78,9 +82,10 @@ class ComposeGenerator(FileGenerator):
 
         Strips the managed feature footprints (privileged line, python/java
         volume mounts and their top-level volume keys, the docker-init
-        entrypoint, the managed ports block) and re-injects only those for
-        the requested feature set.  All other lines (environment, custom
-        mounts, security_opt, user-added volumes) are preserved.
+        entrypoint, the managed ports block, the host dotfile mirror mounts)
+        and re-injects only those for the requested feature set.  All other
+        lines (environment, custom mounts, security_opt, user-added volumes)
+        are preserved.
 
         When ``port_mappings`` is ``None`` the ports block is left untouched.
         When it is a list (including empty) the ports block is reconciled to
@@ -129,12 +134,16 @@ class ComposeGenerator(FileGenerator):
             + managed_volume_keys("gradle", repo_name, spec.name)
             + managed_volume_keys("docker", repo_name, spec.name)
         )
+        m2_settings_mount = M2_SETTINGS_MOUNT_LINE
+        npmrc_mount = NPMRC_MOUNT_LINE
         managed_lines = {
             venv_mount,
             legacy_venv_mount,
             m2_mount,
+            m2_settings_mount,
             gradle_mount,
             docker_mount,
+            npmrc_mount,
             f"  {managed_volume_name('venv', repo_name, spec.name)}:",
             f"  {managed_volume_name('m2', repo_name, spec.name)}:",
             f"  {managed_volume_name('gradle', repo_name, spec.name)}:",
@@ -184,16 +193,20 @@ class ComposeGenerator(FileGenerator):
                 lines, "    working_dir", "    privileged: true"
             )
 
+        # Injection order must match render_compose_template exactly so a
+        # fresh render survives the reconciler unchanged.
         mounts: List[str] = []
+        mounts.append(npmrc_mount)
         if "python" in optional_features:
             mounts.append(venv_mount)
-        if has_docker:
-            mounts.append(docker_mount)
         if "java" in optional_features:
             if has_maven:
                 mounts.append(m2_mount)
+                mounts.append(m2_settings_mount)
             if has_gradle:
                 mounts.append(gradle_mount)
+        if has_docker:
+            mounts.append(docker_mount)
         if mounts:
             lines = ComposeGenerator._insert_before_line(
                 lines, "    entrypoint", mounts

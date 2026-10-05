@@ -11,6 +11,22 @@ from opencode_framework.agent.registry import (
     managed_volume_name,
 )
 
+# Host dotfile mirror mounts (6-space indent, read-only). The compose
+# interpolations fall back to /dev/null when the corresponding
+# OCF_* path variable is unset/empty in .env, so a missing host file is
+# a harmless no-op mount. These lines are managed: the template emits
+# them for fresh inits and the compose reconciler strips/re-injects the
+# exact same strings, so they must stay identical.
+NPMRC_MOUNT_LINE = "      - ${OCF_NPMRC_PATH:-/dev/null}:/home/${REMOTE_USER}/.npmrc:ro"
+M2_SETTINGS_MOUNT_LINE = (
+    "      - ${OCF_M2_SETTINGS_PATH:-/dev/null}:"
+    "/home/${REMOTE_USER}/.m2/settings.xml:ro"
+)
+
+# .env fragment rendered when the Gradle feature is enabled.
+GRADLE_ENV_COMMENT = "# Gradle builds must not keep a daemon alive across restarts"
+GRADLE_OPTS_LINE = 'GRADLE_OPTS="-Dorg.gradle.daemon=false"'
+
 # Per-tool README sections. Each *_SECTION value is a self-contained
 # Markdown block ending in a newline; it may embed {{LAUNCH_COMMAND}},
 # which resolves on the shared replacement pass afterwards.
@@ -382,6 +398,9 @@ class TemplateHandler:
         global_auth_path: Optional[str] = None,
         framework_repo_path: Optional[str] = None,
         agent_tool: str = DEFAULT_TOOL,
+        npmrc_path: Optional[str] = None,
+        m2_settings_path: Optional[str] = None,
+        java_build_tools: Optional[List[str]] = None,
     ) -> str:
         """Render environment template with paths and the tool fragment.
 
@@ -390,6 +409,12 @@ class TemplateHandler:
             global_auth_path: Path to the global auth file (opencode and dsh)
             framework_repo_path: Path to framework repository
             agent_tool: Agent tool name ("opencode" | "qwen" | "dsh")
+            npmrc_path: Host ``~/.npmrc`` path when the file exists,
+                else None/"" (compose then falls back to /dev/null)
+            m2_settings_path: Host ``~/.m2/settings.xml`` path when the
+                Maven feature is on and the file exists, else None/""
+            java_build_tools: Enabled Java build tools (e.g., ["maven"],
+                ["gradle"]); drives the GRADLE_OPTS fragment
 
         Returns:
             Rendered environment template
@@ -397,11 +422,20 @@ class TemplateHandler:
         template = cls.load_env_template()
         spec = get_tool_spec(agent_tool)
 
+        gradle_env = (
+            f"\n{GRADLE_ENV_COMMENT}\n{GRADLE_OPTS_LINE}"
+            if "gradle" in (java_build_tools or [])
+            else ""
+        )
+
         replacements = {
             "{{AGENT_ENV_TEMPLATE}}": spec.env_template_fragment,
             "{{OCF_GLOBAL_CONFIG_PATH}}": global_config_path or "",
             "{{OCF_GLOBAL_AUTH_PATH}}": global_auth_path or "",
             "{{OCF_LOCAL_FRAMEWORK_PATH}}": framework_repo_path or "",
+            "{{OCF_NPMRC_PATH}}": npmrc_path or "",
+            "{{OCF_M2_SETTINGS_PATH}}": m2_settings_path or "",
+            "{{GRADLE_ENV}}": gradle_env,
         }
 
         return cls.render_template(template, replacements)
@@ -436,7 +470,11 @@ class TemplateHandler:
         repo_name = repo_root_name
         tool = spec.name
 
-        additional_volume_mounts = ""
+        # Mount order must match ComposeGenerator.rebuild_features exactly,
+        # so a fresh render is reconcile-clean: npmrc mirror (always,
+        # tool-agnostic, /dev/null fallback), python venv, Java build tools,
+        # Docker-in-Docker.
+        additional_volume_mounts = f"\n{NPMRC_MOUNT_LINE}"
         docker_privileged = ""
         entrypoint = f'["{spec.binary}"]'
 
@@ -454,6 +492,7 @@ class TemplateHandler:
                     f"\n      - {managed_volume_name('m2', repo_name, tool)}:"
                     f"/home/${{REMOTE_USER}}/.m2"
                 )
+                additional_volume_mounts += f"\n{M2_SETTINGS_MOUNT_LINE}"
             if "gradle" in tools:
                 additional_volume_mounts += (
                     f"\n      - {managed_volume_name('gradle', repo_name, tool)}:"

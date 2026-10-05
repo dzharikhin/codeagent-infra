@@ -30,6 +30,40 @@ def get_local_home() -> Path:
     return Path.home()
 
 
+def host_npmrc_path() -> str:
+    """Return the host ``~/.npmrc`` path when the file exists, else "".
+
+    Used to populate ``OCF_NPMRC_PATH`` so the compose file can mirror the
+    host npm configuration read-only into the container home.
+
+    Returns:
+        Absolute host path as a string, or "" when the file is absent.
+    """
+    candidate = get_local_home() / ".npmrc"
+    return str(candidate) if candidate.is_file() else ""
+
+
+def host_m2_settings_path(maven_installed: bool) -> str:
+    """Return the host ``~/.m2/settings.xml`` path when applicable, else "".
+
+    Used to populate ``OCF_M2_SETTINGS_PATH`` so the compose file can
+    mirror the host Maven settings read-only into the container when the
+    Maven feature is enabled.
+
+    Args:
+        maven_installed: Whether the Maven feature is enabled; the path
+            is only reported when the feature is on.
+
+    Returns:
+        Absolute host path as a string, or "" when Maven is not
+        installed or the file is absent.
+    """
+    if not maven_installed:
+        return ""
+    candidate = get_local_home() / ".m2" / "settings.xml"
+    return str(candidate) if candidate.is_file() else ""
+
+
 def get_local_config_root() -> Path:
     """Get the local config root directory for host-side operations.
 

@@ -262,7 +262,7 @@ poetry run pytest            # Run tests
 
 - `ocframework init [--tool opencode|qwen|dsh]` - Initialize framework in a Git repository
 - `ocframework launch [--tool opencode|qwen|dsh] [--acp <postfix>]` - Launch container with the configured agent (`--acp <postfix>`: ACP stdio JSON-RPC mode for editors; supported for opencode and qwen. The postfix is required and appended to the container name; any existing container with that name is removed first — reuse a postfix to replace the previous session. A watchdog thread (`sandbox/watchdog.py`) polls the run container once it is observed running and terminates a hung docker client when the container is confirmed stopped/removed externally, so launch exits 137 instead of hanging). When the cached image reference is missing (e.g. pruned by a Docker cleanup), launch rebuilds the image and updates the cache automatically; `launch --force` additionally deletes the cached image ID and removes any existing container
-- `ocframework reconfigure [--tool opencode|qwen|dsh]` - Interactively reconfigure an existing harness (feature/port prompts, skipped non-TTY), rebuild the image, update the cache, and best-effort remove the tool's existing container; never starts containers
+- `ocframework reconfigure [--tool opencode|qwen|dsh]` - Interactively reconfigure an existing harness (feature/port prompts, skipped non-TTY), reconcile the `.env` feature entries (host mirror paths, `GRADLE_OPTS`), rebuild the image, update the cache, and best-effort remove the tool's existing container; never starts containers
 - `ocframework --version` - Print version and configuration status
 
 All commands require a valid framework repository (installed via `pipx install -e <path>`).
@@ -323,11 +323,23 @@ Rule: variables shared across parts/tools may be unprefixed; part- or tool-speci
 | Family | Variables |
 |---|---|
 | shared (no prefix) | `REMOTE_USER`, `XDG_*` |
-| sandbox | `OCF_IMAGE_ID`, `OCF_LOCAL_FRAMEWORK_PATH`, `OCF_LOCAL_PROJECTS_DIR`, `OCF_LOCAL_REPO_ROOT`, `OCF_REMOTE_FRAMEWORK_CONFIG_PATH`, `OCF_SESSION_SUFFIX` |
+| sandbox | `OCF_IMAGE_ID`, `OCF_LOCAL_FRAMEWORK_PATH`, `OCF_LOCAL_PROJECTS_DIR`, `OCF_LOCAL_REPO_ROOT`, `OCF_REMOTE_FRAMEWORK_CONFIG_PATH`, `OCF_SESSION_SUFFIX`, `OCF_NPMRC_PATH`, `OCF_M2_SETTINGS_PATH` |
 | agent tool | `OCF_AGENT_TOOL`, `OCF_AGENT_VERSION` |
 | agent layers | `OCF_GLOBAL_CONFIG_PATH` (dir for opencode, file for qwen/dsh), `OCF_GLOBAL_AUTH_PATH` (opencode, dsh) |
 | agent defaults via env | `OCF_MAIN_MODEL`, `OCF_BUILD_MODEL`, `OCF_SMALL_MODEL`, `OCF_PLAN_MAX_BEFORE_RESPONSE_STEPS`, `OCF_BUILD_MAX_BEFORE_RESPONSE_STEPS` |
 | tool-native (agent's own contract, never OCF-prefixed) | `OPENCODE_*`, `QWEN_*`, `DSH_*`, `DEEPSEEK_API_KEY`, `DEEPSEEK_SEARCH_BASE_URL` |
+| feature defaults (build-tool's own contract, framework-managed) | `GRADLE_OPTS` (pinned to `-Dorg.gradle.daemon=false` in `.env` whenever the gradle feature is selected) |
+
+`OCF_NPMRC_PATH` / `OCF_M2_SETTINGS_PATH` hold the absolute host paths of
+`~/.npmrc` and `~/.m2/settings.xml` when those files exist (npmrc for every
+tool, settings.xml only when the maven feature is on); empty otherwise.
+The compose mirror mounts use `${VAR:-/dev/null}`, so an unset/empty value
+is a harmless no-op. `init` resolves both at generation time (host home via
+`config.get_local_home`); `reconfigure` re-checks them on every run via
+`features.reconcile_env_for_features`, which surgically updates just these
+keys and the managed `GRADLE_OPTS` line in `.env` (never regenerating the
+file, preserving user edits; on a custom `GRADLE_OPTS` it pins the managed
+value when gradle is selected and leaves it alone when deselected).
 
 `OCF_LOCAL_REPO_ROOT` is the project repository's absolute host path; the
 project is mounted read-write at that identical path inside the container
@@ -409,6 +421,11 @@ Read-only mounts:
 - Framework repository, `framework-config/`, and `framework-nuts-and-bolts/{common,<tool>}/`
 - Global layer, per tool: opencode — global config directory (host: `~/.config/opencode`) + auth file (global auth if present, else framework stub); qwen — `~/.qwen/settings.json` (global if present, else framework stub); dsh — `~/.dsh/settings.yaml` (global if present, else `/dev/null`) + `~/.dsh/.credentials.yaml` (global if present, else framework stub)
 - qwen framework settings at `/home/$REMOTE_USER/.qwen/settings.json`
+- Host `~/.npmrc` at `/home/$REMOTE_USER/.npmrc` for every tool, and host
+  `~/.m2/settings.xml` at `/home/$REMOTE_USER/.m2/settings.xml` when the
+  maven feature is on — only when those files exist (`OCF_NPMRC_PATH` /
+  `OCF_M2_SETTINGS_PATH` empty mounts `/dev/null` instead; the settings.xml
+  bind sits on top of the `m2-*` named volume, which wins by mount depth)
 
 Read-write mounts:
 - `<config_dir>/runtime_data/` (`.opencode/runtime_data/`, `.qwen/runtime_data/` or `.dsh/runtime_data/`)
@@ -435,3 +452,12 @@ When the `docker` optional feature is selected during `ocframework init`:
 - Docker daemon **starts automatically** on container launch. The container entrypoint runs `/usr/local/share/docker-init.sh` before the agent binary, which starts dockerd with readiness checks.
 - Docker autodetects the storage driver: prefers `overlay2` where supported, falls back to `vfs` in sandboxed environments without overlayfs support.
 - A named volume `docker-<repo>-<tool>` is mounted at `/var/lib/docker` to persist Docker data across container restarts. If you upgrade the daemon to a version incompatible with this volume, you may need to run `docker volume rm docker-<repo>-<tool>` to recreate it.
+
+### JVM Build Tools Support
+
+When the `java` feature is selected, `init`/`reconfigure` prompt for Maven
+and/or Gradle:
+
+- Maven adds the `m2-<repo>-<tool>` named volume at `/home/$REMOTE_USER/.m2` plus the `~/.m2/settings.xml` host mirror (only when that host file exists)
+- Gradle adds the `gradle-<repo>-<tool>` named volume at `/home/$REMOTE_USER/.gradle` and pins `GRADLE_OPTS="-Dorg.gradle.daemon=false"` in `.env` (a daemon must not outlive the ephemeral container); deselection removes only the managed line, custom values survive
+- The `.npmrc` mirror mount is feature- and tool-agnostic: always present, `/dev/null` fallback
