@@ -36,7 +36,7 @@ class DevcontainerGenerator(FileGenerator):
             "version": "${localEnv:NODE_VERSION:lts}",
         },
         "java": {
-            "version": "${localEnv:JAVA_VERSION:17}",
+            "version": "${localEnv:JAVA_VERSION:25}",
         },
     }
 
