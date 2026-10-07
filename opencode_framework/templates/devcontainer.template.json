@@ -9,10 +9,12 @@
   "features": {
     "ghcr.io/devcontainers/features/common-utils:2": {
       "installZsh": false,
-      "configureZshAsDefaultShell": false,
-      "installPackages": "ripgrep"
+      "configureZshAsDefaultShell": false
     },
-    "ghcr.io/devcontainers/features/git:1": {}
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/devcontainers-extra/features/apt-packages:1": {
+      "packages": "ripgrep"
+    }
   },
   "workspaceFolder": "${localWorkspaceFolder}",
   "workspaceMount": "source=${localWorkspaceFolder},target=${localWorkspaceFolder},type=bind",

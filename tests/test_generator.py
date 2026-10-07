@@ -142,7 +142,7 @@ class TestDevcontainerGenerator:
         assert "REMOTE_USER" in dc_content.get("remoteUser", "")
 
     def test_ripgrep_installed_by_default(self, tmp_path: Path):
-        """common-utils should install ripgrep by default."""
+        """apt-packages feature should install ripgrep by default."""
         (tmp_path / ".opencode").mkdir()
         ctx = _make_generation_context(tmp_path)
 
@@ -152,10 +152,11 @@ class TestDevcontainerGenerator:
         dc_content = json.loads(
             (tmp_path / ".opencode" / "devcontainer.json").read_text()
         )
-        common_utils = dc_content["features"][
-            "ghcr.io/devcontainers/features/common-utils:2"
-        ]
-        assert "ripgrep" in common_utils["installPackages"]
+        features = dc_content["features"]
+        apt_packages = features["ghcr.io/devcontainers-extra/features/apt-packages:1"]
+        assert "ripgrep" in apt_packages["packages"]
+        common_utils = features["ghcr.io/devcontainers/features/common-utils:2"]
+        assert "installPackages" not in common_utils
 
 
 class TestOpenCodeFeature:
