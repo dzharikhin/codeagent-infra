@@ -27,6 +27,12 @@ class DevcontainerGenerator(FileGenerator):
         "fuse3,uidmap,slirp4netns,passt"
     )
 
+    # The ssh feature's devcontainer footprint: openssh-client merged
+    # into the base apt-packages feature (docker/PODMAN_PACKAGES
+    # pattern). The package guarantees the ssh binary in the image and
+    # doubles as the detection marker in detect().
+    SSH_APT_PACKAGE = "openssh-client"
+
     # Dockerfile slot rendered when the podman feature is enabled.
     # Everything podman needs besides these lines is either a package
     # (PODMAN_PACKAGES above) or auto-detected at runtime (verified with
@@ -365,26 +371,63 @@ class DevcontainerGenerator(FileGenerator):
             }
 
     @staticmethod
+    def _merge_apt_packages(features: dict, packages_to_add: List[str]) -> None:
+        """Merge packages into the base apt-packages feature entry.
+
+        Preserves the packages already listed (e.g. ripgrep); creates
+        the entry when absent.
+
+        Args:
+            features: The features dict (mutated in place)
+            packages_to_add: apt package names to merge in
+        """
+        entry = features.setdefault(DevcontainerGenerator.APT_PACKAGES_FEATURE_URL, {})
+        packages = [
+            p.strip() for p in str(entry.get("packages", "")).split(",") if p.strip()
+        ]
+        for pkg in packages_to_add:
+            if pkg not in packages:
+                packages.append(pkg)
+        entry["packages"] = ",".join(packages)
+
+    @staticmethod
+    def _filter_apt_packages(features: dict, packages_to_remove: List[str]) -> None:
+        """Filter packages out of the base apt-packages feature entry.
+
+        Keeps unrelated packages (ripgrep); a no-op when the entry is
+        absent.
+
+        Args:
+            features: The features dict (mutated in place)
+            packages_to_remove: apt package names to drop
+        """
+        entry = features.get(DevcontainerGenerator.APT_PACKAGES_FEATURE_URL)
+        if not isinstance(entry, dict):
+            return
+        packages = [
+            p.strip() for p in str(entry.get("packages", "")).split(",") if p.strip()
+        ]
+        remove = set(packages_to_remove)
+        entry["packages"] = ",".join(p for p in packages if p not in remove)
+
+    @staticmethod
     def _add_one_feature(features: dict, key: str) -> None:
         """Add a single optional feature by its key.
 
-        The docker feature has no devcontainer feature URL of its own;
-        its apt packages are merged into the base apt-packages feature
-        (preserving the packages already listed, e.g. ripgrep).
+        The docker and ssh features have no devcontainer feature URL of
+        their own; their apt packages are merged into the base
+        apt-packages feature (preserving the packages already listed,
+        e.g. ripgrep).
         """
         if key == "docker":
-            entry = features.setdefault(
-                DevcontainerGenerator.APT_PACKAGES_FEATURE_URL, {}
+            DevcontainerGenerator._merge_apt_packages(
+                features, DevcontainerGenerator.PODMAN_PACKAGES.split(",")
             )
-            packages = [
-                p.strip()
-                for p in str(entry.get("packages", "")).split(",")
-                if p.strip()
-            ]
-            for pkg in DevcontainerGenerator.PODMAN_PACKAGES.split(","):
-                if pkg not in packages:
-                    packages.append(pkg)
-            entry["packages"] = ",".join(packages)
+            return
+        if key == "ssh":
+            DevcontainerGenerator._merge_apt_packages(
+                features, [DevcontainerGenerator.SSH_APT_PACKAGE]
+            )
             return
         url = DevcontainerGenerator.FEATURE_URL_MAP.get(key)
         if url is not None:
@@ -394,19 +437,18 @@ class DevcontainerGenerator(FileGenerator):
     def _remove_one_feature(features: dict, key: str) -> None:
         """Remove a single optional feature by its key.
 
-        The docker feature filters its apt packages out of the base
-        apt-packages feature, keeping unrelated packages (ripgrep).
+        The docker and ssh features filter their apt packages out of the
+        base apt-packages feature, keeping unrelated packages (ripgrep).
         """
         if key == "docker":
-            entry = features.get(DevcontainerGenerator.APT_PACKAGES_FEATURE_URL)
-            if isinstance(entry, dict):
-                packages = [
-                    p.strip()
-                    for p in str(entry.get("packages", "")).split(",")
-                    if p.strip()
-                ]
-                podman = set(DevcontainerGenerator.PODMAN_PACKAGES.split(","))
-                entry["packages"] = ",".join(p for p in packages if p not in podman)
+            DevcontainerGenerator._filter_apt_packages(
+                features, DevcontainerGenerator.PODMAN_PACKAGES.split(",")
+            )
+            return
+        if key == "ssh":
+            DevcontainerGenerator._filter_apt_packages(
+                features, [DevcontainerGenerator.SSH_APT_PACKAGE]
+            )
             return
         url = DevcontainerGenerator.FEATURE_URL_MAP.get(key)
         if url is not None:
@@ -479,15 +521,19 @@ class DevcontainerGenerator(FileGenerator):
         raw_features = devcontainer.get("features", {})
         features = raw_features if isinstance(raw_features, dict) else {}
         detected = [key for key, url in cls.FEATURE_URL_MAP.items() if url in features]
-        has_docker = False
-        if cls.LEGACY_DIND_FEATURE_URL in features:
-            has_docker = True
-        else:
-            entry = features.get(cls.APT_PACKAGES_FEATURE_URL)
-            packages = str(entry.get("packages", "")) if isinstance(entry, dict) else ""
-            has_docker = "podman" in packages.split(",")
+        entry = features.get(cls.APT_PACKAGES_FEATURE_URL)
+        packages = (
+            [p.strip() for p in str(entry.get("packages", "")).split(",")]
+            if isinstance(entry, dict)
+            else []
+        )
+        has_docker = cls.LEGACY_DIND_FEATURE_URL in features or ("podman" in packages)
         if has_docker and "docker" not in detected:
             detected.append("docker")
+        # The ssh feature's footprint is its apt package in the base
+        # apt-packages entry (merged by _add_one_feature).
+        if cls.SSH_APT_PACKAGE in packages and "ssh" not in detected:
+            detected.append("ssh")
         return detected
 
     @classmethod

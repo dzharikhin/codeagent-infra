@@ -12,8 +12,10 @@ from opencode_framework.generators.config_files import ConfigFilesGenerator
 from opencode_framework.generators.documentation import DocumentationGenerator
 from opencode_framework.generators.orchestrator import GenerationOrchestrator
 from opencode_framework.generators.templates import (
+    GITCONFIG_MOUNT_LINE,
     M2_SETTINGS_MOUNT_LINE,
     NPMRC_MOUNT_LINE,
+    SSH_MOUNT_LINE,
     TemplateHandler,
 )
 from opencode_framework.sandbox.compose import ComposeGenerator
@@ -1202,6 +1204,42 @@ class TestHostDotfileMirrorRendering:
         content = TemplateHandler.render_compose_template("repo")
         assert NPMRC_MOUNT_LINE in content
 
+    def test_compose_has_gitconfig_mount_for_every_tool(self):
+        for tool in ("opencode", "qwen", "dsh"):
+            content = TemplateHandler.render_compose_template("repo", agent_tool=tool)
+            assert GITCONFIG_MOUNT_LINE in content
+            assert (
+                "      - ${OCF_GITCONFIG_PATH:-/dev/null}:"
+                "/home/${REMOTE_USER}/.gitconfig:ro"
+            ) in content
+
+    def test_compose_gitconfig_mount_without_any_features(self):
+        content = TemplateHandler.render_compose_template("repo")
+        assert GITCONFIG_MOUNT_LINE in content
+
+    def test_ssh_mount_with_feature_and_host_dir(self, monkeypatch):
+        monkeypatch.setattr(
+            "opencode_framework.generators.templates.host_ssh_dir_path",
+            lambda enabled: "/home/alice/.ssh" if enabled else "",
+        )
+        content = TemplateHandler.render_compose_template("repo", ["ssh"])
+        assert SSH_MOUNT_LINE in content
+        assert "      - ${OCF_SSH_DIR_PATH}:/home/${REMOTE_USER}/.ssh:ro" in content
+
+    def test_ssh_mount_omitted_without_feature_or_host_dir(self, monkeypatch):
+        monkeypatch.setattr(
+            "opencode_framework.generators.templates.host_ssh_dir_path",
+            lambda enabled: "/home/alice/.ssh" if enabled else "",
+        )
+        assert SSH_MOUNT_LINE not in TemplateHandler.render_compose_template("repo")
+        monkeypatch.setattr(
+            "opencode_framework.generators.templates.host_ssh_dir_path",
+            lambda enabled: "",
+        )
+        assert SSH_MOUNT_LINE not in TemplateHandler.render_compose_template(
+            "repo", ["ssh"]
+        )
+
     def test_maven_adds_m2_settings_mount(self):
         content = TemplateHandler.render_compose_template(
             "repo", ["java"], java_build_tools=["maven"]
@@ -1232,7 +1270,17 @@ class TestHostDotfileMirrorRendering:
         content = TemplateHandler.render_env_template()
         assert "OCF_NPMRC_PATH=\n" in content
         assert "OCF_M2_SETTINGS_PATH=\n" in content
+        assert "OCF_GITCONFIG_PATH=\n" in content
+        assert "OCF_SSH_DIR_PATH=\n" in content
         assert "GRADLE_OPTS" not in content
+
+    def test_env_renders_gitconfig_and_ssh_paths(self):
+        content = TemplateHandler.render_env_template(
+            gitconfig_path="/home/alice/.gitconfig",
+            ssh_dir_path="/home/alice/.ssh",
+        )
+        assert "OCF_GITCONFIG_PATH=/home/alice/.gitconfig" in content
+        assert "OCF_SSH_DIR_PATH=/home/alice/.ssh" in content
 
     def test_env_gradle_opts_only_with_gradle(self):
         content = TemplateHandler.render_env_template(java_build_tools=["maven"])
@@ -1244,7 +1292,13 @@ class TestHostDotfileMirrorRendering:
         content = TemplateHandler.render_env_template()
         assert "{{" not in content
 
-    def _generate_env(self, tmp_path, java_build_tools=None, agent_tool="opencode"):
+    def _generate_env(
+        self,
+        tmp_path,
+        java_build_tools=None,
+        agent_tool="opencode",
+        optional_features=None,
+    ):
         config_dir = (
             tmp_path
             / {
@@ -1259,6 +1313,7 @@ class TestHostDotfileMirrorRendering:
             config_dir=config_dir,
             agent_tool=agent_tool,
             java_build_tools=java_build_tools or [],
+            optional_features=optional_features or [],
         )
         ConfigFilesGenerator().generate(ctx)
         return (config_dir / ".env").read_text()
@@ -1309,6 +1364,28 @@ class TestHostDotfileMirrorRendering:
             tmp_path / "mv", java_build_tools=["maven"]
         )
 
+    def test_init_records_gitconfig(self, tmp_path: Path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        (home / ".gitconfig").write_text("[user]\n\tname = Alice\n")
+        monkeypatch.delenv("SUDO_USER", raising=False)
+        monkeypatch.setenv("HOME", str(home))
+
+        content = self._generate_env(tmp_path)
+        assert f"OCF_GITCONFIG_PATH={home / '.gitconfig'}" in content
+
+    def test_init_records_ssh_dir_only_with_feature(self, tmp_path: Path, monkeypatch):
+        home = tmp_path / "home"
+        (home / ".ssh").mkdir(parents=True)
+        monkeypatch.delenv("SUDO_USER", raising=False)
+        monkeypatch.setenv("HOME", str(home))
+
+        content = self._generate_env(tmp_path, optional_features=["ssh"])
+        assert f"OCF_SSH_DIR_PATH={home / '.ssh'}" in content
+
+        without = self._generate_env(tmp_path / "no-ssh")
+        assert "OCF_SSH_DIR_PATH=\n" in without
+
 
 class TestHostMirrorConfigHelpers:
     """Tests for config.host_npmrc_path / config.host_m2_settings_path."""
@@ -1338,3 +1415,31 @@ class TestHostMirrorConfigHelpers:
         assert config.host_m2_settings_path(True) == str(settings)
         settings.unlink()
         assert config.host_m2_settings_path(True) == ""
+
+    def test_gitconfig_path_found_and_missing(self, tmp_path: Path, monkeypatch):
+        from opencode_framework import config
+
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.delenv("SUDO_USER", raising=False)
+        monkeypatch.setenv("HOME", str(home))
+        assert config.host_gitconfig_path() == ""
+        gitconfig = home / ".gitconfig"
+        gitconfig.write_text("[user]\n")
+        assert config.host_gitconfig_path() == str(gitconfig)
+
+    def test_ssh_dir_requires_feature_and_dir(self, tmp_path: Path, monkeypatch):
+        from opencode_framework import config
+
+        home = tmp_path / "home"
+        monkeypatch.delenv("SUDO_USER", raising=False)
+        monkeypatch.setenv("HOME", str(home))
+        ssh = home / ".ssh"
+        ssh.mkdir(parents=True)
+        assert config.host_ssh_dir_path(False) == ""
+        assert config.host_ssh_dir_path(True) == str(ssh)
+
+        empty = tmp_path / "empty-home"
+        empty.mkdir()
+        monkeypatch.setenv("HOME", str(empty))
+        assert config.host_ssh_dir_path(True) == ""

@@ -9,15 +9,18 @@ from opencode_framework.agent.registry import (
     managed_volume_keys,
     managed_volume_name,
 )
+from opencode_framework.config import host_ssh_dir_path
 from opencode_framework.generators.base import FileGenerator, GenerationContext
 from opencode_framework.generators.templates import (
     BASE_SECURITY_LINES,
+    GITCONFIG_MOUNT_LINE,
     M2_SETTINGS_MOUNT_LINE,
     NPMRC_MOUNT_LINE,
     PODMAN_CAPS_GRAPH_ROOT_TARGET,
     PODMAN_CAPS_SECURITY_LINES,
     PODMAN_GRAPH_ROOT_TARGET,
     PODMAN_SECURITY_LINES,
+    SSH_MOUNT_LINE,
     TemplateHandler,
 )
 
@@ -169,6 +172,8 @@ class ComposeGenerator(FileGenerator):
         )
         m2_settings_mount = M2_SETTINGS_MOUNT_LINE
         npmrc_mount = NPMRC_MOUNT_LINE
+        gitconfig_mount = GITCONFIG_MOUNT_LINE
+        ssh_mount = SSH_MOUNT_LINE
         managed_volume_entries = (
             managed_volume_keys("venv", repo_name, spec.name)
             + managed_volume_keys("m2", repo_name, spec.name)
@@ -198,6 +203,8 @@ class ComposeGenerator(FileGenerator):
             legacy_docker_mount,
             legacy_dind_mount,
             npmrc_mount,
+            gitconfig_mount,
+            ssh_mount,
             f"  {managed_volume_name('venv', repo_name, spec.name)}:",
             f"  {managed_volume_name('m2', repo_name, spec.name)}:",
             f"  {managed_volume_name('gradle', repo_name, spec.name)}:",
@@ -272,6 +279,7 @@ class ComposeGenerator(FileGenerator):
         # fresh render survives the reconciler unchanged.
         mounts: List[str] = []
         mounts.append(npmrc_mount)
+        mounts.append(gitconfig_mount)
         if "python" in optional_features:
             mounts.append(venv_mount)
         if "java" in optional_features:
@@ -282,6 +290,11 @@ class ComposeGenerator(FileGenerator):
                 mounts.append(gradle_mount)
         if has_docker:
             mounts.append(caps_docker_mount if podman_caps else docker_mount)
+        # Directory target: no /dev/null fallback, so the line is only
+        # injected when the feature is on and the host ~/.ssh exists
+        # (mirrors the fresh-render gate in render_compose_template).
+        if host_ssh_dir_path("ssh" in optional_features):
+            mounts.append(ssh_mount)
         if mounts:
             lines = ComposeGenerator._insert_before_line(
                 lines, "    entrypoint", mounts

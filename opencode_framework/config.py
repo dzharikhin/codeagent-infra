@@ -64,6 +64,47 @@ def host_m2_settings_path(maven_installed: bool) -> str:
     return str(candidate) if candidate.is_file() else ""
 
 
+def host_gitconfig_path() -> str:
+    """Return the host ``~/.gitconfig`` path when the file exists, else "".
+
+    Used to populate ``OCF_GITCONFIG_PATH`` so the compose file can mirror
+    the host git configuration (identity, aliases, ``insteadOf`` rewrites,
+    ``safe.directory`` entries) read-only into the container home. The
+    mirror is always on (npmrc pattern); host-only settings that cannot
+    work inside the sandbox (``commit.gpgsign`` without GPG keys,
+    credential-helper binaries, absolute ``[include]`` paths) are
+    tolerated and fail loudly at git runtime.
+
+    Returns:
+        Absolute host path as a string, or "" when the file is absent.
+    """
+    candidate = get_local_home() / ".gitconfig"
+    return str(candidate) if candidate.is_file() else ""
+
+
+def host_ssh_dir_path(ssh_enabled: bool) -> str:
+    """Return the host ``~/.ssh`` directory path when applicable, else "".
+
+    Used to populate ``OCF_SSH_DIR_PATH`` so the compose file can mirror
+    the host SSH material (keys, config, known_hosts) read-only into the
+    container home when the ``ssh`` feature is enabled. Because the
+    mirror target is a directory, no ``/dev/null`` fallback exists: the
+    mount line is only emitted when this returns a non-empty path.
+
+    Args:
+        ssh_enabled: Whether the ssh feature is enabled; the path is
+            only reported when the feature is on.
+
+    Returns:
+        Absolute host path as a string, or "" when the feature is off
+        or the directory is absent.
+    """
+    if not ssh_enabled:
+        return ""
+    candidate = get_local_home() / ".ssh"
+    return str(candidate) if candidate.is_dir() else ""
+
+
 def get_local_config_root() -> Path:
     """Get the local config root directory for host-side operations.
 

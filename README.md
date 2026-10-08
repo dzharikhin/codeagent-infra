@@ -154,7 +154,7 @@ To reconfigure the sandbox (e.g., change devcontainer features or port mappings)
 ocframework reconfigure
 ```
 
-When run interactively (stdin is a TTY), `reconfigure` offers to **add or remove devcontainer features** before rebuilding. The current feature set and editor preference are shown, pre-filled as the defaults, so you can toggle docker/python/nodejs/java and the editor (vi/nano) on or off. Only the feature-dependent parts of `.opencode/devcontainer.json` and `.opencode/docker-compose.yaml` are updated; any manual customizations elsewhere are preserved.
+When run interactively (stdin is a TTY), `reconfigure` offers to **add or remove devcontainer features** before rebuilding. The current feature set and editor preference are shown, pre-filled as the defaults, so you can toggle docker/python/nodejs/java/ssh and the editor (vi/nano) on or off. Only the feature-dependent parts of `.opencode/devcontainer.json` and `.opencode/docker-compose.yaml` are updated; any manual customizations elsewhere are preserved.
 
 On every run — interactive or not — `reconfigure` also re-renders the Dockerfile-generating `initializeCommand` in `devcontainer.json` from the current framework code (migrating legacy feature keys such as `docker-in-docker:2` to the podman engine along the way), so image-level fixes propagate to the rebuilt image without a re-init.
 
@@ -190,6 +190,12 @@ docker info | grep -E "rootless|Storage Driver"
 ```
 
 A named volume `docker-<repo>-<tool>` is mounted at the podman storage root (`/home/vscode/.local/share/containers` in standard mode, `/var/lib/containers` in caps mode) to persist images across container restarts.
+
+### Host Identity (git config, SSH keys)
+
+Your host `~/.gitconfig` is mirrored read-only into the container at `/home/$REMOTE_USER/.gitconfig` — always on, refreshed by `reconfigure`. This propagates your commit identity (`user.name`/`user.email`), aliases, `insteadOf` URL rewrites and `safe.directory` entries. Host-only settings that cannot work inside the sandbox (GPG signing without keys, credential helpers referencing host binaries, absolute `[include]` paths) fail loudly rather than being sanitized.
+
+The optional `ssh` feature (selectable at `init`, toggleable at `reconfigure`) additionally mirrors your host `~/.ssh` directory (keys, `config`, `known_hosts`) read-only, enabling git push/pull over SSH remotes from inside the sandbox. Everything under `~/.ssh` — including private key material — becomes readable by the agent in the container; `:ro` prevents modification, not reads. Caveats: `known_hosts` cannot grow from inside, `ControlMaster` sockets cannot be created, and passphrase-protected keys cannot be unlocked non-interactively.
 
 ### Debug Configuration
 

@@ -7,10 +7,12 @@ from typing import List
 import pytest
 
 from opencode_framework.generators.templates import (
+    GITCONFIG_MOUNT_LINE,
     GRADLE_ENV_COMMENT,
     GRADLE_OPTS_LINE,
     M2_SETTINGS_MOUNT_LINE,
     NPMRC_MOUNT_LINE,
+    SSH_MOUNT_LINE,
     TemplateHandler,
 )
 from opencode_framework.sandbox import features
@@ -65,6 +67,17 @@ class TestDetect:
         dc = _dc_with_features("docker")
         detected = DevcontainerGenerator.detect(dc)
         assert "docker" in detected
+
+    def test_detects_ssh_feature(self):
+        """The ssh footprint (openssh-client apt package) is detected."""
+        dc = _dc_with_features("ssh")
+        detected = DevcontainerGenerator.detect(dc)
+        assert "ssh" in detected
+
+    def test_ssh_not_detected_without_package(self):
+        dc = _dc_with_features("python")
+        detected = DevcontainerGenerator.detect(dc)
+        assert "ssh" not in detected
 
     def test_detects_all_features(self):
         dc = _dc_with_features("docker", "python", "nodejs", "java")
@@ -266,11 +279,40 @@ class TestApplyDelta:
         assert "features" in dc
         assert DevcontainerGenerator.FEATURE_URL_MAP["python"] in dc["features"]
 
+    def test_add_ssh_merges_apt_package(self):
+        """ssh merges openssh-client into apt-packages, keeping docker's."""
+        dc = _dc_with_features("docker")
+        DevcontainerGenerator.apply_delta(dc, add=["ssh"], remove=[])
+        entry = dc["features"][DevcontainerGenerator.APT_PACKAGES_FEATURE_URL]
+        packages = entry["packages"].split(",")
+        assert "openssh-client" in packages
+        assert "podman" in packages
+
+    def test_remove_ssh_filters_apt_package(self):
+        """Removing ssh drops only openssh-client, keeping docker's."""
+        dc = _dc_with_features("docker", "ssh")
+        DevcontainerGenerator.apply_delta(dc, add=[], remove=["ssh"])
+        entry = dc["features"][DevcontainerGenerator.APT_PACKAGES_FEATURE_URL]
+        packages = entry["packages"].split(",")
+        assert "openssh-client" not in packages
+        assert "podman" in packages
+
 
 class TestRebuildFeatures:
     """Tests for ComposeGenerator.rebuild_features."""
 
     REPO = "myrepo"
+
+    @pytest.fixture(autouse=True)
+    def _deterministic_ssh_probe(self, monkeypatch):
+        """Pin the host ~/.ssh probe for both render and reconcile paths."""
+        probe = lambda enabled: "/home/alice/.ssh" if enabled else ""  # noqa: E731
+        monkeypatch.setattr(
+            "opencode_framework.generators.templates.host_ssh_dir_path", probe
+        )
+        monkeypatch.setattr(
+            "opencode_framework.sandbox.compose.host_ssh_dir_path", probe
+        )
 
     def _rebuild(
         self, text: str, features: List[str], java_build_tools: List[str] = None
@@ -307,6 +349,10 @@ class TestRebuildFeatures:
         ) is ("java" in features and ("gradle" in (java_build_tools or [])))
         # Host ~/.npmrc mirror mount is tool-agnostic and always present
         assert NPMRC_MOUNT_LINE in text
+        # Host ~/.gitconfig mirror mount is tool-agnostic and always present
+        assert GITCONFIG_MOUNT_LINE in text
+        # Host ~/.ssh mirror mount accompanies the ssh feature
+        assert (SSH_MOUNT_LINE in text) is ("ssh" in features)
         # Host ~/.m2/settings.xml mirror mount accompanies the Maven feature
         assert (M2_SETTINGS_MOUNT_LINE in text) is (
             "java" in features and ("maven" in (java_build_tools or []))
@@ -335,6 +381,8 @@ class TestRebuildFeatures:
             ["python", "java"],
             ["python", "java", "docker"],
             ["nodejs"],
+            ["ssh"],
+            ["python", "ssh"],
         ):
             text = _render_compose(self.REPO, feats)
             rebuilt = self._rebuild(text, feats)
@@ -383,6 +431,40 @@ class TestRebuildFeatures:
         assert '["opencode"]' in rebuilt
         assert "seccomp=unconfined" not in rebuilt
         assert f"docker-{self.REPO}-opencode" not in rebuilt
+
+    def test_toggle_ssh_on(self):
+        text = _render_compose(self.REPO, [])
+        rebuilt = self._rebuild(text, ["ssh"])
+        assert SSH_MOUNT_LINE in rebuilt
+        assert GITCONFIG_MOUNT_LINE in rebuilt
+
+    def test_toggle_ssh_off(self):
+        text = _render_compose(self.REPO, ["ssh"])
+        rebuilt = self._rebuild(text, [])
+        assert SSH_MOUNT_LINE not in rebuilt
+
+    def test_ssh_mount_omitted_when_host_dir_missing(self, monkeypatch):
+        """No /dev/null fallback: the line is dropped when ~/.ssh is absent."""
+        monkeypatch.setattr(
+            "opencode_framework.generators.templates.host_ssh_dir_path",
+            lambda enabled: "",
+        )
+        monkeypatch.setattr(
+            "opencode_framework.sandbox.compose.host_ssh_dir_path", lambda enabled: ""
+        )
+        text = _render_compose(self.REPO, ["ssh"])
+        assert SSH_MOUNT_LINE not in text
+        rebuilt = self._rebuild(text, ["ssh"])
+        assert SSH_MOUNT_LINE not in rebuilt
+
+    def test_legacy_harness_gains_gitconfig_mount(self):
+        """A pre-gitconfig compose gains the mirror line on any rebuild."""
+        text = _render_compose(self.REPO, ["python"]).replace(
+            GITCONFIG_MOUNT_LINE + "\n", ""
+        )
+        assert GITCONFIG_MOUNT_LINE not in text
+        rebuilt = self._rebuild(text, ["python"])
+        assert GITCONFIG_MOUNT_LINE in rebuilt
 
     def test_legacy_dind_stripped_on_rebuild(self):
         """Legacy DinD footprint (privileged + docker-init entrypoint) is stripped."""
@@ -1312,6 +1394,8 @@ class TestUpdateFeatures:
         monkeypatch.setattr(features, "prompt_port_mappings", lambda cur=None: [])
         monkeypatch.setattr(features, "host_npmrc_path", lambda: "/home/alice/.npmrc")
         monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
+        monkeypatch.setattr(features, "host_gitconfig_path", lambda: "")
+        monkeypatch.setattr(features, "host_ssh_dir_path", lambda _: "")
         opencode_dir = self._seed_opencode(tmp_path, [])
         env_path = opencode_dir / ".env"
         env_path.write_text("OCF_AGENT_TOOL=opencode\n")
@@ -1324,6 +1408,40 @@ class TestUpdateFeatures:
         assert "OCF_M2_SETTINGS_PATH=\n" in content
         assert GRADLE_OPTS_LINE in content
         assert "OCF_AGENT_TOOL=opencode" in content
+
+    def test_ssh_toggle_updates_devcontainer_compose_and_env(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """Enabling ssh end to end: openssh-client lands in apt-packages,
+        the compose gains the ~/.ssh mirror, .env records the host dir."""
+        monkeypatch.setattr(features, "is_interactive", lambda: True)
+        monkeypatch.setattr(
+            features,
+            "prompt_feature_changes",
+            lambda cur, jbt: (["python", "ssh"], []),
+        )
+        monkeypatch.setattr(features, "prompt_port_mappings", lambda cur=None: [])
+        monkeypatch.setattr(features, "host_gitconfig_path", lambda: "")
+        monkeypatch.setattr(
+            features, "host_ssh_dir_path", lambda e: "/home/alice/.ssh" if e else ""
+        )
+        monkeypatch.setattr(
+            "opencode_framework.sandbox.compose.host_ssh_dir_path",
+            lambda enabled: "/home/alice/.ssh" if enabled else "",
+        )
+        opencode_dir = self._seed_opencode(tmp_path, ["python"])
+        env_path = opencode_dir / ".env"
+        env_path.write_text("OCF_AGENT_TOOL=opencode\n")
+
+        result = features.update_features(opencode_dir, tmp_path.name, "opencode")
+
+        assert result is True
+        dc = json.loads((opencode_dir / "devcontainer.json").read_text())
+        entry = dc["features"][DevcontainerGenerator.APT_PACKAGES_FEATURE_URL]
+        assert "openssh-client" in entry["packages"].split(",")
+        compose = (opencode_dir / "docker-compose.yaml").read_text()
+        assert SSH_MOUNT_LINE in compose
+        assert "OCF_SSH_DIR_PATH=/home/alice/.ssh" in env_path.read_text()
 
 
 class TestMigrateLegacyDind:
@@ -1496,6 +1614,8 @@ class TestReconcileEnvForFeatures:
         "OCF_REMOTE_FRAMEWORK_CONFIG_PATH=/opt/ocframework/config\n"
         "OCF_NPMRC_PATH=\n"
         "OCF_M2_SETTINGS_PATH=\n"
+        "OCF_GITCONFIG_PATH=\n"
+        "OCF_SSH_DIR_PATH=\n"
         "OCF_AGENT_TOOL=opencode\n"
         "OCF_MAIN_MODEL=anthropic/claude-opus-4-8\n"
     )
@@ -1508,6 +1628,8 @@ class TestReconcileEnvForFeatures:
     def test_no_change_returns_false(self, tmp_path: Path, monkeypatch):
         monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
         monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
+        monkeypatch.setattr(features, "host_gitconfig_path", lambda: "")
+        monkeypatch.setattr(features, "host_ssh_dir_path", lambda _: "")
         env_path = self._seed(tmp_path)
 
         assert features.reconcile_env_for_features(env_path, []) is False
@@ -1520,6 +1642,8 @@ class TestReconcileEnvForFeatures:
             "host_m2_settings_path",
             lambda m: "/home/alice/.m2/settings.xml" if m else "",
         )
+        monkeypatch.setattr(features, "host_gitconfig_path", lambda: "")
+        monkeypatch.setattr(features, "host_ssh_dir_path", lambda _: "")
         env_path = self._seed(tmp_path)
 
         assert features.reconcile_env_for_features(env_path, ["maven"]) is True
@@ -1532,6 +1656,8 @@ class TestReconcileEnvForFeatures:
     def test_clears_stale_mirror_paths(self, tmp_path: Path, monkeypatch):
         monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
         monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
+        monkeypatch.setattr(features, "host_gitconfig_path", lambda: "")
+        monkeypatch.setattr(features, "host_ssh_dir_path", lambda _: "")
         env_path = self._seed(
             tmp_path,
             self.BASE_ENV.replace(
@@ -1557,6 +1683,8 @@ class TestReconcileEnvForFeatures:
             "host_m2_settings_path",
             lambda m: "/home/alice/.m2/settings.xml" if m else "",
         )
+        monkeypatch.setattr(features, "host_gitconfig_path", lambda: "")
+        monkeypatch.setattr(features, "host_ssh_dir_path", lambda _: "")
         env_path = self._seed(
             tmp_path,
             self.BASE_ENV.replace(
@@ -1571,6 +1699,8 @@ class TestReconcileEnvForFeatures:
     def test_adds_gradle_opts_when_selected(self, tmp_path: Path, monkeypatch):
         monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
         monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
+        monkeypatch.setattr(features, "host_gitconfig_path", lambda: "")
+        monkeypatch.setattr(features, "host_ssh_dir_path", lambda _: "")
         env_path = self._seed(tmp_path)
 
         assert features.reconcile_env_for_features(env_path, ["gradle"]) is True
@@ -1582,6 +1712,8 @@ class TestReconcileEnvForFeatures:
     ):
         monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
         monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
+        monkeypatch.setattr(features, "host_gitconfig_path", lambda: "")
+        monkeypatch.setattr(features, "host_ssh_dir_path", lambda _: "")
         seed = self.BASE_ENV.replace(
             "OCF_AGENT_TOOL=opencode",
             f"{GRADLE_ENV_COMMENT}\n{GRADLE_OPTS_LINE}\nOCF_AGENT_TOOL=opencode",
@@ -1593,6 +1725,8 @@ class TestReconcileEnvForFeatures:
     def test_gradle_line_removed_when_deselected(self, tmp_path: Path, monkeypatch):
         monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
         monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
+        monkeypatch.setattr(features, "host_gitconfig_path", lambda: "")
+        monkeypatch.setattr(features, "host_ssh_dir_path", lambda _: "")
         seed = self.BASE_ENV.replace(
             "OCF_AGENT_TOOL=opencode",
             f"{GRADLE_ENV_COMMENT}\n{GRADLE_OPTS_LINE}\nOCF_AGENT_TOOL=opencode",
@@ -1609,6 +1743,8 @@ class TestReconcileEnvForFeatures:
     ):
         monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
         monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
+        monkeypatch.setattr(features, "host_gitconfig_path", lambda: "")
+        monkeypatch.setattr(features, "host_ssh_dir_path", lambda _: "")
         seed = self.BASE_ENV.replace(
             "OCF_AGENT_TOOL=opencode",
             'GRADLE_OPTS="-Xmx1g"\nOCF_AGENT_TOOL=opencode',
@@ -1623,6 +1759,8 @@ class TestReconcileEnvForFeatures:
     def test_custom_gradle_opts_survive_deselection(self, tmp_path: Path, monkeypatch):
         monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
         monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
+        monkeypatch.setattr(features, "host_gitconfig_path", lambda: "")
+        monkeypatch.setattr(features, "host_ssh_dir_path", lambda _: "")
         seed = self.BASE_ENV.replace(
             "OCF_AGENT_TOOL=opencode",
             'GRADLE_OPTS="-Xmx1g"\nOCF_AGENT_TOOL=opencode',
@@ -1636,6 +1774,8 @@ class TestReconcileEnvForFeatures:
         """Legacy .env files without the mirror keys gain them in place."""
         monkeypatch.setattr(features, "host_npmrc_path", lambda: "/home/alice/.npmrc")
         monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
+        monkeypatch.setattr(features, "host_gitconfig_path", lambda: "")
+        monkeypatch.setattr(features, "host_ssh_dir_path", lambda _: "")
         legacy = (
             "REMOTE_USER=root\n"
             "OCF_LOCAL_FRAMEWORK_PATH=/opt/framework\n"
@@ -1654,3 +1794,79 @@ class TestReconcileEnvForFeatures:
         m2_idx = lines.index("OCF_M2_SETTINGS_PATH=")
         gradle_idx = lines.index(GRADLE_OPTS_LINE)
         assert npmrc_idx < m2_idx < gradle_idx
+
+    def test_gitconfig_refreshed_from_host_state(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
+        monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
+        monkeypatch.setattr(
+            features, "host_gitconfig_path", lambda: "/home/alice/.gitconfig"
+        )
+        monkeypatch.setattr(features, "host_ssh_dir_path", lambda _: "")
+        env_path = self._seed(
+            tmp_path,
+            self.BASE_ENV.replace(
+                "OCF_GITCONFIG_PATH=", "OCF_GITCONFIG_PATH=/stale/path"
+            ),
+        )
+
+        assert features.reconcile_env_for_features(env_path, []) is True
+        content = env_path.read_text()
+        assert "OCF_GITCONFIG_PATH=/home/alice/.gitconfig\n" in content
+        assert "/stale/path" not in content
+
+    def test_ssh_dir_set_and_cleared_with_feature_flag(
+        self, tmp_path: Path, monkeypatch
+    ):
+        monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
+        monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
+        monkeypatch.setattr(features, "host_gitconfig_path", lambda: "")
+        monkeypatch.setattr(
+            features, "host_ssh_dir_path", lambda e: "/home/alice/.ssh" if e else ""
+        )
+        env_path = self._seed(
+            tmp_path,
+            self.BASE_ENV.replace(
+                "OCF_SSH_DIR_PATH=", "OCF_SSH_DIR_PATH=/home/alice/.ssh"
+            ),
+        )
+
+        assert features.reconcile_env_for_features(env_path, [], ssh_enabled=True) is (
+            False
+        )
+        assert (
+            features.reconcile_env_for_features(env_path, [], ssh_enabled=False) is True
+        )
+        assert "OCF_SSH_DIR_PATH=\n" in env_path.read_text()
+
+    def test_inserts_gitconfig_and_ssh_after_anchor_chain(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """Legacy .env gains gitconfig/ssh keys in template order, past
+        the gradle block when present."""
+        monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
+        monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
+        monkeypatch.setattr(
+            features, "host_gitconfig_path", lambda: "/home/alice/.gitconfig"
+        )
+        monkeypatch.setattr(
+            features, "host_ssh_dir_path", lambda e: "/home/alice/.ssh" if e else ""
+        )
+        legacy = (
+            "REMOTE_USER=root\n"
+            "OCF_LOCAL_FRAMEWORK_PATH=/opt/framework\n"
+            "OCF_REMOTE_FRAMEWORK_CONFIG_PATH=/opt/ocframework/config\n"
+            "OCF_AGENT_TOOL=opencode\n"
+        )
+        env_path = self._seed(tmp_path, legacy)
+
+        assert (
+            features.reconcile_env_for_features(env_path, ["gradle"], ssh_enabled=True)
+            is True
+        )
+        lines = env_path.read_text().split("\n")
+        npmrc_idx = lines.index("OCF_NPMRC_PATH=")
+        m2_idx = lines.index("OCF_M2_SETTINGS_PATH=")
+        gradle_idx = lines.index(GRADLE_OPTS_LINE)
+        gitconfig_idx = lines.index("OCF_GITCONFIG_PATH=/home/alice/.gitconfig")
+        ssh_idx = lines.index("OCF_SSH_DIR_PATH=/home/alice/.ssh")
+        assert npmrc_idx < m2_idx < gradle_idx < gitconfig_idx < ssh_idx

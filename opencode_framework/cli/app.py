@@ -36,7 +36,7 @@ from opencode_framework.agent.registry import (
     ToolSpec,
     managed_volume_name,
 )
-from opencode_framework.config import discover_global_settings
+from opencode_framework.config import discover_global_settings, host_ssh_dir_path
 from opencode_framework.exceptions import PortAllocationError
 from opencode_framework.generators.documentation import DocumentationGenerator
 from opencode_framework.generators.orchestrator import GenerationOrchestrator
@@ -527,6 +527,14 @@ def init(
     typer.echo(f"Generating {spec.config_dirname}/ directory...")
     orchestrator = GenerationOrchestrator()
     orchestrator.generate(repo_path, wizard_result, podman_caps=podman_caps)
+
+    if "ssh" in wizard_result.optional_features and not host_ssh_dir_path(True):
+        typer.secho(
+            "Warning: ssh feature selected but ~/.ssh does not exist on "
+            "the host; the SSH mirror will be omitted. Re-run "
+            "'ocframework reconfigure' after creating it.",
+            fg=typer.colors.YELLOW,
+        )
 
     # Derive REMOTE_USER after generation: generate() writes .env fresh
     # from the template (REMOTE_USER=root), so the surgical write must
@@ -1994,7 +2002,7 @@ def reconfigure(
 ) -> None:
     """Reconfigure an existing framework harness interactively.
 
-    Prompts for devcontainer feature changes (docker/python/nodejs/java,
+    Prompts for devcontainer feature changes (docker/python/nodejs/java/ssh,
     Maven/Gradle for Java) and port mappings, rebuilds the image, updates
     the cached image ID and removes the tool's existing container (never
     starts one) so the next launch picks up the new image. Feature prompts

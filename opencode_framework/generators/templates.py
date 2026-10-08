@@ -10,6 +10,7 @@ from opencode_framework.agent.registry import (
     managed_volume_keys,
     managed_volume_name,
 )
+from opencode_framework.config import host_ssh_dir_path
 
 # Host dotfile mirror mounts (6-space indent, read-only). The compose
 # interpolations fall back to /dev/null when the corresponding
@@ -22,6 +23,14 @@ M2_SETTINGS_MOUNT_LINE = (
     "      - ${OCF_M2_SETTINGS_PATH:-/dev/null}:"
     "/home/${REMOTE_USER}/.m2/settings.xml:ro"
 )
+GITCONFIG_MOUNT_LINE = (
+    "      - ${OCF_GITCONFIG_PATH:-/dev/null}:/home/${REMOTE_USER}/.gitconfig:ro"
+)
+# Unlike the file mirrors above, the ssh mirror targets a directory, so
+# a /dev/null fallback would break ssh inside the container; the line is
+# only emitted (fresh render and reconciler alike) when the ssh feature
+# is on and the host ~/.ssh exists at generation time.
+SSH_MOUNT_LINE = "      - ${OCF_SSH_DIR_PATH}:/home/${REMOTE_USER}/.ssh:ro"
 
 # Container path of the docker feature's podman graph root in standard
 # mode (rootless outer daemon absent). The /usr/local/bin/docker wrapper
@@ -451,6 +460,8 @@ class TemplateHandler:
         npmrc_path: Optional[str] = None,
         m2_settings_path: Optional[str] = None,
         java_build_tools: Optional[List[str]] = None,
+        gitconfig_path: Optional[str] = None,
+        ssh_dir_path: Optional[str] = None,
     ) -> str:
         """Render environment template with paths and the tool fragment.
 
@@ -465,6 +476,11 @@ class TemplateHandler:
                 Maven feature is on and the file exists, else None/""
             java_build_tools: Enabled Java build tools (e.g., ["maven"],
                 ["gradle"]); drives the GRADLE_OPTS fragment
+            gitconfig_path: Host ``~/.gitconfig`` path when the file
+                exists, else None/"" (compose then falls back to
+                /dev/null)
+            ssh_dir_path: Host ``~/.ssh`` directory path when the ssh
+                feature is on and the directory exists, else None/""
 
         Returns:
             Rendered environment template
@@ -485,6 +501,8 @@ class TemplateHandler:
             "{{OCF_LOCAL_FRAMEWORK_PATH}}": framework_repo_path or "",
             "{{OCF_NPMRC_PATH}}": npmrc_path or "",
             "{{OCF_M2_SETTINGS_PATH}}": m2_settings_path or "",
+            "{{OCF_GITCONFIG_PATH}}": gitconfig_path or "",
+            "{{OCF_SSH_DIR_PATH}}": ssh_dir_path or "",
             "{{GRADLE_ENV}}": gradle_env,
         }
 
@@ -525,10 +543,12 @@ class TemplateHandler:
         tool = spec.name
 
         # Mount order must match ComposeGenerator.rebuild_features exactly,
-        # so a fresh render is reconcile-clean: npmrc mirror (always,
-        # tool-agnostic, /dev/null fallback), python venv, Java build tools,
-        # Podman storage.
-        additional_volume_mounts = f"\n{NPMRC_MOUNT_LINE}"
+        # so a fresh render is reconcile-clean: npmrc + gitconfig mirrors
+        # (always on, tool-agnostic, /dev/null fallback), python venv,
+        # Java build tools, Podman storage, ssh mirror (feature-gated,
+        # only when the host ~/.ssh exists — no /dev/null fallback for a
+        # directory target).
+        additional_volume_mounts = f"\n{NPMRC_MOUNT_LINE}\n{GITCONFIG_MOUNT_LINE}"
         entrypoint = f'["{spec.binary}"]'
 
         if optional_features and "python" in optional_features:
@@ -562,6 +582,9 @@ class TemplateHandler:
                 f"\n      - {managed_volume_name('docker', repo_name, tool)}:"
                 f"{graph_root_target}"
             )
+
+        if host_ssh_dir_path("ssh" in (optional_features or [])):
+            additional_volume_mounts += f"\n{SSH_MOUNT_LINE}"
         security_lines = (
             (PODMAN_CAPS_SECURITY_LINES if podman_caps else PODMAN_SECURITY_LINES)
             if optional_features and "docker" in optional_features

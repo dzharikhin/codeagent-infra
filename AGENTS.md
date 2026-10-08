@@ -323,7 +323,7 @@ Rule: variables shared across parts/tools may be unprefixed; part- or tool-speci
 | Family | Variables |
 |---|---|
 | shared (no prefix) | `REMOTE_USER`, `XDG_*` |
-| sandbox | `OCF_IMAGE_ID`, `OCF_LOCAL_FRAMEWORK_PATH`, `OCF_LOCAL_PROJECTS_DIR`, `OCF_LOCAL_REPO_ROOT`, `OCF_REMOTE_FRAMEWORK_CONFIG_PATH`, `OCF_SESSION_SUFFIX`, `OCF_NPMRC_PATH`, `OCF_M2_SETTINGS_PATH` |
+| sandbox | `OCF_IMAGE_ID`, `OCF_LOCAL_FRAMEWORK_PATH`, `OCF_LOCAL_PROJECTS_DIR`, `OCF_LOCAL_REPO_ROOT`, `OCF_REMOTE_FRAMEWORK_CONFIG_PATH`, `OCF_SESSION_SUFFIX`, `OCF_NPMRC_PATH`, `OCF_M2_SETTINGS_PATH`, `OCF_GITCONFIG_PATH`, `OCF_SSH_DIR_PATH` |
 | agent tool | `OCF_AGENT_TOOL`, `OCF_AGENT_VERSION` |
 | agent layers | `OCF_GLOBAL_CONFIG_PATH` (dir for opencode, file for qwen/dsh), `OCF_GLOBAL_AUTH_PATH` (opencode, dsh) |
 | agent defaults via env | `OCF_MAIN_MODEL`, `OCF_BUILD_MODEL`, `OCF_SMALL_MODEL`, `OCF_PLAN_MAX_BEFORE_RESPONSE_STEPS`, `OCF_BUILD_MAX_BEFORE_RESPONSE_STEPS` |
@@ -342,7 +342,13 @@ way for the two to disagree.
 `~/.npmrc` and `~/.m2/settings.xml` when those files exist (npmrc for every
 tool, settings.xml only when the maven feature is on); empty otherwise.
 The compose mirror mounts use `${VAR:-/dev/null}`, so an unset/empty value
-is a harmless no-op. `init` resolves both at generation time (host home via
+is a harmless no-op. `OCF_GITCONFIG_PATH` follows the same npmrc pattern for
+`~/.gitconfig` (always on), and `OCF_SSH_DIR_PATH` for the ssh feature's
+`~/.ssh` directory mirror — except that the ssh mount line carries no
+`/dev/null` fallback (a char device at `~/.ssh` would break ssh), so the
+line is emitted only when the feature is on and the host directory exists
+at generation time; run `reconfigure` after creating `~/.ssh` to pick it
+up. `init` resolves all of them at generation time (host home via
 `config.get_local_home`); `reconfigure` re-checks them on every run via
 `features.reconcile_env_for_features`, which surgically updates just these
 keys and the managed `GRADLE_OPTS` line in `.env` (never regenerating the
@@ -434,6 +440,12 @@ Read-only mounts:
   maven feature is on — only when those files exist (`OCF_NPMRC_PATH` /
   `OCF_M2_SETTINGS_PATH` empty mounts `/dev/null` instead; the settings.xml
   bind sits on top of the `m2-*` named volume, which wins by mount depth)
+- Host `~/.gitconfig` at `/home/$REMOTE_USER/.gitconfig` for every tool,
+  always on (`OCF_GITCONFIG_PATH` empty mounts `/dev/null` instead) — see
+  the Host Identity Mirrors section
+- Host `~/.ssh` directory at `/home/$REMOTE_USER/.ssh:ro` when the ssh
+  feature is on and the directory exists (see the Host Identity Mirrors
+  section for the trust posture and caveats)
 
 Read-write mounts:
 - `<config_dir>/runtime_data/` (`.opencode/runtime_data/`, `.qwen/runtime_data/` or `.dsh/runtime_data/`)
@@ -619,3 +631,40 @@ and/or Gradle:
 - Maven adds the `m2-<repo>-<tool>` named volume at `/home/$REMOTE_USER/.m2` plus the `~/.m2/settings.xml` host mirror (only when that host file exists)
 - Gradle adds the `gradle-<repo>-<tool>` named volume at `/home/$REMOTE_USER/.gradle` and pins `GRADLE_OPTS="-Dorg.gradle.daemon=false"` in `.env` (a daemon must not outlive the ephemeral container); deselection removes only the managed line, custom values survive
 - The `.npmrc` mirror mount is feature- and tool-agnostic: always present, `/dev/null` fallback
+
+### Host Identity Mirrors (git config, SSH)
+
+The host `~/.gitconfig` is mirrored read-only at
+`/home/$REMOTE_USER/.gitconfig` for every tool, always on (npmrc pattern:
+`OCF_GITCONFIG_PATH` in `.env`, `/dev/null` fallback, refreshed by
+`reconfigure`; harnesses generated before the mirror existed gain the mount
+on any feature rebuild). This propagates the commit identity
+(`user.name`/`user.email`), aliases, `insteadOf` URL rewrites and
+`safe.directory` entries — the latter stay valid because the project repo
+mounts at its identical host path. Host-only settings that cannot work
+inside the sandbox are tolerated, not sanitized (documented failure modes):
+`commit.gpgsign`/`signingkey` without GPG keys make commits fail loudly,
+credential helpers referencing host binaries (e.g. `!gh auth git-credential`)
+are absent, and absolute-path `[include]` directives break. The XDG location
+`~/.config/git/config` is not mirrored (scope is `~/.gitconfig` only).
+
+The `ssh` optional feature (wizard key `ssh`) mirrors the host `~/.ssh`
+directory read-only at `/home/$REMOTE_USER/.ssh` (keys, `config`,
+`known_hosts`), enabling git push/pull over SSH remotes from inside the
+sandbox. Its devcontainer footprint is the `openssh-client` apt package
+merged into the base apt-packages feature (docker/podman pattern), which
+both guarantees the binary and serves as the detection marker. The compose
+mount line is emitted only when the feature is on and the host `~/.ssh`
+exists at generation time — there is no `/dev/null` fallback because a char
+device at `~/.ssh` breaks ssh; `init`/`reconfigure` warn and omit the mount
+when the directory is missing, and a later `reconfigure` picks it up. Trust
+posture: everything under `~/.ssh` — including private key material — is
+readable by the agent inside the container (the uid-mapping invariant makes
+the host ownership match); `:ro` prevents modification, not reads. Caveats:
+`known_hosts` cannot grow from inside (new host keys must be pre-trusted on
+the host), `ControlMaster` sockets cannot be created (ssh degrades to
+unmultiplexed connections), passphrase-protected keys cannot be unlocked
+non-interactively, and absolute-path `Include` directives in `~/.ssh/config`
+break unless the included files live inside `~/.ssh` itself (relative
+includes work). No SSH agent forwarding is performed (`SSH_AUTH_SOCK` is
+deliberately not propagated).

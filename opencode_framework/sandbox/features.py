@@ -7,7 +7,12 @@ from typing import List, Optional, Tuple
 
 import typer
 
-from opencode_framework.config import host_m2_settings_path, host_npmrc_path
+from opencode_framework.config import (
+    host_gitconfig_path,
+    host_m2_settings_path,
+    host_npmrc_path,
+    host_ssh_dir_path,
+)
 from opencode_framework.generators.templates import (
     GRADLE_ENV_COMMENT,
     GRADLE_OPTS_LINE,
@@ -22,6 +27,7 @@ AVAILABLE_FEATURES: List[Tuple[str, str]] = [
     ("python", "Python + Poetry + uv"),
     ("nodejs", "Node.js + npm"),
     ("java", "Java (JDK)"),
+    ("ssh", "SSH keys and config from host (~/.ssh mirrored read-only)"),
 ]
 
 JAVA_BUILD_TOOLS = ["maven", "gradle"]
@@ -140,11 +146,16 @@ def prompt_port_mappings(current_ports: Optional[List[str]] = None) -> List[str]
     return parse_port_mappings(raw)
 
 
-def reconcile_env_for_features(env_path: Path, java_build_tools: List[str]) -> bool:
+def reconcile_env_for_features(
+    env_path: Path,
+    java_build_tools: List[str],
+    ssh_enabled: bool = False,
+) -> bool:
     """Reconcile feature-dependent entries in the config worktree's .env.
 
-    Surgically updates (never regenerates) the ``OCF_NPMRC_PATH`` and
-    ``OCF_M2_SETTINGS_PATH`` host-mirror values and the managed
+    Surgically updates (never regenerates) the ``OCF_NPMRC_PATH``,
+    ``OCF_M2_SETTINGS_PATH``, ``OCF_GITCONFIG_PATH`` and
+    ``OCF_SSH_DIR_PATH`` host-mirror values and the managed
     ``GRADLE_OPTS`` line to match the final feature selection and the
     current host file state; all other lines are preserved verbatim.
     When Gradle is enabled an existing ``GRADLE_OPTS`` line is pinned to
@@ -156,6 +167,8 @@ def reconcile_env_for_features(env_path: Path, java_build_tools: List[str]) -> b
         env_path: Path to the config worktree's .env file.
         java_build_tools: Final Java build tool selection
             (e.g. ["maven"], ["gradle"], ["maven", "gradle"]).
+        ssh_enabled: Whether the ssh feature is enabled; gates the
+            ``OCF_SSH_DIR_PATH`` value.
 
     Returns:
         True when the file content changed.
@@ -166,6 +179,8 @@ def reconcile_env_for_features(env_path: Path, java_build_tools: List[str]) -> b
     desired_values = {
         "OCF_NPMRC_PATH": host_npmrc_path(),
         "OCF_M2_SETTINGS_PATH": host_m2_settings_path("maven" in java_build_tools),
+        "OCF_GITCONFIG_PATH": host_gitconfig_path(),
+        "OCF_SSH_DIR_PATH": host_ssh_dir_path(ssh_enabled),
     }
     have_gradle = "gradle" in java_build_tools
 
@@ -222,6 +237,21 @@ def reconcile_env_for_features(env_path: Path, java_build_tools: List[str]) -> b
         _insert_after(
             "OCF_M2_SETTINGS_PATH=",
             [GRADLE_ENV_COMMENT, GRADLE_OPTS_LINE],
+        )
+    if not seen["OCF_GITCONFIG_PATH"]:
+        # Template order is npmrc < m2 < gradle block < gitconfig < ssh;
+        # when gradle is on its managed line is guaranteed present here
+        # (pre-existing or just inserted), so anchor past it, else past
+        # the m2 line.
+        gitconfig_anchor = GRADLE_OPTS_LINE if have_gradle else "OCF_M2_SETTINGS_PATH="
+        _insert_after(
+            gitconfig_anchor,
+            [f"OCF_GITCONFIG_PATH={desired_values['OCF_GITCONFIG_PATH']}"],
+        )
+    if not seen["OCF_SSH_DIR_PATH"]:
+        _insert_after(
+            "OCF_GITCONFIG_PATH=",
+            [f"OCF_SSH_DIR_PATH={desired_values['OCF_SSH_DIR_PATH']}"],
         )
 
     trailing = "\n" if text.endswith("\n") else ""
@@ -351,9 +381,16 @@ def update_features(
     # Reconcile the feature-dependent .env entries (host dotfile mirror
     # paths, managed GRADLE_OPTS line) even when the selection is
     # unchanged: host files may have appeared or disappeared since init.
+    if "ssh" in new_features and not host_ssh_dir_path(True):
+        typer.secho(
+            "Warning: ssh feature selected but ~/.ssh does not exist on "
+            "the host; the SSH mirror will be omitted. Re-run "
+            "'ocframework reconfigure' after creating it.",
+            fg=typer.colors.YELLOW,
+        )
     env_path = config_dir / ".env"
     if env_path.is_file() and reconcile_env_for_features(
-        env_path, new_java_build_tools
+        env_path, new_java_build_tools, ssh_enabled="ssh" in new_features
     ):
         typer.secho(f"Updated {config_dir.name}/.env", fg=typer.colors.GREEN)
         changed = True
