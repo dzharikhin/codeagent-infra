@@ -360,7 +360,9 @@ class TestReconfigure:
 
         calls = {}
 
-        def fake_update(config_dir, repo_name, agent_tool, podman_caps=False):
+        def fake_update(
+            config_dir, repo_name, agent_tool, podman_caps=False, same=False
+        ):
             calls["args"] = (config_dir, repo_name, agent_tool)
             return False
 
@@ -375,6 +377,50 @@ class TestReconfigure:
         assert calls["args"][0].name == ".opencode"
         assert calls["args"][1] == tmp_path.name
         assert calls["args"][2] == "opencode"
+
+    def test_reconfigure_same_flag_forwarded(self, tmp_path: Path, monkeypatch):
+        """reconfigure --same must reach update_features as same=True."""
+        self._setup_repo(tmp_path)
+        app_module = self._patch_launch_deps(monkeypatch, tmp_path)
+
+        calls: dict = {}
+
+        def fake_update(
+            config_dir, repo_name, agent_tool, podman_caps=False, same=False
+        ):
+            calls["same"] = same
+            return False
+
+        monkeypatch.setattr(app_module, "update_features", fake_update)
+
+        from typer.testing import CliRunner
+
+        result = CliRunner().invoke(app_module.app, ["reconfigure", "--same"])
+
+        assert result.exit_code == 0
+        assert calls["same"] is True
+
+    def test_reconfigure_same_skips_tty_tool_prompt(self, tmp_path: Path, monkeypatch):
+        """reconfigure --same with several harnesses hard-errors even on
+        a TTY — the selection prompt is replaced by the --tool
+        remediation, exactly like a redirected stdin."""
+        self._setup_repo(tmp_path)
+        qwen = tmp_path / ".qwen"
+        qwen.mkdir()
+        (qwen / "docker-compose.yaml").write_text(
+            "services:\n  qwen:\n    container_name: ocf_repo_qwen\n"
+        )
+        (qwen / ".env").write_text("REMOTE_USER=root\nOCF_AGENT_TOOL=qwen\n")
+        app_module = self._patch_launch_deps(monkeypatch, tmp_path)
+        monkeypatch.setattr(app_module, "is_interactive", lambda: True)
+
+        from typer.testing import CliRunner
+
+        result = CliRunner().invoke(app_module.app, ["reconfigure", "--same"])
+
+        assert result.exit_code == 1
+        assert "multiple framework config directories found" in result.output
+        assert "pass --tool (opencode | qwen | dsh)" in result.output
 
     def test_reconfigure_builds_and_saves_image_id(self, tmp_path: Path, monkeypatch):
         """reconfigure always rebuilds and persists the image ID."""
@@ -480,7 +526,9 @@ class TestReconfigure:
 
         calls = {}
 
-        def fake_update(config_dir, repo_name, agent_tool, podman_caps=False):
+        def fake_update(
+            config_dir, repo_name, agent_tool, podman_caps=False, same=False
+        ):
             calls["args"] = (config_dir, repo_name, agent_tool)
             return False
 

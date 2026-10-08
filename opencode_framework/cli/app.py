@@ -236,6 +236,7 @@ def _select_launch_target(
     tool: Optional[str],
     env_file: Optional[Path],
     env_vars: Optional[List[str]],
+    same: bool = False,
 ) -> Tuple[Path, ToolSpec]:
     """Select the config worktree and ToolSpec to launch.
 
@@ -250,6 +251,9 @@ def _select_launch_target(
         tool: --tool option value, when given.
         env_file: override file from --env-file, when given.
         env_vars: KEY=VALUE strings from -e/--env, when given.
+        same: Force the non-interactive behavior even on a TTY (the
+            ``reconfigure --same`` mode): with several valid configs the
+            selection prompt is replaced by the hard --tool error.
 
     Returns:
         (config_dir, spec) of the selected config worktree.
@@ -290,7 +294,7 @@ def _select_launch_target(
         return loc.config_dir, loc.spec
 
     if valid:
-        if not is_interactive():
+        if not is_interactive() or same:
             typer.secho(
                 "Error: multiple framework config directories found: "
                 + ", ".join(loc.spec.config_dirname for loc in valid),
@@ -1999,6 +2003,14 @@ def reconfigure(
         "--docker-context",
         help="Docker context to use",
     ),
+    same: bool = typer.Option(
+        False,
+        "--same",
+        help=(
+            "Run non-interactively like redirected stdin: keep the current "
+            "feature/port selection, skip prompts, only reconcile + rebuild"
+        ),
+    ),
 ) -> None:
     """Reconfigure an existing framework harness interactively.
 
@@ -2006,7 +2018,8 @@ def reconfigure(
     Maven/Gradle for Java) and port mappings, rebuilds the image, updates
     the cached image ID and removes the tool's existing container (never
     starts one) so the next launch picks up the new image. Feature prompts
-    are skipped silently when stdin is not a TTY.
+    are skipped silently when stdin is not a TTY; --same forces the same
+    non-interactive mode even on a TTY.
     """
     cwd = Path.cwd()
 
@@ -2028,7 +2041,7 @@ def reconfigure(
         )
         raise typer.Exit(1)
 
-    config_dir, spec = _select_launch_target(repo_root, tool, None, None)
+    config_dir, spec = _select_launch_target(repo_root, tool, None, None, same=same)
 
     valid, error = validate_runtime_context(
         cwd, spec.config_dirname, repo_root=repo_root
@@ -2085,7 +2098,9 @@ def reconfigure(
     )
 
     typer.echo("Checking feature configuration...")
-    update_features(config_dir, repo_root.name, spec.name, podman_caps=podman_caps)
+    update_features(
+        config_dir, repo_root.name, spec.name, podman_caps=podman_caps, same=same
+    )
 
     # Enforce the derived REMOTE_USER unconditionally (no custom-value
     # preservation for this key — it encodes the caps-mode contract).

@@ -52,7 +52,8 @@ When run interactively, `reconfigure` offers to add or remove devcontainer featu
 Maven and/or Gradle as build tools. The current settings are shown as defaults, so you can
 toggle features on or off. Only the feature-dependent parts of `devcontainer.json` and
 `docker-compose.yaml` are updated; manual customizations are preserved. In a non-interactive
-context the prompt is skipped.
+context the prompt is skipped; pass `--same` to force that mode even on a TTY
+(keep the current selection, reconcile + rebuild without prompting).
 
 After the prompts it rebuilds the image, updates the cached image ID and removes the
 tool's existing container (it never starts containers) — the next `launch` picks up the

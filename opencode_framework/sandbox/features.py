@@ -267,13 +267,15 @@ def update_features(
     repo_name: str,
     agent_tool: str,
     podman_caps: bool = False,
+    same: bool = False,
 ) -> bool:
     """Reconcile devcontainer features across a rebuild.
 
     Reads the current configuration, prompts for feature/port changes
-    (prompts are skipped silently when stdin is not a TTY — the detected
-    selection is then used as-is, so non-interactive runs still
-    reconcile), and surgically updates devcontainer.json and
+    (prompts are skipped silently when stdin is not a TTY or when
+    ``same`` is set — the detected selection is then used as-is, so
+    non-interactive runs still reconcile), and surgically updates
+    devcontainer.json and
     docker-compose.yaml when anything changes. The Dockerfile-generating
     ``initializeCommand`` is always re-rendered from current framework
     code so image-level fixes (podman engine setup, containers.conf
@@ -293,6 +295,9 @@ def update_features(
         podman_caps: Caps-mode selector for the docker feature, forwarded
             to the compose reconciler and the Dockerfile initializer
             (rootless outer daemon detection)
+        same: Force the non-interactive path even on a TTY (the
+            ``reconfigure --same`` mode): keep the detected selection,
+            skip all prompts, still reconcile
 
     Returns:
         True if any managed file was changed, False otherwise.
@@ -312,7 +317,7 @@ def update_features(
     current_features = DevcontainerGenerator.detect(devcontainer)
     current_java_build_tools = DevcontainerGenerator.detect_build_tools(devcontainer)
 
-    interactive = is_interactive()
+    interactive = is_interactive() and not same
     if interactive:
         new_features, new_java_build_tools = prompt_feature_changes(
             current_features, current_java_build_tools
