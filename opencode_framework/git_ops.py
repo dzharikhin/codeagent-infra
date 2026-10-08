@@ -104,6 +104,49 @@ def has_staged_changes(path: Path) -> bool:
     return result.returncode != 0
 
 
+def uncommitted_changes(path: Path) -> List[str]:
+    """List uncommitted changes (staged, unstaged and untracked).
+
+    Runs ``git status --porcelain`` in ``path`` and returns its stripped
+    status lines; ignored files (e.g. the config worktree's
+    ``runtime_data/``) are excluded by git itself. Fail-open: a failed
+    git invocation yields an empty list, i.e. is treated as clean.
+
+    Args:
+        path: Directory to inspect (a worktree or repository root).
+
+    Returns:
+        Porcelain status lines; empty when clean or on git failure.
+    """
+    result = run_git_command(["status", "--porcelain"], cwd=path)
+    if result.returncode != 0:
+        return []
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+def list_worktrees(repo_root: Path) -> List[Path]:
+    """List all worktrees registered for the repository at repo_root.
+
+    Parses ``worktree <path>`` entries from ``git worktree list
+    --porcelain``; the main worktree is included alongside the linked
+    ones. Fail-open: a failed git invocation yields an empty list.
+
+    Args:
+        repo_root: Repository root (main worktree) to query.
+
+    Returns:
+        Absolute worktree paths; empty on git failure.
+    """
+    result = run_git_command(["worktree", "list", "--porcelain"], cwd=repo_root)
+    if result.returncode != 0:
+        return []
+    return [
+        Path(line[len("worktree ") :].strip())
+        for line in result.stdout.splitlines()
+        if line.startswith("worktree ")
+    ]
+
+
 def create_worktree(
     worktree_path: Path,
     branch_name: str,

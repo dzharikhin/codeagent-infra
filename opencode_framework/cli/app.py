@@ -44,8 +44,10 @@ from opencode_framework.git_ops import (
     get_current_branch,
     get_repo_root,
     is_worktree,
+    list_worktrees,
     remove_worktree,
     setup_config_worktree,
+    uncommitted_changes,
 )
 from opencode_framework.preflight import run_preflight_checks
 from opencode_framework.sandbox.compose import ComposeGenerator
@@ -375,6 +377,62 @@ def _select_launch_target(
     raise typer.Exit(1)
 
 
+def _require_clean_config(
+    config_dir: Path,
+    spec: ToolSpec,
+    repo_root: Path,
+    allow_dirty: bool,
+) -> None:
+    """Refuse to launch a config worktree with uncommitted changes.
+
+    The check applies only when config_dir is a registered worktree of
+    this repository (per ``git worktree list``); a non-worktree config
+    directory or a failed listing skips it (fail-open). With
+    ``allow_dirty`` a dirty worktree only draws a warning.
+
+    Args:
+        config_dir: Selected config worktree directory.
+        spec: ToolSpec of the selected tool.
+        repo_root: Project repository root.
+        allow_dirty: Skip the hard error and warn instead.
+
+    Raises:
+        typer.Exit: When the worktree is dirty and allow_dirty is False.
+    """
+    registered = {path.resolve() for path in list_worktrees(repo_root)}
+    if config_dir.resolve() not in registered:
+        return
+    changes = uncommitted_changes(config_dir)
+    if not changes:
+        return
+    if allow_dirty:
+        typer.secho(
+            f"Warning: launching with uncommitted changes in "
+            f"{spec.config_dirname}/ ({len(changes)} file(s)).",
+            fg=typer.colors.YELLOW,
+        )
+        return
+    typer.secho(
+        f"Error: uncommitted changes in {spec.config_dirname}/ (config worktree):",
+        fg=typer.colors.RED,
+        err=True,
+    )
+    shown = changes[:20]
+    for line in shown:
+        typer.secho(f"  {line}", fg=typer.colors.RED, err=True)
+    hidden = len(changes) - len(shown)
+    if hidden > 0:
+        typer.secho(f"  ... and {hidden} more", fg=typer.colors.RED, err=True)
+    typer.secho(
+        f"Remediation: commit, stash or discard them in {spec.config_dirname}/ "
+        "(any convenient way) and re-run launch — or pass --allow-dirty "
+        "to launch anyway.",
+        fg=typer.colors.YELLOW,
+        err=True,
+    )
+    raise typer.Exit(1)
+
+
 def _check_framework_repo() -> Optional[str]:
     """Check if the framework repo is installed.
 
@@ -553,7 +611,7 @@ def init(
         )
 
     typer.secho("Initialization complete!", fg=typer.colors.GREEN)
-    _echo_usage_commands(wizard_result.agent_tool)
+    _echo_usage_commands(wizard_result.agent_tool, config_dir)
 
 
 def _verify_build_output(output: str) -> bool:
@@ -1552,6 +1610,14 @@ def launch(
         "-f",
         help="Remove any existing container and cached image ID, forcing a fresh build",
     ),
+    allow_dirty: bool = typer.Option(
+        False,
+        "--allow-dirty",
+        help=(
+            "Launch even when the config worktree has uncommitted changes "
+            "(staged, unstaged or untracked)"
+        ),
+    ),
     acp: Optional[str] = typer.Option(
         None,
         "--acp",
@@ -1573,6 +1639,13 @@ def launch(
     else by an OCF_AGENT_TOOL override from -e/--env or --env-file, else
     by auto-detecting the single valid config directory (a prompt is
     shown when several exist).
+
+    The selected config worktree must be clean: launch refuses to start
+    when it has uncommitted changes (staged, unstaged or untracked;
+    ignored runtime_data/ excluded) — commit, stash or discard them and
+    re-run, or pass --allow-dirty to launch anyway. The check is skipped
+    when the config directory is not a registered worktree of this
+    repository.
 
     With --acp the agent runs in ACP mode (Agent Client Protocol): launch
     speaks JSON-RPC over stdio so ACP-compatible editors (Zed, JetBrains,
@@ -1607,6 +1680,7 @@ def launch(
         ocframework launch --server
         ocframework launch --server=5000
         ocframework launch --tool opencode --acp zed
+        ocframework launch --allow-dirty
     """
     # In ACP mode the editor owns stdout (JSON-RPC transport), so move
     # launch's own output to stderr before anything is printed. This also
@@ -1637,6 +1711,8 @@ def launch(
         raise typer.Exit(1)
 
     config_dir, spec = _select_launch_target(repo_root, tool, env_file, env_vars)
+
+    _require_clean_config(config_dir, spec, repo_root, allow_dirty)
 
     if acp is not None:
         if not _is_valid_acp_postfix(acp):
@@ -1974,11 +2050,16 @@ def launch(
     raise typer.Exit(run_result.returncode)
 
 
-def _echo_usage_commands(agent_tool: str) -> None:
+def _echo_usage_commands(agent_tool: str, config_dir: Optional[Path] = None) -> None:
     """Print the per-tool command summary shared by init and reconfigure.
+
+    When config_dir is given and has uncommitted changes, also print the
+    commit-or-flag hint: launch refuses a dirty config worktree unless
+    ``--allow-dirty`` is passed (fail-open: a git failure prints nothing).
 
     Args:
         agent_tool: Agent tool name ("opencode" | "qwen" | "dsh").
+        config_dir: Config worktree directory, when known.
     """
     commands = DocumentationGenerator.get_launch_commands(agent_tool)
     typer.echo("\nCommands:")
@@ -1986,6 +2067,13 @@ def _echo_usage_commands(agent_tool: str) -> None:
     typer.echo(f"  Reconfigure: {commands['reconfigure']}")
     typer.echo(f"  Debug:       {commands['debug']}")
     typer.echo(f"  Shell:       {commands['shell']}")
+    if config_dir is not None and uncommitted_changes(config_dir):
+        typer.secho(
+            f"\nNote: uncommitted changes in {config_dir.name}/ — commit them "
+            f"before launch (cd {config_dir.name}/ && git add -A && git commit) "
+            "or run 'ocframework launch --allow-dirty'.",
+            fg=typer.colors.YELLOW,
+        )
 
 
 @app.command()
@@ -2135,7 +2223,7 @@ def reconfigure(
     typer.secho("Reconfiguration complete!", fg=typer.colors.GREEN)
     typer.echo(f"Image rebuilt: {image_id}")
     typer.echo("Run 'ocframework launch' to start a session.")
-    _echo_usage_commands(spec.name)
+    _echo_usage_commands(spec.name, config_dir)
 
 
 if __name__ == "__main__":

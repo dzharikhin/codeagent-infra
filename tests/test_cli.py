@@ -598,10 +598,12 @@ class TestReconfigure:
         )
 
         assert result.exit_code == 130  # Standard SIGINT exit code
-        assert len(subprocess_calls) == 3  # docker inspect, docker port, docker attach
+        # Only docker invocations count (git worktree queries are internal)
+        docker_calls = [c for c in subprocess_calls if c[1][0][0] == "docker"]
+        assert len(docker_calls) == 3  # docker inspect, docker port, docker attach
 
         # Verify attach was called (not docker compose run or cleanup)
-        attach_call = subprocess_calls[2]
+        attach_call = docker_calls[2]
         assert "attach" in attach_call[1][0]  # args[0] is the command list
 
 
@@ -2341,6 +2343,211 @@ class TestLaunchToolSelection:
         assert result.exit_code == 0
         assert "Using opencode config at .opencode/" in result.output
         assert "Warning: OCF_AGENT_TOOL='qwen'" in result.output
+
+
+class TestLaunchDirtyConfig:
+    """Tests for the uncommitted-changes guard on the config worktree."""
+
+    def _make_config(self, tmp_path: Path, tool: str = "opencode") -> Path:
+        dirname = {"dsh": ".dsh", "qwen": ".qwen"}.get(tool, ".opencode")
+        config = tmp_path / dirname
+        config.mkdir()
+        (config / "docker-compose.yaml").write_text(
+            f"services:\n  {tool}:\n    container_name: ocf_repo\n"
+        )
+        (config / ".env").write_text(f"REMOTE_USER=root\nOCF_AGENT_TOOL={tool}\n")
+        return config
+
+    def _patch_launch_deps(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+        dirty_lines: list[str] | None = None,
+        worktrees: list[Path] | None = None,
+    ):
+        import importlib
+
+        app_module = importlib.import_module("opencode_framework.cli.app")
+        captured: list = []
+
+        def mock_run(*args, **kw):
+            cmd = list(args[0]) if args else args[1].get("args", [])
+            result = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            if cmd[:2] == ["docker", "inspect"] and "--format" in cmd:
+                result.stdout = ""  # no container
+            elif cmd[:2] == ["docker", "compose"] and "run" in cmd:
+                captured.append(cmd)
+                result.returncode = 0
+            return result
+
+        monkeypatch.setattr(
+            app_module,
+            "validate_runtime_context",
+            lambda cwd, config_dirname, repo_root=None: (True, ""),
+        )
+        monkeypatch.setattr(app_module, "get_repo_root", lambda cwd: tmp_path.resolve())
+        monkeypatch.setattr(app_module, "load_env_with_overrides", lambda **kw: {})
+        monkeypatch.setattr(app_module, "build_docker_env", lambda env, ctx: {})
+        monkeypatch.setattr(app_module, "load_image_id", lambda d: "sha256:cached")
+        monkeypatch.setattr(
+            app_module, "_inspect_image_id", lambda ref, env: "sha256:ok"
+        )
+        monkeypatch.setattr(app_module, "_build_image", lambda *a, **kw: "sha256:fake")
+        monkeypatch.setattr(app_module, "save_image_id", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            app_module,
+            "list_worktrees",
+            lambda root: (
+                worktrees if worktrees is not None else [tmp_path / ".opencode"]
+            ),
+        )
+        monkeypatch.setattr(
+            app_module,
+            "uncommitted_changes",
+            lambda path: list(dirty_lines or []),
+        )
+        monkeypatch.setattr(app_module.subprocess, "run", mock_run)
+        monkeypatch.chdir(tmp_path)
+        return app_module, captured
+
+    def _invoke(self, app_module, args: list):
+        from typer.testing import CliRunner
+
+        return CliRunner().invoke(app_module.app, args)
+
+    def test_clean_worktree_launches(self, tmp_path: Path, monkeypatch):
+        """A clean registered worktree launches without warnings."""
+        self._make_config(tmp_path)
+        app_module, captured = self._patch_launch_deps(monkeypatch, tmp_path)
+
+        result = self._invoke(app_module, ["launch"])
+
+        assert result.exit_code == 0
+        assert "uncommitted changes" not in result.output
+        assert captured
+
+    def test_dirty_worktree_errors(self, tmp_path: Path, monkeypatch):
+        """Uncommitted changes hard-error with the file list and remediation."""
+        self._make_config(tmp_path)
+        app_module, captured = self._patch_launch_deps(
+            monkeypatch,
+            tmp_path,
+            dirty_lines=["M  .env", "?? notes.txt"],
+        )
+
+        result = self._invoke(app_module, ["launch"])
+
+        assert result.exit_code == 1
+        assert "uncommitted changes in .opencode/ (config worktree)" in result.output
+        assert "M  .env" in result.output
+        assert "?? notes.txt" in result.output
+        assert "--allow-dirty" in result.output
+        assert captured == []
+
+    def test_dirty_worktree_truncates_long_listing(self, tmp_path: Path, monkeypatch):
+        """More than 20 dirty files collapse into an 'and N more' line."""
+        self._make_config(tmp_path)
+        lines = [f"??  file_{i}.txt" for i in range(25)]
+        app_module, captured = self._patch_launch_deps(
+            monkeypatch, tmp_path, dirty_lines=lines
+        )
+
+        result = self._invoke(app_module, ["launch"])
+
+        assert result.exit_code == 1
+        assert "file_19.txt" in result.output
+        assert "file_20.txt" not in result.output
+        assert "... and 5 more" in result.output
+
+    def test_allow_dirty_flag_launches_with_warning(self, tmp_path: Path, monkeypatch):
+        """--allow-dirty skips the hard error and warns instead."""
+        self._make_config(tmp_path)
+        app_module, captured = self._patch_launch_deps(
+            monkeypatch, tmp_path, dirty_lines=["M  .env"]
+        )
+
+        result = self._invoke(app_module, ["launch", "--allow-dirty"])
+
+        assert result.exit_code == 0
+        assert "Warning: launching with uncommitted changes in .opencode/" in (
+            result.output
+        )
+        assert "1 file(s)" in result.output
+        assert captured
+
+    def test_unregistered_config_dir_skips_check(self, tmp_path: Path, monkeypatch):
+        """A config dir outside `git worktree list` bypasses the check."""
+        self._make_config(tmp_path)
+        app_module, captured = self._patch_launch_deps(
+            monkeypatch,
+            tmp_path,
+            dirty_lines=["M  .env"],
+            worktrees=[tmp_path],
+        )
+
+        result = self._invoke(app_module, ["launch"])
+
+        assert result.exit_code == 0
+        assert "uncommitted changes" not in result.output
+        assert captured
+
+    def test_acp_with_dirty_worktree_errors(self, tmp_path: Path, monkeypatch):
+        """ACP launches get the same hard error (no prompting on stdio)."""
+        self._make_config(tmp_path)
+        app_module, captured = self._patch_launch_deps(
+            monkeypatch, tmp_path, dirty_lines=["M  .env"]
+        )
+
+        result = self._invoke(app_module, ["launch", "--acp", "zed"])
+
+        assert result.exit_code == 1
+        assert "uncommitted changes in .opencode/" in result.output
+        assert captured == []
+
+
+class TestUsageCommandsHint:
+    """Tests for the commit-or-flag hint printed by _echo_usage_commands."""
+
+    def _app_module(self):
+        import importlib
+
+        return importlib.import_module("opencode_framework.cli.app")
+
+    def test_hint_printed_when_dirty(self, tmp_path: Path, monkeypatch, capsys):
+        """Dirty config worktree gets the commit-or---allow-dirty note."""
+        app_module = self._app_module()
+        config = tmp_path / ".opencode"
+        config.mkdir()
+        monkeypatch.setattr(app_module, "uncommitted_changes", lambda path: ["M  .env"])
+
+        app_module._echo_usage_commands("opencode", config)
+
+        out = capsys.readouterr().out
+        assert "uncommitted changes in .opencode/" in out
+        assert "--allow-dirty" in out
+
+    def test_hint_absent_when_clean(self, tmp_path: Path, monkeypatch, capsys):
+        """A clean worktree prints commands only, no note."""
+        app_module = self._app_module()
+        config = tmp_path / ".opencode"
+        config.mkdir()
+        monkeypatch.setattr(app_module, "uncommitted_changes", lambda path: [])
+
+        app_module._echo_usage_commands("opencode", config)
+
+        out = capsys.readouterr().out
+        assert "Launch:" in out
+        assert "uncommitted changes" not in out
+
+    def test_hint_absent_without_config_dir(self, capsys):
+        """No config_dir given (None) prints no note."""
+        app_module = self._app_module()
+
+        app_module._echo_usage_commands("opencode")
+
+        out = capsys.readouterr().out
+        assert "Launch:" in out
+        assert "uncommitted changes" not in out
 
 
 class _FakeProcess:
