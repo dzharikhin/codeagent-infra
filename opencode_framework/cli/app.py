@@ -34,6 +34,7 @@ from opencode_framework.agent.registry import (
     QWEN_TOOL_SPEC,
     SUPPORTED_TOOLS,
     ToolSpec,
+    managed_volume_name,
 )
 from opencode_framework.config import discover_global_settings
 from opencode_framework.exceptions import PortAllocationError
@@ -48,6 +49,7 @@ from opencode_framework.git_ops import (
 )
 from opencode_framework.preflight import run_preflight_checks
 from opencode_framework.sandbox.compose import ComposeGenerator
+from opencode_framework.sandbox.devcontainer import DevcontainerGenerator
 from opencode_framework.sandbox.features import is_interactive, update_features
 from opencode_framework.sandbox.net import (
     SERVER_HOST_PORT_MAX,
@@ -57,6 +59,7 @@ from opencode_framework.sandbox.net import (
 from opencode_framework.sandbox.runtime import (
     EnvError,
     build_docker_env,
+    detect_daemon_rootless,
     load_env_with_overrides,
     load_image_id,
     parse_cli_env_vars,
@@ -481,6 +484,16 @@ def init(
     typer.echo("Running setup wizard...")
     wizard_result = run_wizard(repo_path, spec.name)
 
+    # Caps-mode detection right after feature selection: the docker
+    # feature's Dockerfile/compose rendering depends on the outer daemon
+    # mode, and a detection failure with docker selected is a hard error
+    # (fail before any worktree/generation state is created).
+    podman_caps, remote_user = _detect_podman_caps_or_exit(
+        dict(os.environ),
+        "docker" in wizard_result.optional_features,
+        "init",
+    )
+
     if wizard_result.create_global_config:
         global_spec = resolve_tool_or_exit(wizard_result.agent_tool)
         global_config_dir = expected_global_path(global_spec)
@@ -513,7 +526,19 @@ def init(
 
     typer.echo(f"Generating {spec.config_dirname}/ directory...")
     orchestrator = GenerationOrchestrator()
-    orchestrator.generate(repo_path, wizard_result)
+    orchestrator.generate(repo_path, wizard_result, podman_caps=podman_caps)
+
+    # Derive REMOTE_USER after generation: generate() writes .env fresh
+    # from the template (REMOTE_USER=root), so the surgical write must
+    # follow it. Skipped when detection failed without the docker feature
+    # (template default kept).
+    if remote_user is not None and _write_env_line(
+        config_dir / ".env", "REMOTE_USER", remote_user
+    ):
+        typer.secho(
+            f"Updated {spec.config_dirname}/.env (REMOTE_USER={remote_user})",
+            fg=typer.colors.GREEN,
+        )
 
     typer.secho("Initialization complete!", fg=typer.colors.GREEN)
     _echo_usage_commands(wizard_result.agent_tool)
@@ -1308,6 +1333,176 @@ def _run_acp_launch(
     _run_acp_session(process, acp_stdout, compose_path, container_name, subprocess_env)
 
 
+def _detect_podman_caps_or_exit(
+    subprocess_env: Dict[str, str],
+    has_docker_feature: bool,
+    cmd_name: str,
+) -> Tuple[bool, Optional[str]]:
+    """Detect the outer daemon mode and derive the caps-mode contract.
+
+    Rootless outer daemon → caps mode (SYS_ADMIN, NET_ADMIN) with
+    ``REMOTE_USER=root`` (container root maps to the host developer);
+    rootful → standard mode (no caps) with ``REMOTE_USER=vscode``.
+
+    Args:
+        subprocess_env: Environment for the detection subprocess
+            (``DOCKER_CONTEXT`` is honored).
+        has_docker_feature: Whether the harness selects the docker
+            feature — a detection failure is a hard error only then
+            (a harness cannot be generated against an unknown daemon).
+        cmd_name: Invoking command name, used in remediation hints.
+
+    Returns:
+        ``(podman_caps, remote_user)``. ``remote_user`` is None only
+        when detection failed without the docker feature — the caller
+        must then keep the template default and skip the .env write.
+    """
+    detected = detect_daemon_rootless(subprocess_env)
+    if detected is None:
+        if has_docker_feature:
+            typer.secho(
+                "Error: could not detect whether the Docker daemon runs "
+                "rootless or rootful.",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            typer.secho(
+                "Remediation: check 'docker context ls' and pass the "
+                f"correct context via 'ocframework {cmd_name} "
+                "--docker-context <name>'.",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+            raise typer.Exit(1)
+        typer.secho(
+            "Warning: could not detect the Docker daemon mode; keeping the "
+            "REMOTE_USER=root template default.",
+            fg=typer.colors.YELLOW,
+        )
+        return False, None
+    if detected:
+        typer.echo(
+            "Docker daemon: rootless → caps mode (SYS_ADMIN, NET_ADMIN), "
+            "REMOTE_USER=root"
+        )
+        return True, "root"
+    typer.echo("Docker daemon: rootful → standard mode (no caps), REMOTE_USER=vscode")
+    return False, "vscode"
+
+
+def _write_env_line(env_path: Path, key: str, value: str) -> bool:
+    """Surgically set ``KEY=value`` in an env file.
+
+    Replaces the existing line in place, or appends it when the key is
+    absent; all other lines (comments, ordering, user edits) are
+    preserved. Creates the file when missing.
+
+    Args:
+        env_path: Path to the .env file.
+        key: Variable name.
+        value: Value to write.
+
+    Returns:
+        True when the file content changed, False when it already held
+        the desired line.
+    """
+    text = env_path.read_text() if env_path.is_file() else ""
+    desired = f"{key}={value}"
+    out: List[str] = []
+    replaced = False
+    for existing in text.split("\n"):
+        if not replaced and existing.startswith(f"{key}="):
+            out.append(desired)
+            replaced = True
+        else:
+            out.append(existing)
+    if not replaced:
+        if out and out[-1] == "":
+            out.insert(len(out) - 1, desired)
+        else:
+            out.append(desired)
+    new_text = "\n".join(out)
+    if new_text == text:
+        return False
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text(new_text)
+    return True
+
+
+def _validate_podman_caps_mode(
+    compose_text: str,
+    final_env: Dict[str, str],
+    subprocess_env: Dict[str, str],
+    repo_name: str,
+    agent_tool: str,
+) -> None:
+    """Validate a docker-feature harness against the detected daemon mode.
+
+    Skipped silently for harnesses without the docker feature (no managed
+    docker volume mount in the compose file). Detection failure is
+    fail-open: a YELLOW warning, then continue (transient daemon blips
+    must not block work). A mismatch between the detected mode and either
+    the harness's REMOTE_USER or its compose security block is a hard
+    error naming both sides, with two remediations: switch the daemon
+    context or reconfigure the harness.
+
+    Args:
+        compose_text: Current docker-compose.yaml content.
+        final_env: Merged launch environment (REMOTE_USER source of truth).
+        subprocess_env: Environment for the detection subprocess.
+        repo_name: Repository name (managed docker volume name component).
+        agent_tool: Agent tool name (managed docker volume name component).
+    """
+    marker = f"- {managed_volume_name('docker', repo_name, agent_tool)}:"
+    if marker not in compose_text:
+        return
+    detected = detect_daemon_rootless(subprocess_env)
+    if detected is None:
+        typer.secho(
+            "Warning: could not detect the Docker daemon mode; skipping "
+            "caps-mode validation.",
+            fg=typer.colors.YELLOW,
+        )
+        return
+
+    expected_user = "root" if detected else "vscode"
+    actual_user = final_env.get("REMOTE_USER", "")
+    caps_expected = detected
+    caps_present = "SYS_ADMIN" in compose_text
+    problems: List[str] = []
+    if actual_user != expected_user:
+        problems.append(
+            f"  REMOTE_USER: harness has '{actual_user}', "
+            f"detected daemon mode expects '{expected_user}'"
+        )
+    if caps_present != caps_expected:
+        state = "SYS_ADMIN caps" if caps_present else "no caps"
+        expected = "caps" if caps_expected else "no caps"
+        problems.append(
+            f"  compose security block: has {state}, "
+            f"detected daemon mode expects {expected}"
+        )
+    if not problems:
+        return
+
+    typer.secho(
+        "Error: docker-feature harness does not match the Docker daemon mode:",
+        fg=typer.colors.RED,
+        err=True,
+    )
+    for problem in problems:
+        typer.secho(problem, fg=typer.colors.RED, err=True)
+    typer.secho(
+        "Remediation (either): point launch at a matching daemon "
+        "('docker context use <context>' or 'ocframework launch "
+        "--docker-context <context>'), or regenerate the harness for this "
+        "daemon with 'ocframework reconfigure'.",
+        fg=typer.colors.YELLOW,
+        err=True,
+    )
+    raise typer.Exit(1)
+
+
 @app.command(
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True}
 )
@@ -1557,6 +1752,15 @@ def launch(
         )
         raise typer.Exit(1)
 
+    compose_text = compose_path.read_text()
+
+    # Caps-mode validation for docker-feature harnesses (single point,
+    # before any devcontainer/compose subprocess and before the
+    # ACP/plain split, so both launch paths are covered).
+    _validate_podman_caps_mode(
+        compose_text, final_env, subprocess_env, repo_root.name, spec.name
+    )
+
     if force and remove_image_id(config_dir):
         typer.echo("Removed cached image ID; image will be rebuilt.")
 
@@ -1575,7 +1779,7 @@ def launch(
     subprocess_env["OCF_IMAGE_ID"] = image_id
     subprocess_env["PWD"] = str(repo_root)
 
-    detected_ports = ComposeGenerator.detect_ports(compose_path.read_text())
+    detected_ports = ComposeGenerator.detect_ports(compose_text)
     reserved_host_ports = _extract_host_ports(detected_ports)
 
     server, remaining_args = _extract_server_arg(ctx.args)
@@ -1612,8 +1816,8 @@ def launch(
         container_name = f"{container_name}_{acp}"
         # Managed volumes interpolate this suffix into their names
         # (${OCF_SESSION_SUFFIX:-}), so each ACP session gets volumes
-        # unique to its container name — two sessions must never share
-        # /var/lib/docker (dockerd holds a per-volume boltdb lock).
+        # unique to its container name — concurrent sessions must never
+        # share mutable volumes (e.g. the podman graph root).
         subprocess_env["OCF_SESSION_SUFFIX"] = f"_{acp}"
     else:
         # Plain launches always use the bare volume names, regardless of
@@ -1859,8 +2063,31 @@ def reconfigure(
 
     subprocess_env = build_docker_env(final_env, docker_context)
 
+    # Caps-mode detection (honors --docker-context via subprocess_env),
+    # gated on the current devcontainer.json feature set: with the docker
+    # feature selected a detection failure is a hard error.
+    try:
+        current_features = DevcontainerGenerator.detect(
+            json.loads((config_dir / "devcontainer.json").read_text())
+        )
+    except (OSError, ValueError):
+        current_features = []
+    podman_caps, remote_user = _detect_podman_caps_or_exit(
+        subprocess_env, "docker" in current_features, "reconfigure"
+    )
+
     typer.echo("Checking feature configuration...")
-    update_features(config_dir, repo_root.name, spec.name)
+    update_features(config_dir, repo_root.name, spec.name, podman_caps=podman_caps)
+
+    # Enforce the derived REMOTE_USER unconditionally (no custom-value
+    # preservation for this key — it encodes the caps-mode contract).
+    if remote_user is not None and _write_env_line(
+        env_path, "REMOTE_USER", remote_user
+    ):
+        typer.secho(
+            f"Updated {config_dir.name}/.env (REMOTE_USER={remote_user})",
+            fg=typer.colors.GREEN,
+        )
 
     typer.echo("Building devcontainer image...")
     image_id = _build_image(config_dir, repo_root, subprocess_env, spec.name)

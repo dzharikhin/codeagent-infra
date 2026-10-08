@@ -5,13 +5,9 @@ services:
   {{SERVICE_NAME}}:
     container_name: ocf_{{OCF_REPO_ROOT_NAME}}_{{SERVICE_NAME}}
     image: "${OCF_IMAGE_ID}"
+    user: "${REMOTE_USER}"
     working_dir: ${OCF_LOCAL_REPO_ROOT:-${PWD}}
-{{PORTS_SECTION}}
-{{DOCKER_PRIVILEGED}}
-    security_opt:
-      - apparmor=unconfined
-    cap_add:
-      - NET_ADMIN
+{{PORTS_SECTION}}{{PODMAN_SECURITY}}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     init: true

@@ -1,7 +1,9 @@
 """Runtime helpers for launch and exec commands."""
 
+import json
 import os
 import re
+import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -415,6 +417,68 @@ def build_docker_env(
     result.update(base_env)
     result["DOCKER_CONTEXT"] = docker_context
     return result
+
+
+def detect_daemon_rootless(subprocess_env: Dict[str, str]) -> Optional[bool]:
+    """Detect whether the outer Docker daemon runs in rootless mode.
+
+    Queries ``docker info`` (honoring ``DOCKER_CONTEXT`` from the given
+    environment, so launch-time context overrides are respected) and inspects
+    the daemon's ``SecurityOptions`` for the ``rootless`` entry.
+
+    Used by the docker-feature caps-mode logic: rootless outer daemon →
+    caps mode with ``REMOTE_USER=root``; rootful → standard mode with
+    ``REMOTE_USER=vscode``.
+
+    Args:
+        subprocess_env: Environment for the docker subprocess (must contain
+            the docker CLI on PATH; ``DOCKER_CONTEXT`` is honored when set).
+
+    Returns:
+        True when the daemon is rootless, False when rootful, None when the
+        probe fails (docker missing, non-zero exit, timeout, unparseable
+        output) — callers must treat None as "unknown" and handle per
+        contract (hard error at init/reconfigure with docker feature,
+        fail-open warning at launch).
+    """
+    cmd = ["docker"]
+    docker_context = subprocess_env.get("DOCKER_CONTEXT", "").strip()
+    if docker_context:
+        cmd += ["--context", docker_context]
+    cmd += ["info", "--format", "{{json .SecurityOptions}}"]
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            env=subprocess_env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+
+    if proc.returncode != 0:
+        return None
+
+    try:
+        security_options = json.loads(proc.stdout)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+    if not isinstance(security_options, list):
+        return None
+
+    # Moby renders SecurityOptions as "name=..." strings (e.g.
+    # "name=seccomp,profile=builtin", "name=rootless"); podman-compatible
+    # CLIs may emit bare entries ("rootless"). Accept both shapes.
+    for option in security_options:
+        if not isinstance(option, str):
+            continue
+        normalized = option.strip()
+        if normalized == "rootless" or normalized.startswith("name=rootless"):
+            return True
+    return False
 
 
 def get_image_id_path(opencode_dir: Path) -> Path:

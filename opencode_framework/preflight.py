@@ -1,7 +1,6 @@
 """Preflight checks and repository validation."""
 
 import shutil
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
@@ -39,26 +38,6 @@ def check_required_tools() -> List[str]:
         if shutil.which(tool) is None:
             missing.append(tool)
     return missing
-
-
-def check_docker_rootless_context() -> bool:
-    """Check if a rootless Docker context exists.
-
-    Returns True if rootless context is available.
-    """
-    try:
-        result = subprocess.run(
-            ["docker", "context", "ls", "--format", "{{.Name}}"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode == 0:
-            contexts = result.stdout.strip().split("\n")
-            return "rootless" in contexts
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
-    return False
 
 
 def config_directory_exists(repo_root: Path, agent_tool: str = DEFAULT_TOOL) -> bool:

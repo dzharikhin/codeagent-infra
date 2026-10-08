@@ -23,9 +23,59 @@ M2_SETTINGS_MOUNT_LINE = (
     "/home/${REMOTE_USER}/.m2/settings.xml:ro"
 )
 
+# Container path of the docker feature's podman graph root in standard
+# mode (rootless outer daemon absent). The /usr/local/bin/docker wrapper
+# baked by PODMAN_DOCKERFILE_BLOCK always runs podman with HOME set to
+# /home/vscode (runuser when the agent is root), so this target is a
+# constant that must NOT follow REMOTE_USER.
+PODMAN_GRAPH_ROOT_TARGET = "/home/vscode/.local/share/containers"
+
+# Container path of the docker feature's podman graph root in caps mode
+# (rootless outer daemon detected): the agent is root and podman runs
+# rootful, whose default graph root is /var/lib/containers — no
+# ownership bake needed since root writes it.
+PODMAN_CAPS_GRAPH_ROOT_TARGET = "/var/lib/containers"
+
 # .env fragment rendered when the Gradle feature is enabled.
 GRADLE_ENV_COMMENT = "# Gradle builds must not keep a daemon alive across restarts"
 GRADLE_OPTS_LINE = 'GRADLE_OPTS="-Dorg.gradle.daemon=false"'
+
+# Managed security block for the compose service (4-space indent). The
+# podman variant lifts Docker's default seccomp profile (crun inside a
+# non-privileged container needs syscalls denied by the default profile,
+# notably pivot_root) and passes /dev/fuse for fuse-overlayfs. Rootless
+# podman (REMOTE_USER=vscode) requires no cap_add. These lines are
+# managed: the template emits them for fresh inits and the compose
+# reconciler strips/re-injects the exact same strings, so they must stay
+# identical.
+PODMAN_SECURITY_LINES = [
+    "    security_opt:",
+    "      - apparmor=unconfined",
+    "      - seccomp=unconfined",
+    "    devices:",
+    "      - /dev/fuse:/dev/fuse",
+]
+# Caps-mode variant (rootless outer daemon): same base block plus the two
+# capabilities rootful podman needs inside the sandbox — CAP_SYS_ADMIN so
+# crun can mount /proc at userns depth 1, CAP_NET_ADMIN for bridge
+# networking. Both stay scoped by the rootlesskit userns (never host
+# root). Managed exactly like PODMAN_SECURITY_LINES.
+PODMAN_CAPS_SECURITY_LINES = [
+    "    security_opt:",
+    "      - apparmor=unconfined",
+    "      - seccomp=unconfined",
+    "    devices:",
+    "      - /dev/fuse:/dev/fuse",
+    "    cap_add:",
+    "      - SYS_ADMIN",
+    "      - NET_ADMIN",
+]
+BASE_SECURITY_LINES = [
+    "    security_opt:",
+    "      - apparmor=unconfined",
+    "    cap_add:",
+    "      - NET_ADMIN",
+]
 
 # Per-tool README sections. Each *_SECTION value is a self-contained
 # Markdown block ending in a newline; it may embed {{LAUNCH_COMMAND}},
@@ -448,6 +498,7 @@ class TemplateHandler:
         port_mappings: Optional[List[str]] = None,
         java_build_tools: Optional[List[str]] = None,
         agent_tool: str = DEFAULT_TOOL,
+        podman_caps: bool = False,
     ) -> str:
         """Render docker-compose template for the configured agent tool.
 
@@ -461,6 +512,9 @@ class TemplateHandler:
             java_build_tools: Enabled Java build tools (e.g., ["maven"], ["gradle"]).
                 Empty/None mounts no build-tool volumes.
             agent_tool: Agent tool name ("opencode" | "qwen" | "dsh")
+            podman_caps: Caps-mode selector for the docker feature —
+                switches the graph-root mount target and the security
+                block to the caps variants (rootless outer daemon)
 
         Returns:
             Rendered docker-compose content
@@ -473,9 +527,8 @@ class TemplateHandler:
         # Mount order must match ComposeGenerator.rebuild_features exactly,
         # so a fresh render is reconcile-clean: npmrc mirror (always,
         # tool-agnostic, /dev/null fallback), python venv, Java build tools,
-        # Docker-in-Docker.
+        # Podman storage.
         additional_volume_mounts = f"\n{NPMRC_MOUNT_LINE}"
-        docker_privileged = ""
         entrypoint = f'["{spec.binary}"]'
 
         if optional_features and "python" in optional_features:
@@ -500,12 +553,21 @@ class TemplateHandler:
                 )
 
         if optional_features and "docker" in optional_features:
-            docker_privileged = "    privileged: true\n"
-            entrypoint = f'["/usr/local/share/docker-init.sh", "{spec.binary}"]'
+            graph_root_target = (
+                PODMAN_CAPS_GRAPH_ROOT_TARGET
+                if podman_caps
+                else PODMAN_GRAPH_ROOT_TARGET
+            )
             additional_volume_mounts += (
                 f"\n      - {managed_volume_name('docker', repo_name, tool)}:"
-                f"/var/lib/docker"
+                f"{graph_root_target}"
             )
+        security_lines = (
+            (PODMAN_CAPS_SECURITY_LINES if podman_caps else PODMAN_SECURITY_LINES)
+            if optional_features and "docker" in optional_features
+            else BASE_SECURITY_LINES
+        )
+        podman_security = "\n".join(security_lines) + "\n"
 
         volume_keys = []
         if optional_features and "python" in optional_features:
@@ -538,7 +600,7 @@ class TemplateHandler:
             "{{OCF_REPO_ROOT_NAME}}": repo_root_name,
             "{{ADDITIONAL_VOLUME_MOUNTS}}": additional_volume_mounts,
             "{{TOP_LEVEL_VOLUMES_SECTION}}": top_level_volumes_section,
-            "{{DOCKER_PRIVILEGED}}": docker_privileged,
+            "{{PODMAN_SECURITY}}": podman_security,
             "{{PORTS_SECTION}}": ports_section,
             "{{ENTRYPOINT}}": entrypoint,
         }

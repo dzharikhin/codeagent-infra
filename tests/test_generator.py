@@ -1,9 +1,11 @@
 """Tests for .opencode/ directory generation."""
 
 import json
+import subprocess
+import tomllib
 from pathlib import Path
 
-from opencode_framework.agent.registry import DSH_TOOL_SPEC
+from opencode_framework.agent.registry import DSH_TOOL_SPEC, get_tool_spec
 from opencode_framework.config import GlobalSettings
 from opencode_framework.generators.base import GenerationContext
 from opencode_framework.generators.config_files import ConfigFilesGenerator
@@ -87,10 +89,18 @@ class TestAddOptionalFeatures:
     """Tests for optional feature addition."""
 
     def test_docker_feature(self):
-        """Docker feature should add DinD feature."""
-        features = {}
+        """Docker feature should merge podman packages into the apt-packages feature."""
+        features = {
+            "ghcr.io/devcontainers-extra/features/apt-packages:1": {
+                "packages": "ripgrep"
+            }
+        }
         DevcontainerGenerator._add_optional_features(features, ["docker"])
-        assert "ghcr.io/devcontainers/features/docker-in-docker:2" in features
+        apt = features["ghcr.io/devcontainers-extra/features/apt-packages:1"]
+        pkgs = apt["packages"].split(",")
+        assert "ripgrep" in pkgs
+        assert "podman" in pkgs
+        assert "podman-docker" in pkgs
 
     def test_python_feature(self):
         """Python feature should add Python feature."""
@@ -158,6 +168,231 @@ class TestDevcontainerGenerator:
         common_utils = features["ghcr.io/devcontainers/features/common-utils:2"]
         assert "installPackages" not in common_utils
 
+    def test_podman_block_bakes_docker_wrapper(self):
+        """Podman block should bake the /usr/local/bin/docker wrapper
+        that drops root agents to the (pre-existing) vscode account,
+        unsetting the agent's XDG vars so podman's rootless graph root
+        stays under /home/vscode."""
+        block = DevcontainerGenerator.PODMAN_DOCKERFILE_BLOCK
+        assert "mkdir -p /etc/containers && touch /etc/containers/nodocker" in block
+        assert "useradd" not in block
+        assert "runuser -u vscode -- /usr/bin/env" in block
+        assert "-u XDG_DATA_HOME -u XDG_CONFIG_HOME" in block
+        assert "-u XDG_STATE_HOME -u XDG_CACHE_HOME" in block
+        assert 'XDG_CACHE_HOME /usr/bin/podman "$@"' in block
+        assert "exec /usr/bin/podman" in block
+        assert "> /usr/local/bin/docker" in block
+        assert "command -v docker | grep -q '^/usr/local/bin/docker$'" in block
+        assert "ENV BUILDAH_ISOLATION=chroot" in block
+        # Minimal containers.conf bake: cgroup creation must be disabled
+        # (the sandbox's /sys/fs/cgroup is read-only), engine fallbacks
+        # pinned, storage driver stays auto-detected (no vfs pin).
+        assert "'[containers]'" in block
+        assert "'cgroups = \"disabled\"'" in block
+        assert "'[engine]'" in block
+        assert "'cgroup_manager = \"cgroupfs\"'" in block
+        assert "'events_logger = \"file\"'" in block
+        assert (
+            "grep -q 'cgroups = \"disabled\"' /etc/containers/containers.conf" in block
+        )
+        assert 'driver = "vfs"' not in block
+
+    def test_podman_block_bakes_graph_root_ownership(self):
+        """Graph-root directory must be baked vscode-owned so a fresh
+        named volume's copy-up inherits that ownership."""
+        block = DevcontainerGenerator.PODMAN_DOCKERFILE_BLOCK
+        assert (
+            "mkdir -p /home/vscode/.local/share/containers && \\\n"
+            "    chown vscode:vscode /home/vscode/.local/share/containers"
+        ) in block
+
+    def test_podman_block_rendered_when_docker_enabled(self, tmp_path: Path):
+        """Dockerfile written by initializeCommand should contain the
+        wrapper only when the docker feature is enabled."""
+        for feats, present in ((["docker"], True), ([], False)):
+            (tmp_path / ".opencode").mkdir(exist_ok=True)
+            ctx = _make_generation_context(tmp_path, optional_features=feats)
+            gen = DevcontainerGenerator()
+            gen.generate(ctx)
+            initialize = json.loads(
+                (tmp_path / ".opencode" / "devcontainer.json").read_text()
+            )["initializeCommand"]
+            assert ("runuser -u vscode" in initialize) is present
+            assert ("/usr/local/bin/docker" in initialize) is present
+
+    def test_initializer_heredoc_roundtrip(self, tmp_path: Path):
+        """initializeCommand must write the Dockerfile byte-for-byte via
+        a quoted heredoc (no echo -e backslash mangling)."""
+        (tmp_path / ".opencode").mkdir()
+        ctx = _make_generation_context(tmp_path, optional_features=["docker"])
+        gen = DevcontainerGenerator()
+        gen.generate(ctx)
+        initialize = json.loads(
+            (tmp_path / ".opencode" / "devcontainer.json").read_text()
+        )["initializeCommand"]
+        assert "echo -e" not in initialize
+        assert "<<'OCF_DOCKERFILE_EOF'" in initialize
+        # Simulate the shell: extract the heredoc body and compare with
+        # the expected content (template + rendered block).
+        body = initialize.split("<<'OCF_DOCKERFILE_EOF'\n", 1)[1]
+        body = body.rsplit("OCF_DOCKERFILE_EOF", 1)[0]
+        expected = TemplateHandler.load_dockerfile_template().replace(
+            "{{PODMAN_SUPPORT}}\n",
+            DevcontainerGenerator.PODMAN_DOCKERFILE_BLOCK + "\n",
+        )
+        install_block = DevcontainerGenerator._build_install_block(
+            get_tool_spec("opencode")
+        )
+        if install_block:
+            expected = expected.replace("{{AGENT_INSTALL}}", install_block)
+        else:
+            expected = expected.replace("\n{{AGENT_INSTALL}}", "")
+        assert body == expected
+        # The printf escape sequence must survive verbatim.
+        assert "printf '%s\\n'" in body
+
+    def test_podman_caps_block_bakes_rootful_engine(self):
+        """Caps block bakes rootful podman for the root agent: conf bake
+        with its assertion (storage driver auto-detected — the vfs pin
+        was a silent no-op, [storage] is not a containers.conf table), a
+        root-only wrapper branch that remounts /proc/sys tolerantly, no
+        runuser/vscode delegation and no graph-root ownership bake."""
+        block = DevcontainerGenerator.PODMAN_CAPS_DOCKERFILE_BLOCK
+        # containers.conf bake (rootful fallbacks) with assertions.
+        assert "mkdir -p /etc/containers && touch /etc/containers/nodocker" in block
+        assert "'[containers]'" in block
+        assert 'cgroup_manager = "cgroupfs"' in block
+        assert 'events_logger = "file"' in block
+        assert 'cgroups = "disabled"' in block
+        assert (
+            "grep -q 'cgroups = \"disabled\"' /etc/containers/containers.conf" in block
+        )
+        # Storage driver stays auto-detected: no vfs pin anywhere.
+        assert "'[storage]'" not in block
+        assert 'driver = "vfs"' not in block
+        # Wrapper: root branch remounts /proc/sys (tolerant) and execs
+        # podman directly; non-root agents get plain rootless podman.
+        assert '[ "$(id -u)" = "0" ] && {' in block
+        assert "mount -o remount,rw /proc/sys 2>/dev/null || true" in block
+        assert 'exec /usr/bin/podman "$@"' in block
+        # No vscode delegation anywhere.
+        assert "runuser" not in block
+        assert "vscode" not in block
+        # No graph-root ownership bake (rootful graph root is /var/lib/
+        # containers and root writes it freely).
+        assert "chown" not in block
+        # PATH assertion lives in the wrapper RUN (after chmod +x).
+        assert "chmod +x /usr/local/bin/docker" in block
+        assert "command -v docker | grep -q '^/usr/local/bin/docker$'" in block
+        assert "ENV BUILDAH_ISOLATION=chroot" in block
+
+    def test_podman_caps_initializer_heredoc_roundtrip(self, tmp_path: Path):
+        """With podman_caps the initializeCommand heredoc must carry the
+        caps Dockerfile block byte-for-byte."""
+        (tmp_path / ".opencode").mkdir()
+        ctx = _make_generation_context(
+            tmp_path, optional_features=["docker"], podman_caps=True
+        )
+        gen = DevcontainerGenerator()
+        gen.generate(ctx)
+        initialize = json.loads(
+            (tmp_path / ".opencode" / "devcontainer.json").read_text()
+        )["initializeCommand"]
+        body = initialize.split("<<'OCF_DOCKERFILE_EOF'\n", 1)[1]
+        body = body.rsplit("OCF_DOCKERFILE_EOF", 1)[0]
+        expected = TemplateHandler.load_dockerfile_template().replace(
+            "{{PODMAN_SUPPORT}}\n",
+            DevcontainerGenerator.PODMAN_CAPS_DOCKERFILE_BLOCK + "\n",
+        )
+        install_block = DevcontainerGenerator._build_install_block(
+            get_tool_spec("opencode")
+        )
+        if install_block:
+            expected = expected.replace("{{AGENT_INSTALL}}", install_block)
+        else:
+            expected = expected.replace("\n{{AGENT_INSTALL}}", "")
+        assert body == expected
+        assert "mount -o remount,rw /proc/sys" in body
+
+    def test_podman_caps_wrapper_script_valid_shell(self, tmp_path: Path):
+        """The baked wrapper script must be valid POSIX shell and exec
+        podman on both branches. The script is reconstructed here exactly
+        as the block's printf lines emit it."""
+        block = DevcontainerGenerator.PODMAN_CAPS_DOCKERFILE_BLOCK
+        script = (
+            "#!/bin/sh\n"
+            '[ "$(id -u)" = "0" ] && {'
+            " mount -o remount,rw /proc/sys 2>/dev/null || true;"
+            ' exec /usr/bin/podman "$@"; }\n'
+            'exec /usr/bin/podman "$@"\n'
+        )
+        # Every emitted line must come verbatim from the block.
+        for line in script.split("\n"):
+            if line:
+                assert line in block
+        proc = subprocess.run(
+            ["sh", "-n"],
+            input=script,
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 0, proc.stderr
+
+    @staticmethod
+    def _exec_conf_run(block: str, tmp_path: Path) -> dict:
+        """Execute a block's containers.conf RUN via real sh and parse
+        the produced file with tomllib.
+
+        The first ``RUN printf`` in both podman blocks is the conf bake.
+        Its redirect/grep target is rewritten to a temp path (the RUN
+        only writes and greps the file — no other absolute paths are
+        involved). Structural placement is asserted by the callers: a
+        key in the wrong TOML table lands somewhere else and the caller's
+        lookup misses.
+        """
+        lines = block.split("\n")
+        start = next(i for i, ln in enumerate(lines) if ln.startswith("RUN printf"))
+        run_lines = []
+        for ln in lines[start:]:
+            run_lines.append(ln)
+            if not ln.endswith("\\"):
+                break
+        run_text = "\n".join(run_lines)[len("RUN ") :]
+        conf_path = tmp_path / "containers.conf"
+        run_text = run_text.replace("/etc/containers/containers.conf", str(conf_path))
+        proc = subprocess.run(["sh", "-c", run_text], capture_output=True, text=True)
+        assert proc.returncode == 0, proc.stderr
+        with open(conf_path, "rb") as fh:
+            return tomllib.load(fh)
+
+    def test_standard_conf_section_placement(self, tmp_path: Path):
+        """The standard block's conf must disable cgroups under the
+        [containers] table (a [containers]-table key — misplaced under
+        [engine], podman never applies it and runs die on the sandbox's
+        read-only /sys/fs/cgroup), pin the engine fallbacks, and leave
+        the storage driver auto-detected."""
+        conf = self._exec_conf_run(
+            DevcontainerGenerator.PODMAN_DOCKERFILE_BLOCK, tmp_path
+        )
+        assert conf["containers"]["cgroups"] == "disabled"
+        assert conf["engine"]["cgroup_manager"] == "cgroupfs"
+        assert conf["engine"]["events_logger"] == "file"
+        assert "storage" not in conf
+
+    def test_caps_conf_section_placement(self, tmp_path: Path):
+        """The caps block's conf matches the standard bake: cgroups
+        disabled under [containers], engine fallbacks pinned, storage
+        driver auto-detected (rootful podman mounts real overlay — the
+        vfs pin sat silently ignored because [storage] is not a
+        containers.conf table)."""
+        conf = self._exec_conf_run(
+            DevcontainerGenerator.PODMAN_CAPS_DOCKERFILE_BLOCK, tmp_path
+        )
+        assert conf["containers"]["cgroups"] == "disabled"
+        assert conf["engine"]["cgroup_manager"] == "cgroupfs"
+        assert conf["engine"]["events_logger"] == "file"
+        assert "storage" not in conf
+
 
 class TestOpenCodeFeature:
     """Tests for OpenCode feature inclusion."""
@@ -189,7 +424,9 @@ class TestEnvFileGeneration:
     """Tests for .env file generation."""
 
     def test_env_contains_remote_user(self, tmp_path: Path):
-        """Generated .env should contain REMOTE_USER."""
+        """Generated .env should contain REMOTE_USER (root by default:
+        container root maps to the host user on rootless daemons, so
+        bind-mount writes succeed regardless of daemon mode)."""
         (tmp_path / ".opencode").mkdir()
         ctx = _make_generation_context(tmp_path)
 
@@ -594,8 +831,8 @@ class TestComposeGenerator:
         assert "framework-config" in compose_content
         assert "framework-nuts-and-bolts" in compose_content
 
-    def test_docker_feature_adds_privileged(self, tmp_path: Path):
-        """Docker feature should add privileged: true to compose."""
+    def test_docker_feature_adds_security_and_volume(self, tmp_path: Path):
+        """Podman feature adds seccomp=unconfined, /dev/fuse and storage volume."""
         repo_root = tmp_path / "myproject"
         repo_root.mkdir()
         opencode_dir = repo_root / ".opencode"
@@ -610,11 +847,65 @@ class TestComposeGenerator:
         gen.generate(ctx)
 
         compose_content = (opencode_dir / "docker-compose.yaml").read_text()
-        assert "privileged: true" in compose_content
-        assert "docker-init.sh" in compose_content
+        assert "privileged" not in compose_content
+        assert "seccomp=unconfined" in compose_content
+        assert "/dev/fuse" in compose_content
+        assert "docker-myproject-opencode" in compose_content
+        assert ".local/share/containers" in compose_content
+        assert '["opencode"]' in compose_content
 
-    def test_no_docker_feature_no_privileged(self, tmp_path: Path):
-        """Without Docker feature, no privileged line should be added."""
+    def test_docker_feature_caps_mode_adds_caps_block(self, tmp_path: Path):
+        """Caps-mode compose renders the SYS_ADMIN/NET_ADMIN caps block
+        and mounts the graph root at /var/lib/containers."""
+        repo_root = tmp_path / "myproject"
+        repo_root.mkdir()
+        opencode_dir = repo_root / ".opencode"
+        opencode_dir.mkdir()
+
+        ctx = _make_generation_context(
+            repo_root,
+            optional_features=["docker"],
+            podman_caps=True,
+        )
+
+        gen = ComposeGenerator()
+        gen.generate(ctx)
+
+        compose_content = (opencode_dir / "docker-compose.yaml").read_text()
+        assert "cap_add:" in compose_content
+        assert "      - SYS_ADMIN" in compose_content
+        assert "      - NET_ADMIN" in compose_content
+        assert "docker-myproject-opencode:/var/lib/containers" in compose_content
+        assert ".local/share/containers" not in compose_content
+
+    def test_docker_feature_standard_mode_no_caps(self, tmp_path: Path):
+        """Standard-mode compose stays cap-free and keeps the pinned
+        vscode graph root."""
+        repo_root = tmp_path / "myproject"
+        repo_root.mkdir()
+        opencode_dir = repo_root / ".opencode"
+        opencode_dir.mkdir()
+
+        ctx = _make_generation_context(
+            repo_root,
+            optional_features=["docker"],
+            podman_caps=False,
+        )
+
+        gen = ComposeGenerator()
+        gen.generate(ctx)
+
+        compose_content = (opencode_dir / "docker-compose.yaml").read_text()
+        assert "SYS_ADMIN" not in compose_content
+        assert "NET_ADMIN" not in compose_content
+        assert (
+            "docker-myproject-opencode:/home/vscode/.local/share/containers"
+            in compose_content
+        )
+        assert "/var/lib/containers" not in compose_content
+
+    def test_no_docker_feature_no_unconfined(self, tmp_path: Path):
+        """Without docker feature, no seccomp=unconfined or device passthrough."""
         repo_root = tmp_path / "myproject"
         repo_root.mkdir()
         opencode_dir = repo_root / ".opencode"
@@ -630,8 +921,8 @@ class TestComposeGenerator:
 
         compose_content = (opencode_dir / "docker-compose.yaml").read_text()
         assert "privileged" not in compose_content
+        assert "seccomp=unconfined" not in compose_content
         assert '["opencode"]' in compose_content
-        assert "docker-init.sh" not in compose_content
 
     def test_java_feature_adds_m2_volume(self, tmp_path: Path):
         """Java feature with maven should add m2 named volume to compose."""
@@ -771,7 +1062,7 @@ class TestComposeGenerator:
         compose_content = (opencode_dir / "docker-compose.yaml").read_text()
         assert "    ports:" in compose_content
         assert "      - 8080:8080" in compose_content
-        assert "    privileged: true" in compose_content
+        assert "seccomp=unconfined" in compose_content
 
 
 class TestDshConfigGeneration:

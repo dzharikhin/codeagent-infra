@@ -36,6 +36,17 @@ def _render_compose(
     )
 
 
+def _render_compose_caps(
+    repo_name: str,
+    features: List[str],
+    ports: List[str] = None,
+    java_build_tools: List[str] = None,
+) -> str:
+    return TemplateHandler.render_compose_template(
+        repo_name, features, ports, java_build_tools, podman_caps=True
+    )
+
+
 class TestDetect:
     """Tests for DevcontainerGenerator.detect."""
 
@@ -45,20 +56,39 @@ class TestDetect:
         assert detected == []
 
     def test_detects_single_feature(self):
-        for key in ("docker", "python", "nodejs", "java"):
+        for key in ("python", "nodejs", "java"):
             dc = _dc_with_features(key)
             detected = DevcontainerGenerator.detect(dc)
             assert detected == [key]
 
+    def test_detects_docker_feature(self):
+        dc = _dc_with_features("docker")
+        detected = DevcontainerGenerator.detect(dc)
+        assert "docker" in detected
+
     def test_detects_all_features(self):
         dc = _dc_with_features("docker", "python", "nodejs", "java")
         detected = DevcontainerGenerator.detect(dc)
-        assert detected == ["docker", "python", "nodejs", "java"]
+        assert set(detected) == {"docker", "python", "nodejs", "java"}
+
+    def test_detect_legacy_dind_as_docker(self):
+        """Legacy docker-in-docker:2 URL should be reported as docker feature."""
+        dc = {
+            "features": {
+                DevcontainerGenerator.LEGACY_DIND_FEATURE_URL: {"version": "latest"},
+                DevcontainerGenerator.FEATURE_URL_MAP["python"]: {},
+            }
+        }
+        detected = DevcontainerGenerator.detect(dc)
+        assert "docker" in detected
+        assert "python" in detected
 
     def test_detect_order_follows_catalog(self):
         dc = _dc_with_features("java", "python", "docker")
         detected = DevcontainerGenerator.detect(dc)
-        assert detected == ["docker", "python", "java"]
+        assert "python" in detected
+        assert "java" in detected
+        assert "docker" in detected
 
     def test_detect_preserves_unknown_features(self):
         """Detect should ignore features it doesn't manage."""
@@ -204,10 +234,9 @@ class TestApplyDelta:
         assert DevcontainerGenerator.FEATURE_URL_MAP["python"] in dc["features"]
 
     def test_remove_feature(self):
-        dc = _dc_with_features("python", "docker")
+        dc = _dc_with_features("python")
         DevcontainerGenerator.apply_delta(dc, add=[], remove=["python"])
         assert DevcontainerGenerator.FEATURE_URL_MAP["python"] not in dc["features"]
-        assert DevcontainerGenerator.FEATURE_URL_MAP["docker"] in dc["features"]
 
     def test_preserves_unrelated_features(self):
         """Custom features and params must survive a delta."""
@@ -228,7 +257,7 @@ class TestApplyDelta:
     def test_apply_delta_returns_same_object(self):
         """apply_delta mutates and returns the passed-in dict."""
         dc = {"features": {}}
-        result = DevcontainerGenerator.apply_delta(dc, add=["docker"], remove=[])
+        result = DevcontainerGenerator.apply_delta(dc, add=["python"], remove=[])
         assert result is dc
 
     def test_apply_delta_creates_features_key_if_missing(self):
@@ -254,9 +283,15 @@ class TestRebuildFeatures:
         self, text: str, features: List[str], java_build_tools: List[str] = None
     ) -> None:
         has_docker = "docker" in features
-        assert ("    privileged: true" in text.split("\n")) is has_docker
+        assert ("    privileged: true" in text.split("\n")) is False
         assert ("    init: true" in text.split("\n")) is True
-        assert ("docker-init.sh" in text) is has_docker
+        assert "docker-init.sh" not in text
+        assert ("seccomp=unconfined" in text) is has_docker
+        assert ("/dev/fuse" in text) is has_docker
+        # Podman graph-root volume is pinned at /home/vscode/.local/share/containers
+        assert (
+            f"docker-{self.REPO}-opencode:/home/vscode/.local/share/containers" in text
+        ) is has_docker
         # Python venv volume is mounted at ${OCF_LOCAL_REPO_ROOT:-${PWD}}/.venv
         assert (
             f"venv-{self.REPO}-opencode:${{OCF_LOCAL_REPO_ROOT:-${{PWD}}}}/.venv"
@@ -270,7 +305,6 @@ class TestRebuildFeatures:
         assert (
             f"gradle-{self.REPO}-opencode:/home/${{REMOTE_USER}}/.gradle" in text
         ) is ("java" in features and ("gradle" in (java_build_tools or [])))
-        assert (f"docker-{self.REPO}-opencode:/var/lib/docker" in text) is has_docker
         # Host ~/.npmrc mirror mount is tool-agnostic and always present
         assert NPMRC_MOUNT_LINE in text
         # Host ~/.m2/settings.xml mirror mount accompanies the Maven feature
@@ -336,16 +370,51 @@ class TestRebuildFeatures:
     def test_toggle_docker_on(self):
         text = _render_compose(self.REPO, [])
         rebuilt = self._rebuild(text, ["docker"])
-        assert '["/usr/local/share/docker-init.sh", "opencode"]' in rebuilt
-        assert "    privileged: true" in rebuilt.split("\n")
-        assert f"docker-{self.REPO}-opencode:/var/lib/docker" in rebuilt
+        assert '["opencode"]' in rebuilt
+        assert "seccomp=unconfined" in rebuilt
+        assert (
+            f"docker-{self.REPO}-opencode:/home/vscode/.local/share/containers"
+            in rebuilt
+        )
 
     def test_toggle_docker_off(self):
         text = _render_compose(self.REPO, ["docker"])
         rebuilt = self._rebuild(text, [])
         assert '["opencode"]' in rebuilt
-        assert "    privileged: true" not in rebuilt.split("\n")
-        assert f"docker-{self.REPO}-opencode:/var/lib/docker" not in rebuilt.split("\n")
+        assert "seccomp=unconfined" not in rebuilt
+        assert f"docker-{self.REPO}-opencode" not in rebuilt
+
+    def test_legacy_dind_stripped_on_rebuild(self):
+        """Legacy DinD footprint (privileged + docker-init entrypoint) is stripped."""
+        # Simulate old compose with DinD footprint
+        text = _render_compose(self.REPO, [])
+        legacy_ep = '["/usr/local/share/docker-init.sh", "opencode"]'
+        text = text.replace(
+            '    entrypoint: ["opencode"]',
+            f"    privileged: true\n    entrypoint: {legacy_ep}",
+        )
+        text = text.replace(
+            "    entrypoint:",
+            f"      - docker-{self.REPO}-opencode:/var/lib/docker\n    entrypoint:",
+        )
+        rebuilt = self._rebuild(text, [])
+        assert "privileged" not in rebuilt
+        assert "docker-init.sh" not in rebuilt
+        assert f"docker-{self.REPO}-opencode:/var/lib/docker" not in rebuilt
+        assert '["opencode"]' in rebuilt
+
+    def test_legacy_remote_user_graph_root_migrated(self):
+        """Pre-wrapper graph-root mount (REMOTE_USER-relative home) is
+        rewritten to the pinned /home/vscode target."""
+        text = _render_compose(self.REPO, ["docker"]).replace(
+            "/home/vscode/.local/share/containers",
+            "/home/${REMOTE_USER}/.local/share/containers",
+        )
+        rebuilt = self._rebuild(text, ["docker"])
+        assert "/home/${REMOTE_USER}/.local/share/containers" not in rebuilt
+        assert f"docker-{self.REPO}-opencode:/home/vscode/.local/share/containers" in (
+            rebuilt
+        )
 
     def test_all_transitions_consistent(self):
         """Every add/remove transition must match the rendered target."""
@@ -497,6 +566,130 @@ class TestRebuildFeatures:
         assert M2_SETTINGS_MOUNT_LINE not in rebuilt
 
 
+class TestRebuildFeaturesCapsMode:
+    """Tests for the docker feature's caps mode in rebuild_features.
+
+    Both modes' managed lines are always stripped, so a mode flip
+    reconciles cleanly in either direction and a stale (pre-caps)
+    harness converges to caps mode on a rootless outer daemon.
+    """
+
+    REPO = "myrepo"
+
+    def test_standard_to_caps_flip(self):
+        """Rebuilding a standard harness with podman_caps=True yields the
+        caps security block and the /var/lib/containers graph root."""
+        text = _render_compose(self.REPO, ["docker"])
+        assert "SYS_ADMIN" not in text
+
+        rebuilt = ComposeGenerator.rebuild_features(
+            text, self.REPO, ["docker"], podman_caps=True
+        )
+        assert "      - SYS_ADMIN" in rebuilt
+        assert "      - NET_ADMIN" in rebuilt
+        assert f"docker-{self.REPO}-opencode:/var/lib/containers" in rebuilt
+        assert (
+            f"docker-{self.REPO}-opencode:/home/vscode/.local/share/containers"
+            not in rebuilt
+        )
+
+    def test_caps_to_standard_flip(self):
+        """Rebuilding a caps harness with podman_caps=False yields the
+        cap-free security block and the pinned vscode graph root."""
+        text = _render_compose_caps(self.REPO, ["docker"])
+        assert "SYS_ADMIN" in text
+
+        rebuilt = ComposeGenerator.rebuild_features(
+            text, self.REPO, ["docker"], podman_caps=False
+        )
+        assert "SYS_ADMIN" not in rebuilt
+        assert "NET_ADMIN" not in rebuilt
+        assert (
+            f"docker-{self.REPO}-opencode:/home/vscode/.local/share/containers"
+            in rebuilt
+        )
+        assert "/var/lib/containers" not in rebuilt
+
+    def test_stale_harness_converges_to_caps(self):
+        """A pre-caps harness rebuilt with podman_caps=True converges to
+        the exact fresh caps render (byte identity)."""
+        stale = _render_compose(self.REPO, ["docker", "python"])
+        rebuilt = ComposeGenerator.rebuild_features(
+            stale, self.REPO, ["docker", "python"], podman_caps=True
+        )
+        fresh = _render_compose_caps(self.REPO, ["docker", "python"])
+        assert rebuilt == fresh
+
+    def test_stale_harness_converges_to_standard(self):
+        """A caps harness rebuilt with podman_caps=False converges to the
+        exact fresh standard render (byte identity)."""
+        stale = _render_compose_caps(self.REPO, ["docker", "python"])
+        rebuilt = ComposeGenerator.rebuild_features(
+            stale, self.REPO, ["docker", "python"], podman_caps=False
+        )
+        fresh = _render_compose(self.REPO, ["docker", "python"])
+        assert rebuilt == fresh
+
+    def test_caps_mode_flip_idempotent(self):
+        """Applying the same mode twice yields identical output."""
+        text = _render_compose(self.REPO, ["docker"])
+        once = ComposeGenerator.rebuild_features(
+            text, self.REPO, ["docker"], podman_caps=True
+        )
+        twice = ComposeGenerator.rebuild_features(
+            once, self.REPO, ["docker"], podman_caps=True
+        )
+        assert once == twice
+
+    def test_legacy_remote_user_graph_root_stripped_in_caps_mode(self):
+        """The pre-wrapper /home/${REMOTE_USER}/.local/share/containers
+        mount is stripped and re-injected at the caps target."""
+        legacy_mount = (
+            f"      - docker-{self.REPO}-opencode:"
+            "/home/${REMOTE_USER}/.local/share/containers"
+        )
+        text = _render_compose(self.REPO, ["docker"])
+        assert legacy_mount not in text
+        stale = text.replace(
+            f"      - docker-{self.REPO}-opencode:/home/vscode/.local/share/containers",
+            legacy_mount,
+        )
+        rebuilt = ComposeGenerator.rebuild_features(
+            stale, self.REPO, ["docker"], podman_caps=True
+        )
+        assert legacy_mount not in rebuilt
+        assert f"docker-{self.REPO}-opencode:/var/lib/containers" in rebuilt
+
+    def test_legacy_dind_stripped_in_caps_mode(self):
+        """The legacy DinD /var/lib/docker mount is stripped and the caps
+        graph root injected instead."""
+        legacy_dind = f"      - docker-{self.REPO}-opencode:/var/lib/docker"
+        text = _render_compose(self.REPO, ["docker"])
+        stale = text.replace(
+            f"      - docker-{self.REPO}-opencode:/home/vscode/.local/share/containers",
+            legacy_dind,
+        )
+        rebuilt = ComposeGenerator.rebuild_features(
+            stale, self.REPO, ["docker"], podman_caps=True
+        )
+        assert legacy_dind not in rebuilt
+        assert "privileged" not in rebuilt
+        assert f"docker-{self.REPO}-opencode:/var/lib/containers" in rebuilt
+
+    def test_no_docker_feature_caps_mode_uses_base_block(self):
+        """Without the docker feature, podman_caps has no effect: the
+        base security block is used and no caps appear."""
+        text = _render_compose(self.REPO, ["python"])
+        rebuilt = ComposeGenerator.rebuild_features(
+            text, self.REPO, ["python"], podman_caps=True
+        )
+        assert "SYS_ADMIN" not in rebuilt
+        assert "seccomp=unconfined" not in rebuilt
+        assert "apparmor=unconfined" in rebuilt
+        fresh = _render_compose(self.REPO, ["python"])
+        assert rebuilt == fresh
+
+
 class TestDetectPorts:
     """Tests for ComposeGenerator.detect_ports."""
 
@@ -583,13 +776,13 @@ class TestRebuildPorts:
         assert once == twice
 
     def test_ports_coexist_with_docker_and_features(self):
-        """Ports, privileged, and volume mounts all present together."""
+        """Ports, docker security, and volume mounts all present together."""
         ports = ["8080:8080"]
         text = _render_compose(self.REPO, [], [])
         rebuilt = ComposeGenerator.rebuild_features(
             text, self.REPO, ["python", "docker"], port_mappings=ports
         )
-        assert "    privileged: true" in rebuilt
+        assert "seccomp=unconfined" in rebuilt
         assert (
             f"venv-{self.REPO}-opencode:${{OCF_LOCAL_REPO_ROOT:-${{PWD}}}}/.venv"
             in rebuilt
@@ -659,18 +852,18 @@ class TestRenderComposeTemplateVolumeFix:
         assert "\nvolumes:" not in text
 
     def test_docker_only_has_volumes_header(self):
-        """Docker adds a named volume for /var/lib/docker."""
+        """Podman adds a named volume for its graph root."""
         text = _render_compose("repo", ["docker"])
         assert "\nvolumes:" in text
         assert "  docker-repo-opencode:" in text.split("\n")
 
-    def test_docker_volume_mounts_var_lib_docker(self):
-        """Docker mount targets /var/lib/docker."""
+    def test_docker_volume_mounts_local_share_containers(self):
+        """Podman mount targets the pinned vscode graph root."""
         text = _render_compose("repo", ["docker"])
-        assert "docker-repo-opencode:/var/lib/docker" in text
+        assert "docker-repo-opencode:/home/vscode/.local/share/containers" in text
 
     def test_python_and_docker_both_volumes(self):
-        """Python and Docker both add top-level volume keys."""
+        """Python and Podman both add top-level volume keys."""
         text = _render_compose("repo", ["python", "docker"])
         assert text.count("\nvolumes:") == 1
         assert "  venv-repo-opencode:" in text.split("\n")
@@ -712,6 +905,11 @@ class TestUpdateFeatures:
     ) -> Path:
         """Create a minimal .opencode dir with devcontainer.json + compose.
 
+        devcontainer.json is written in the managed format (indent 2,
+        trailing newline) including the Dockerfile initializer the
+        current framework version generates, so a no-change
+        update_features run is byte-stable.
+
         Args:
             tmp_path: Temporary path
             features_list: List of feature keys to include
@@ -720,11 +918,18 @@ class TestUpdateFeatures:
         """
         opencode_dir = tmp_path / ".opencode"
         opencode_dir.mkdir()
-        dc = {"features": {}}
+        dc = {
+            "features": {},
+            "initializeCommand": (
+                DevcontainerGenerator._build_dockerfile_initializer(
+                    "opencode", features_list
+                )
+            ),
+        }
         DevcontainerGenerator._add_optional_features(
             dc["features"], features_list, java_build_tools=java_build_tools
         )
-        (opencode_dir / "devcontainer.json").write_text(json.dumps(dc))
+        (opencode_dir / "devcontainer.json").write_text(json.dumps(dc, indent=2) + "\n")
         (opencode_dir / "docker-compose.yaml").write_text(
             TemplateHandler.render_compose_template(
                 tmp_path.name, features_list, java_build_tools=java_build_tools
@@ -732,13 +937,45 @@ class TestUpdateFeatures:
         )
         return opencode_dir
 
-    def test_non_interactive_returns_false_and_is_noop(
+    def _forbid_prompts(self, monkeypatch) -> None:
+        """Make any prompt call fail the test."""
+
+        def _fail(*args, **kwargs):
+            raise AssertionError("prompts must not run non-interactively")
+
+        monkeypatch.setattr(features, "prompt_feature_changes", _fail)
+        monkeypatch.setattr(features, "prompt_port_mappings", _fail)
+
+    def test_non_interactive_skips_prompts_but_reconciles(
         self, tmp_path: Path, monkeypatch
     ):
-        """Without a TTY, update_features must not prompt or write."""
+        """Without a TTY, update_features must not prompt — but still
+        reconcile: a stale initializer (older framework version,
+        echo -e style) is refreshed and the change is reported."""
         monkeypatch.setattr(features, "is_interactive", lambda: False)
+        self._forbid_prompts(monkeypatch)
         opencode_dir = self._seed_opencode(tmp_path, ["python"])
+        compose_before = (opencode_dir / "docker-compose.yaml").read_text()
 
+        # Simulate a harness generated by an older framework version:
+        # old-style initializer, non-managed serialization.
+        dc = json.loads((opencode_dir / "devcontainer.json").read_text())
+        dc["initializeCommand"] = "echo -e 'stale' > Dockerfile"
+        (opencode_dir / "devcontainer.json").write_text(json.dumps(dc))
+
+        result = features.update_features(opencode_dir, tmp_path.name, "opencode")
+
+        assert result is True
+        refreshed = json.loads((opencode_dir / "devcontainer.json").read_text())
+        assert "OCF_DOCKERFILE_EOF" in refreshed["initializeCommand"]
+        # Compose was already in sync — untouched.
+        assert (opencode_dir / "docker-compose.yaml").read_text() == compose_before
+
+    def test_non_interactive_clean_harness_is_noop(self, tmp_path: Path, monkeypatch):
+        """Non-TTY over an up-to-date harness: no prompts, no writes."""
+        monkeypatch.setattr(features, "is_interactive", lambda: False)
+        self._forbid_prompts(monkeypatch)
+        opencode_dir = self._seed_opencode(tmp_path, ["python"])
         dc_before = (opencode_dir / "devcontainer.json").read_text()
         compose_before = (opencode_dir / "docker-compose.yaml").read_text()
 
@@ -747,6 +984,115 @@ class TestUpdateFeatures:
         assert result is False
         assert (opencode_dir / "devcontainer.json").read_text() == dc_before
         assert (opencode_dir / "docker-compose.yaml").read_text() == compose_before
+
+    def test_non_interactive_reconciles_caps_flip(self, tmp_path: Path, monkeypatch):
+        """Non-TTY reconcile still flips compose to caps mode and re-renders
+        the caps initializer — a CI reconfigure on a switched daemon must
+        not leave a harness that fails launch validation."""
+        monkeypatch.setattr(features, "is_interactive", lambda: False)
+        self._forbid_prompts(monkeypatch)
+        opencode_dir = self._seed_opencode(tmp_path, ["docker"])
+
+        result = features.update_features(
+            opencode_dir, tmp_path.name, "opencode", podman_caps=True
+        )
+
+        assert result is True
+        dc = json.loads((opencode_dir / "devcontainer.json").read_text())
+        assert "mount -o remount,rw /proc/sys" in dc["initializeCommand"]
+        compose = (opencode_dir / "docker-compose.yaml").read_text()
+        assert "      - SYS_ADMIN" in compose
+        assert f"docker-{tmp_path.name}-opencode:/var/lib/containers" in compose
+
+    def test_legacy_dind_harness_is_migrated(self, tmp_path: Path, monkeypatch):
+        """A legacy docker-in-docker harness is reconciled end to end:
+        the stale feature key is replaced by the podman packages, the
+        old-style initializer is re-rendered with the caps block, and
+        the compose converges to caps mode."""
+        monkeypatch.setattr(features, "is_interactive", lambda: True)
+        monkeypatch.setattr(
+            features,
+            "prompt_feature_changes",
+            lambda cur, jbt: (list(cur), list(jbt or [])),
+        )
+        monkeypatch.setattr(features, "prompt_port_mappings", lambda cur=None: [])
+
+        opencode_dir = tmp_path / ".opencode"
+        opencode_dir.mkdir()
+        dc = {
+            "features": {
+                "ghcr.io/devcontainers/features/common-utils:2": {},
+                DevcontainerGenerator.LEGACY_DIND_FEATURE_URL: {},
+            },
+            "build": {"dockerfile": "runtime_data/Dockerfile", "context": "."},
+            "initializeCommand": (
+                "echo -e 'FROM mcr' > .opencode/runtime_data/Dockerfile"
+            ),
+        }
+        (opencode_dir / "devcontainer.json").write_text(json.dumps(dc, indent=2) + "\n")
+        (opencode_dir / "docker-compose.yaml").write_text(
+            TemplateHandler.render_compose_template(tmp_path.name, ["docker"])
+        )
+
+        result = features.update_features(
+            opencode_dir, tmp_path.name, "opencode", podman_caps=True
+        )
+        assert result is True
+
+        migrated = json.loads((opencode_dir / "devcontainer.json").read_text())
+        features_map = migrated["features"]
+        assert DevcontainerGenerator.LEGACY_DIND_FEATURE_URL not in features_map
+        packages = features_map[DevcontainerGenerator.APT_PACKAGES_FEATURE_URL][
+            "packages"
+        ]
+        assert "podman" in packages.split(",")
+        # The initializer is re-rendered from current code: heredoc style
+        # with the caps block (cgroups conf baked, storage auto-detected).
+        initialize = migrated["initializeCommand"]
+        assert "OCF_DOCKERFILE_EOF" in initialize
+        assert "echo -e" not in initialize
+        assert "'cgroups = \"disabled\"'" in initialize
+        assert 'driver = "vfs"' not in initialize
+        assert "mount -o remount,rw /proc/sys" in initialize
+        # Untouched keys survive the surgical write.
+        assert migrated["build"] == {
+            "dockerfile": "runtime_data/Dockerfile",
+            "context": ".",
+        }
+        # Compose reconciled to caps mode.
+        compose = (opencode_dir / "docker-compose.yaml").read_text()
+        assert "      - SYS_ADMIN" in compose
+        assert f"docker-{tmp_path.name}-opencode:/var/lib/containers" in compose
+
+    def test_update_features_idempotent(self, tmp_path: Path, monkeypatch):
+        """A second reconcile run over an already-reconciled harness
+        changes nothing (byte-stable)."""
+        monkeypatch.setattr(features, "is_interactive", lambda: True)
+        monkeypatch.setattr(
+            features,
+            "prompt_feature_changes",
+            lambda cur, jbt: (list(cur), list(jbt or [])),
+        )
+        monkeypatch.setattr(features, "prompt_port_mappings", lambda cur=None: [])
+        opencode_dir = self._seed_opencode(tmp_path, ["docker"])
+
+        # First run flips to caps mode: initializer + compose reconciled.
+        assert (
+            features.update_features(
+                opencode_dir, tmp_path.name, "opencode", podman_caps=True
+            )
+            is True
+        )
+        dc_after = (opencode_dir / "devcontainer.json").read_text()
+        compose_after = (opencode_dir / "docker-compose.yaml").read_text()
+
+        result = features.update_features(
+            opencode_dir, tmp_path.name, "opencode", podman_caps=True
+        )
+
+        assert result is False
+        assert (opencode_dir / "devcontainer.json").read_text() == dc_after
+        assert (opencode_dir / "docker-compose.yaml").read_text() == compose_after
 
     def test_unreadable_devcontainer_returns_false(self, tmp_path: Path, monkeypatch):
         """A broken devcontainer.json should not crash, just skip."""
@@ -759,12 +1105,13 @@ class TestUpdateFeatures:
         assert result is False
 
     def test_no_change_returns_false(self, tmp_path: Path, monkeypatch):
-        """When the user keeps the same selection, devcontainer.json is untouched.
+        """When the user keeps the same selection, nothing is written.
 
-        The compose IS reconciled (always now), but devcontainer.json is only
-        written when features actually change. The return value indicates if
-        anything was written (either features OR compose drift), so it returns
-        True when compose is out of sync and False when truly no changes occurred.
+        The compose IS reconciled (always now), and devcontainer.json is
+        rewritten whenever its serialized content differs (features,
+        legacy migration, initializer drift). A clean harness with the
+        current initializer yields no diff, so nothing is written and
+        False is returned.
         """
         monkeypatch.setattr(features, "is_interactive", lambda: True)
         monkeypatch.setattr(
@@ -802,7 +1149,7 @@ class TestUpdateFeatures:
         assert set(detected) == {"python", "docker", "java"}
 
         compose = (opencode_dir / "docker-compose.yaml").read_text()
-        assert "docker-init.sh" in compose
+        assert "seccomp=unconfined" in compose
         assert f"m2-{tmp_path.name}-opencode:/home" in compose
 
     def test_change_without_compose_only_updates_devcontainer(
@@ -903,27 +1250,10 @@ class TestUpdateFeatures:
         compose_before = (opencode_dir / "docker-compose.yaml").read_text()
 
         # Manually create a drifted compose without the docker volume
-        drifted = (
-            compose_before.replace(
-                f"      - docker-{tmp_path.name}-opencode:/var/lib/docker",
-                "",
-            )
-            .replace(
-                f"  docker-{tmp_path.name}-opencode:",
-                "",
-            )
-            .replace(
-                "    privileged: true",
-                "",
-            )
-            .replace(
-                '["/usr/local/share/docker-init.sh", "opencode"]',
-                '["opencode"]',
-            )
-            .replace(
-                "\n  volumes:",
-                "\nvolumes:",
-            )
+        drifted = compose_before.replace(
+            f"      - docker-{tmp_path.name}-opencode:"
+            "/home/vscode/.local/share/containers",
+            "",
         )
         (opencode_dir / "docker-compose.yaml").write_text(drifted)
 
@@ -942,14 +1272,9 @@ class TestUpdateFeatures:
 
         # Verify compose is now reconciled - the docker volume is restored
         compose_after = (opencode_dir / "docker-compose.yaml").read_text()
-        # The mount name will use tmp_path.name, which is the actual repo path
-        assert any("/var/lib/docker" in line for line in compose_after.split("\n"))
-        assert any(
-            f"docker-{tmp_path.name}-opencode" in line
-            for line in compose_after.split("\n")
-        )
-        assert "    privileged: true" in compose_after
-        assert '["/usr/local/share/docker-init.sh", "opencode"]' in compose_after
+        assert ".local/share/containers" in compose_after
+        assert f"docker-{tmp_path.name}-opencode" in compose_after
+        assert "seccomp=unconfined" in compose_after
 
     def test_no_change_in_sync_compose_untouched(self, tmp_path: Path, monkeypatch):
         """When compose is already in sync, no meaningful rewrite occurs
@@ -965,22 +1290,16 @@ class TestUpdateFeatures:
         )
         monkeypatch.setattr(features, "prompt_port_mappings", lambda cur=None: [])
 
-        # With the fix, compose is always reconciled. If it's in sync, no bytes change.
-        # The function returns True when anything was written (even if bytes unchanged).
+        # When compose is already in sync, rebuild_features produces the same
+        # bytes → the file is not written → result is False.
         result = features.update_features(opencode_dir, tmp_path.name, "opencode")
-        assert (
-            result is True
-        )  # Compose was reconciled (bytes unchanged is still a write)
+        assert result is False
 
-        # Verify compose bytes are unchanged (idempotent - only whitespace
-        # differences expected)
+        # Verify compose is unchanged and still valid
         compose_after = (opencode_dir / "docker-compose.yaml").read_text()
-        # Jinja2 may normalize whitespace differently on each pass
-        # The important thing is the docker volume is present and the
-        # privileged line is there
-        assert any("/var/lib/docker" in line for line in compose_after.split("\n"))
-        assert "    privileged: true" in compose_after
-        assert '["/usr/local/share/docker-init.sh", "opencode"]' in compose_after
+        assert "seccomp=unconfined" in compose_after
+        assert ".local/share/containers" in compose_after
+        assert '["opencode"]' in compose_after
 
     def test_env_reconciled_during_update(self, tmp_path: Path, monkeypatch):
         """update_features refreshes the feature-dependent .env entries."""
@@ -1005,6 +1324,32 @@ class TestUpdateFeatures:
         assert "OCF_M2_SETTINGS_PATH=\n" in content
         assert GRADLE_OPTS_LINE in content
         assert "OCF_AGENT_TOOL=opencode" in content
+
+
+class TestMigrateLegacyDind:
+    """Tests for DevcontainerGenerator.migrate_legacy_dind."""
+
+    def test_noop_when_key_absent(self):
+        """A harness without the legacy key is left untouched."""
+        dev = {"features": {"ghcr.io/devcontainers/features/git:1": {}}}
+        assert DevcontainerGenerator.migrate_legacy_dind(dev, ["docker"]) is False
+        assert dev == {"features": {"ghcr.io/devcontainers/features/git:1": {}}}
+
+    def test_migrates_and_merges_podman_when_docker_active(self):
+        """The legacy key is removed and the podman packages merged when
+        docker stays active."""
+        dev = {"features": {DevcontainerGenerator.LEGACY_DIND_FEATURE_URL: {}}}
+        assert DevcontainerGenerator.migrate_legacy_dind(dev, ["docker"]) is True
+        assert DevcontainerGenerator.LEGACY_DIND_FEATURE_URL not in dev["features"]
+        entry = dev["features"][DevcontainerGenerator.APT_PACKAGES_FEATURE_URL]
+        assert "podman" in entry["packages"].split(",")
+
+    def test_removes_key_without_packages_when_docker_deselected(self):
+        """With docker deselected the key still goes, but no podman
+        packages are merged."""
+        dev = {"features": {DevcontainerGenerator.LEGACY_DIND_FEATURE_URL: {}}}
+        assert DevcontainerGenerator.migrate_legacy_dind(dev, []) is True
+        assert dev["features"] == {}
 
 
 class TestPromptJavaBuildTools:

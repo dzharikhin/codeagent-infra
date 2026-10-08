@@ -156,26 +156,40 @@ ocframework reconfigure
 
 When run interactively (stdin is a TTY), `reconfigure` offers to **add or remove devcontainer features** before rebuilding. The current feature set and editor preference are shown, pre-filled as the defaults, so you can toggle docker/python/nodejs/java and the editor (vi/nano) on or off. Only the feature-dependent parts of `.opencode/devcontainer.json` and `.opencode/docker-compose.yaml` are updated; any manual customizations elsewhere are preserved.
 
+On every run — interactive or not — `reconfigure` also re-renders the Dockerfile-generating `initializeCommand` in `devcontainer.json` from the current framework code (migrating legacy feature keys such as `docker-in-docker:2` to the podman engine along the way), so image-level fixes propagate to the rebuilt image without a re-init.
+
 After the prompts it rebuilds the image, updates the cached image ID and removes the tool's existing container (it never starts containers) — the next `ocframework launch` picks up the new image.
 
-In a non-interactive context (e.g. CI, piped stdin) the prompt is skipped and the image rebuilds with the existing configuration.
+In a non-interactive context (e.g. CI, piped stdin) the prompts are skipped and the detected configuration is kept, but the reconciliation still runs (Dockerfile content, compose, `.env`) before the rebuild.
 
 `launch` self-heals: when the cached image is missing (e.g. pruned by a Docker cleanup), it rebuilds automatically on the next launch. `launch --force` removes any existing container and the cached image ID for a fully fresh session.
 
-### Docker-in-Docker
+### Docker Support (podman engine, two modes)
 
-If you selected the `docker` optional feature during `ocframework init`, the container includes Docker CE and runs with `privileged: true`. The image is pre-configured with autodetectable storage driver (prefers `overlay2`, falls back to `vfs` in sandboxed environments).
+If you selected the `docker` optional feature during `ocframework init`, the container includes a Docker-compatible CLI backed by **podman** — never `privileged: true`. Everything works through the familiar `docker` CLI: a wrapper transparently forwards `docker run/build/compose` to the podman engine. No daemon startup is needed — there is no dockerd; podman runs daemonless.
 
-The Docker daemon **starts automatically** on container launch. The container entrypoint runs `/usr/local/share/docker-init.sh` before `opencode`, which starts dockerd with readiness checks.
+The framework picks the mode automatically from your Docker daemon at `init`/`reconfigure` time and prints it, e.g.:
 
-Verify it's running:
-
-```sh
-docker info | grep "Storage Driver"
-# Should output: Storage Driver: overlay2 (or vfs in sandboxed environments)
+```
+Docker daemon: rootless → caps mode (SYS_ADMIN, NET_ADMIN), REMOTE_USER=root
+Docker daemon: rootful → standard mode (no caps), REMOTE_USER=vscode
 ```
 
-A named volume `docker-<repo>-<tool>` is mounted at `/var/lib/docker` to persist Docker data across container restarts.
+- **Rootless daemon → caps mode.** The agent runs as `root` inside the sandbox (which is how container root maps to your host user — files you create are owned by you). The inner podman engine runs rootful with exactly two extra capabilities, `SYS_ADMIN` and `NET_ADMIN` — far narrower than `privileged` (no host devices, no module loading), and both remain confined by the outer rootless user namespace, so they never reach host root.
+- **Rootful daemon → standard mode.** The agent runs as the unprivileged `vscode` account and podman runs rootless — no capabilities at all. (Assumes your host user id is 1000, which maps to `vscode`; on hosts with a different uid prefer a rootless daemon, where container root maps to any host uid.)
+
+If `launch` detects a mismatch — e.g. you switched your Docker daemon between rootless and rootful after generating the harness — it fails with a clear error and two remedies: point launch at a matching daemon (`docker context use <context>` or `ocframework launch --docker-context <context>`) or regenerate the harness with `ocframework reconfigure`. After switching daemons, podman may report `database graph driver mismatch` once — remove the stale storage volume (`docker volume rm docker-<repo>-<tool>`) and relaunch.
+
+Inner containers run with cgroups disabled (the framework bakes this into the image): the sandbox's cgroup filesystem is read-only, so cgroup-based resource limits aren't available for containers started inside — plain `docker run` works without any flags.
+
+Verify it works:
+
+```sh
+docker info | grep -E "rootless|Storage Driver"
+# in standard mode rootless is expected; storage is overlay (or fuse-overlay in nested sandboxes)
+```
+
+A named volume `docker-<repo>-<tool>` is mounted at the podman storage root (`/home/vscode/.local/share/containers` in standard mode, `/var/lib/containers` in caps mode) to persist images across container restarts.
 
 ### Debug Configuration
 

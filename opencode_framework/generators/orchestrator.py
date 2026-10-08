@@ -28,12 +28,19 @@ class GenerationOrchestrator:
         self.docs_gen = DocumentationGenerator()
         self.compose_gen = ComposeGenerator()
 
-    def generate(self, repo_root: Path, wizard_result: "WizardResult") -> None:
+    def generate(
+        self,
+        repo_root: Path,
+        wizard_result: "WizardResult",
+        podman_caps: bool = False,
+    ) -> None:
         """Generate the complete config worktree for the selected tool.
 
         Args:
             repo_root: Root of the repository
             wizard_result: Results from the initialization wizard
+            podman_caps: Caps-mode selector for the docker feature
+                (rootless outer daemon detection result)
         """
         config_dir = repo_root / get_tool_spec(wizard_result.agent_tool).config_dirname
 
@@ -49,6 +56,7 @@ class GenerationOrchestrator:
             port_mappings=wizard_result.port_mappings,
             java_build_tools=wizard_result.java_build_tools,
             agent_tool=wizard_result.agent_tool,
+            podman_caps=podman_caps,
         )
 
         # Generate all files in order

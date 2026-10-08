@@ -12,25 +12,19 @@ from opencode_framework.generators.templates import (
     GRADLE_ENV_COMMENT,
     GRADLE_OPTS_LINE,
 )
-from opencode_framework.preflight import check_docker_rootless_context
 from opencode_framework.sandbox.compose import ComposeGenerator
 from opencode_framework.sandbox.devcontainer import DevcontainerGenerator
 
 # Shared feature catalog (key, human-readable description).
 # Order matters: it defines the prompt order and is reused by the init wizard.
 AVAILABLE_FEATURES: List[Tuple[str, str]] = [
-    ("docker", "Docker access (DinD with rootless context)"),
+    ("docker", "Docker CLI (rootless Podman engine)"),
     ("python", "Python + Poetry + uv"),
     ("nodejs", "Node.js + npm"),
     ("java", "Java (JDK)"),
 ]
 
 JAVA_BUILD_TOOLS = ["maven", "gradle"]
-
-_DOCKER_ROOTLESS_HINT = (
-    "    Create it with: docker context create rootless "
-    "--docker 'host=unix:///run/user/$(id -u)/docker.sock'"
-)
 
 
 def is_interactive() -> bool:
@@ -46,27 +40,11 @@ def _prompt_single_feature(
     desc: str,
     currently_enabled: bool,
 ) -> bool:
-    """Prompt to enable/disable one feature, with the docker rootless guard.
+    """Prompt to enable/disable one feature.
 
     Returns True if the feature should be enabled.
     """
-    if not typer.confirm(f"  Enable {desc}?", default=currently_enabled):
-        return False
-    if (
-        key == "docker"
-        and not currently_enabled
-        and not check_docker_rootless_context()
-    ):
-        typer.secho(
-            "    Warning: No rootless Docker context found. "
-            "Docker access requires a 'rootless' context.",
-            fg=typer.colors.RED,
-        )
-        typer.echo(_DOCKER_ROOTLESS_HINT)
-        return typer.confirm(
-            "    Enable Docker anyway? (Not recommended)", default=False
-        )
-    return True
+    return typer.confirm(f"  Enable {desc}?", default=currently_enabled)
 
 
 def _prompt_java_build_tools(current_tools: Optional[List[str]] = None) -> List[str]:
@@ -254,12 +232,24 @@ def reconcile_env_for_features(env_path: Path, java_build_tools: List[str]) -> b
     return True
 
 
-def update_features(config_dir: Path, repo_name: str, agent_tool: str) -> bool:
-    """Interactively offer to add/remove devcontainer features.
+def update_features(
+    config_dir: Path,
+    repo_name: str,
+    agent_tool: str,
+    podman_caps: bool = False,
+) -> bool:
+    """Reconcile devcontainer features across a rebuild.
 
-    Reads the current configuration, prompts for changes (skipped silently
-    when stdin is not a TTY), and surgically updates devcontainer.json and
-    docker-compose.yaml when anything changes. The .env is always
+    Reads the current configuration, prompts for feature/port changes
+    (prompts are skipped silently when stdin is not a TTY — the detected
+    selection is then used as-is, so non-interactive runs still
+    reconcile), and surgically updates devcontainer.json and
+    docker-compose.yaml when anything changes. The Dockerfile-generating
+    ``initializeCommand`` is always re-rendered from current framework
+    code so image-level fixes (podman engine setup, containers.conf
+    changes) propagate through ``reconfigure`` instead of freezing at
+    harness-creation time; legacy feature keys (docker-in-docker:2) are
+    migrated to the podman representation. The .env is always
     reconciled (host dotfile mirror paths, managed GRADLE_OPTS line) to
     match the final feature selection and current host file state.
 
@@ -270,16 +260,17 @@ def update_features(config_dir: Path, repo_name: str, agent_tool: str) -> bool:
         agent_tool: Agent tool name ("opencode" | "qwen" | "dsh"); drives the
             tool-suffixed volume names and entrypoint binary written by
             the compose reconciler
+        podman_caps: Caps-mode selector for the docker feature, forwarded
+            to the compose reconciler and the Dockerfile initializer
+            (rootless outer daemon detection)
 
     Returns:
-        True if feature configuration was changed, False otherwise.
+        True if any managed file was changed, False otherwise.
     """
-    if not is_interactive():
-        return False
-
     devcontainer_path = config_dir / "devcontainer.json"
     try:
-        devcontainer = json.loads(devcontainer_path.read_text())
+        original_dc_text = devcontainer_path.read_text()
+        devcontainer = json.loads(original_dc_text)
     except (OSError, ValueError) as exc:
         typer.secho(
             f"Warning: could not read {devcontainer_path} ({exc}); "
@@ -290,25 +281,32 @@ def update_features(config_dir: Path, repo_name: str, agent_tool: str) -> bool:
 
     current_features = DevcontainerGenerator.detect(devcontainer)
     current_java_build_tools = DevcontainerGenerator.detect_build_tools(devcontainer)
-    new_features, new_java_build_tools = prompt_feature_changes(
-        current_features, current_java_build_tools
-    )
+
+    interactive = is_interactive()
+    if interactive:
+        new_features, new_java_build_tools = prompt_feature_changes(
+            current_features, current_java_build_tools
+        )
+    else:
+        new_features = list(current_features)
+        new_java_build_tools = list(current_java_build_tools)
 
     compose_path = config_dir / "docker-compose.yaml"
     compose_text = ""
     current_ports: List[str] = []
+    new_ports: List[str] = []
     if compose_path.exists():
         compose_text = compose_path.read_text()
         current_ports = ComposeGenerator.detect_ports(compose_text)
-        new_ports = prompt_port_mappings(current_ports)
-    else:
-        new_ports = []
+        if interactive:
+            new_ports = prompt_port_mappings(current_ports)
+        else:
+            new_ports = list(current_ports)
 
     features_changed = set(new_features) != set(current_features) or set(
         new_java_build_tools
     ) != set(current_java_build_tools)
 
-    # Always rewrite devcontainer.json when features/build-tools changed.
     if features_changed:
         add = [f for f in new_features if f not in current_features]
         remove = [f for f in current_features if f not in new_features]
@@ -318,16 +316,37 @@ def update_features(config_dir: Path, repo_name: str, agent_tool: str) -> bool:
             remove=remove,
             java_build_tools=new_java_build_tools,
         )
-        devcontainer_path.write_text(json.dumps(devcontainer, indent=2) + "\n")
+
+    # Migrate the legacy docker-in-docker feature key (pre-podman
+    # harnesses): detect() reports it as "docker", but the stale key
+    # must leave the features dict and the podman packages must be
+    # merged for the rebuilt image to carry the podman engine.
+    legacy_migrated = DevcontainerGenerator.migrate_legacy_dind(
+        devcontainer, new_features
+    )
+
+    # Always re-render the Dockerfile initializer from current code: the
+    # generated Dockerfile content must track the framework, not
+    # harness-creation time (devcontainer.json is rewritten whenever the
+    # serialized content differs — feature changes, legacy migration, or
+    # an initializer drift from an older framework version).
+    initializer = DevcontainerGenerator._build_dockerfile_initializer(
+        agent_tool, new_features, podman_caps
+    )
+    devcontainer["initializeCommand"] = initializer
+    new_dc_text = json.dumps(devcontainer, indent=2) + "\n"
+    dc_changed = new_dc_text != original_dc_text
+    if dc_changed:
+        devcontainer_path.write_text(new_dc_text)
         typer.secho(
             f"Updated {config_dir.name}/devcontainer.json", fg=typer.colors.GREEN
         )
 
     # Always reconcile the compose file to match the declared feature set,
     # even when the user made no selection change. This restores any managed
-    # footprints (e.g. the docker named volume, privileged line, entrypoint)
+    # footprints (e.g. the docker named volume, security block, entrypoint)
     # that may be missing from a stale or hand-edited compose.
-    changed = features_changed
+    changed = features_changed or legacy_migrated or dc_changed
 
     # Reconcile the feature-dependent .env entries (host dotfile mirror
     # paths, managed GRADLE_OPTS line) even when the selection is
@@ -347,6 +366,7 @@ def update_features(config_dir: Path, repo_name: str, agent_tool: str) -> bool:
             port_mappings=new_ports,
             java_build_tools=new_java_build_tools,
             agent_tool=agent_tool,
+            podman_caps=podman_caps,
         )
         if reconciled != compose_text:
             compose_path.write_text(reconciled)

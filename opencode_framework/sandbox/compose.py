@@ -11,8 +11,13 @@ from opencode_framework.agent.registry import (
 )
 from opencode_framework.generators.base import FileGenerator, GenerationContext
 from opencode_framework.generators.templates import (
+    BASE_SECURITY_LINES,
     M2_SETTINGS_MOUNT_LINE,
     NPMRC_MOUNT_LINE,
+    PODMAN_CAPS_GRAPH_ROOT_TARGET,
+    PODMAN_CAPS_SECURITY_LINES,
+    PODMAN_GRAPH_ROOT_TARGET,
+    PODMAN_SECURITY_LINES,
     TemplateHandler,
 )
 
@@ -37,6 +42,7 @@ class ComposeGenerator(FileGenerator):
             port_mappings=ctx.port_mappings,
             java_build_tools=ctx.java_build_tools,
             agent_tool=ctx.agent_tool,
+            podman_caps=ctx.podman_caps,
         )
         compose_path.write_text(compose_content)
 
@@ -77,19 +83,29 @@ class ComposeGenerator(FileGenerator):
         port_mappings: Optional[List[str]] = None,
         java_build_tools: Optional[List[str]] = None,
         agent_tool: str = DEFAULT_TOOL,
+        podman_caps: bool = False,
     ) -> str:
         """Surgically update feature-dependent parts of a compose file.
 
-        Strips the managed feature footprints (privileged line, python/java
-        volume mounts and their top-level volume keys, the docker-init
-        entrypoint, the managed ports block, the host dotfile mirror mounts)
-        and re-injects only those for the requested feature set.  All other
-        lines (environment, custom mounts, security_opt, user-added volumes)
-        are preserved.
+        Strips the managed feature footprints (security block, python/java
+        volume mounts and their top-level volume keys, the entrypoint, the
+        managed ports block, the host dotfile mirror mounts, plus the
+        legacy DinD privileged line and ``/var/lib/docker`` volume) and
+        re-injects only those for the requested feature set.  All other
+        lines (environment, custom mounts, user-added security list
+        entries, user-added volumes) are preserved.
 
         When ``port_mappings`` is ``None`` the ports block is left untouched.
         When it is a list (including empty) the ports block is reconciled to
         exactly that set.
+
+        ``podman_caps`` selects the docker feature's mode: caps mode
+        (rootless outer daemon) mounts the graph root at
+        ``/var/lib/containers`` and injects the caps security block
+        (``SYS_ADMIN``/``NET_ADMIN``); standard mode mounts the pinned
+        vscode graph root and injects the cap-free podman security block.
+        Both modes' managed lines are always stripped, so a mode flip
+        reconciles cleanly in either direction.
 
         Idempotent: applying the same feature set twice yields identical output.
 
@@ -101,6 +117,7 @@ class ComposeGenerator(FileGenerator):
             java_build_tools: Enabled Java build tools (e.g., ["maven"], ["gradle"]).
                 Empty/None mounts no build-tool volumes.
             agent_tool: Agent tool name ("opencode" | "qwen" | "dsh")
+            podman_caps: Caps-mode selector for the docker feature
 
         Returns:
             Updated compose file content
@@ -124,18 +141,52 @@ class ComposeGenerator(FileGenerator):
             f"      - {managed_volume_name('gradle', repo_name, spec.name)}:"
             f"/home/${{REMOTE_USER}}/.gradle"
         )
+        # Pre-wrapper files mounted the graph root under the remote
+        # user's home; kept here so feature rebuilds strip the legacy
+        # line too. The wrapper runs podman as the vscode service
+        # account regardless of REMOTE_USER (see
+        # PODMAN_DOCKERFILE_BLOCK), so the target is now pinned.
+        legacy_docker_mount = (
+            f"      - {managed_volume_name('docker', repo_name, spec.name)}:"
+            f"/home/${{REMOTE_USER}}/.local/share/containers"
+        )
         docker_mount = (
+            f"      - {managed_volume_name('docker', repo_name, spec.name)}:"
+            f"{PODMAN_GRAPH_ROOT_TARGET}"
+        )
+        # Caps-mode graph root (rootless outer daemon): podman runs
+        # rootful, default graph root /var/lib/containers (see
+        # PODMAN_CAPS_DOCKERFILE_BLOCK).
+        caps_docker_mount = (
+            f"      - {managed_volume_name('docker', repo_name, spec.name)}:"
+            f"{PODMAN_CAPS_GRAPH_ROOT_TARGET}"
+        )
+        # Legacy Docker-in-Docker mount (pre-podman harnesses): same
+        # managed volume name, old dockerd graph root target.
+        legacy_dind_mount = (
             f"      - {managed_volume_name('docker', repo_name, spec.name)}:"
             f"/var/lib/docker"
         )
+        m2_settings_mount = M2_SETTINGS_MOUNT_LINE
+        npmrc_mount = NPMRC_MOUNT_LINE
         managed_volume_entries = (
             managed_volume_keys("venv", repo_name, spec.name)
             + managed_volume_keys("m2", repo_name, spec.name)
             + managed_volume_keys("gradle", repo_name, spec.name)
             + managed_volume_keys("docker", repo_name, spec.name)
         )
-        m2_settings_mount = M2_SETTINGS_MOUNT_LINE
-        npmrc_mount = NPMRC_MOUNT_LINE
+        # Security-block lines are managed: the base, podman and caps
+        # variants are all stripped, then the desired variant is
+        # re-injected. ``privileged: true`` is legacy (pre-podman DinD)
+        # and only ever stripped. Block keys (security_opt/cap_add/
+        # devices) are kept when they carry non-managed children (user
+        # additions).
+        security_lines = list(
+            dict.fromkeys(
+                PODMAN_CAPS_SECURITY_LINES + PODMAN_SECURITY_LINES + BASE_SECURITY_LINES
+            )
+        )
+        block_keys = ("    security_opt:", "    cap_add:", "    devices:")
         managed_lines = {
             venv_mount,
             legacy_venv_mount,
@@ -143,21 +194,21 @@ class ComposeGenerator(FileGenerator):
             m2_settings_mount,
             gradle_mount,
             docker_mount,
+            caps_docker_mount,
+            legacy_docker_mount,
+            legacy_dind_mount,
             npmrc_mount,
             f"  {managed_volume_name('venv', repo_name, spec.name)}:",
             f"  {managed_volume_name('m2', repo_name, spec.name)}:",
             f"  {managed_volume_name('gradle', repo_name, spec.name)}:",
             f"  {managed_volume_name('docker', repo_name, spec.name)}:",
             *managed_volume_entries,
+            *security_lines,
             "    privileged: true",
         }
 
         has_docker = "docker" in optional_features
-        desired_entrypoint = (
-            f'["/usr/local/share/docker-init.sh", "{spec.binary}"]'
-            if has_docker
-            else f'["{spec.binary}"]'
-        )
+        desired_entrypoint = f'["{spec.binary}"]'
 
         # Determine which Java build tools are enabled
         tools = java_build_tools or []
@@ -170,15 +221,34 @@ class ComposeGenerator(FileGenerator):
             lines = ComposeGenerator._strip_managed_ports(lines)
 
         # Pass 1: drop managed footprints, rewrite entrypoint value.
+        # Block keys (security_opt/cap_add/devices) survive when they
+        # carry non-managed list children (user additions); otherwise
+        # they are dropped along with their managed children.
         out: List[str] = []
-        for line in lines:
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            if line in block_keys and line in managed_lines:
+                j = i + 1
+                has_custom_child = False
+                while j < len(lines) and lines[j].startswith("      - "):
+                    if lines[j] not in managed_lines:
+                        has_custom_child = True
+                    j += 1
+                if has_custom_child:
+                    out.append(line)
+                    i += 1
+                    continue
             if line in managed_lines:
+                i += 1
                 continue
             match = re.match(r"^(\s*entrypoint:\s*)(.*)$", line)
             if match:
                 out.append(f"{match.group(1)}{desired_entrypoint}")
+                i += 1
                 continue
             out.append(line)
+            i += 1
         lines = out
 
         # Pass 2: drop orphaned empty top-level volumes: header.
@@ -189,9 +259,14 @@ class ComposeGenerator(FileGenerator):
 
         # Pass 3: re-inject footprints for the desired feature set.
         if has_docker:
-            lines = ComposeGenerator._insert_after_line(
-                lines, "    working_dir", "    privileged: true"
+            security_block = list(
+                PODMAN_CAPS_SECURITY_LINES if podman_caps else PODMAN_SECURITY_LINES
             )
+        else:
+            security_block = list(BASE_SECURITY_LINES)
+        lines = ComposeGenerator._insert_after_block(
+            lines, "    working_dir", security_block
+        )
 
         # Injection order must match render_compose_template exactly so a
         # fresh render survives the reconciler unchanged.
@@ -206,7 +281,7 @@ class ComposeGenerator(FileGenerator):
             if has_gradle:
                 mounts.append(gradle_mount)
         if has_docker:
-            mounts.append(docker_mount)
+            mounts.append(caps_docker_mount if podman_caps else docker_mount)
         if mounts:
             lines = ComposeGenerator._insert_before_line(
                 lines, "    entrypoint", mounts

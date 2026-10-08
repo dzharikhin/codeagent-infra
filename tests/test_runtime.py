@@ -9,6 +9,7 @@ import pytest
 from opencode_framework.sandbox.runtime import (
     apply_combined_interpolation,
     build_docker_env,
+    detect_daemon_rootless,
     get_image_id_path,
     load_env_with_overrides,
     load_image_id,
@@ -821,3 +822,101 @@ class TestImageIdHelpers:
     def test_remove_image_id_when_missing(self, tmp_path: Path):
         """Should return False without error when file is already absent."""
         assert remove_image_id(tmp_path) is False
+
+
+class TestDetectDaemonRootless:
+    """Tests for the outer-daemon rootless probe."""
+
+    @staticmethod
+    def _fake_run(returncode: int = 0, stdout: str = ""):
+        def run(cmd, **kw):
+            TestDetectDaemonRootless.last_cmd = list(cmd)
+            import subprocess
+
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=returncode, stdout=stdout, stderr=""
+            )
+
+        return run
+
+    last_cmd: List[str] = []
+
+    def _patch(self, monkeypatch, **kwargs):
+        import opencode_framework.sandbox.runtime as runtime_module
+
+        monkeypatch.setattr(runtime_module.subprocess, "run", self._fake_run(**kwargs))
+
+    def test_rootless_security_options_true(self, monkeypatch):
+        """A Moby-style SecurityOptions list ("name=rootless") returns True."""
+        self._patch(
+            monkeypatch, stdout='["name=seccomp,profile=builtin", "name=rootless"]'
+        )
+        assert detect_daemon_rootless({}) is True
+
+    def test_rootless_bare_entry_true(self, monkeypatch):
+        """A bare 'rootless' entry (podman-compatible CLIs) returns True."""
+        self._patch(monkeypatch, stdout='["rootless", "seccomp"]')
+        assert detect_daemon_rootless({}) is True
+
+    def test_rootful_security_options_false(self, monkeypatch):
+        """A real rootful daemon's SecurityOptions (no rootless entry)
+        returns False — captured from a live rootful Moby daemon."""
+        self._patch(
+            monkeypatch, stdout='["name=seccomp,profile=builtin", "name=cgroupns"]'
+        )
+        assert detect_daemon_rootless({}) is False
+
+    def test_non_string_entries_skipped(self, monkeypatch):
+        """Non-string SecurityOptions entries are skipped, not fatal."""
+        self._patch(monkeypatch, stdout='[123, null, "name=rootless"]')
+        assert detect_daemon_rootless({}) is True
+
+    def test_nonzero_exit_returns_none(self, monkeypatch):
+        """A failing docker info probe returns None (unknown)."""
+        self._patch(monkeypatch, returncode=1, stdout="")
+        assert detect_daemon_rootless({}) is None
+
+    def test_bad_json_returns_none(self, monkeypatch):
+        """Unparseable stdout returns None."""
+        self._patch(monkeypatch, stdout="not json")
+        assert detect_daemon_rootless({}) is None
+
+    def test_non_list_json_returns_none(self, monkeypatch):
+        """A JSON value that is not a list returns None."""
+        self._patch(monkeypatch, stdout='{"SecurityOptions": ["rootless"]}')
+        assert detect_daemon_rootless({}) is None
+
+    def test_timeout_returns_none(self, monkeypatch):
+        """A timed-out probe returns None."""
+        import subprocess
+
+        import opencode_framework.sandbox.runtime as runtime_module
+
+        def run(cmd, **kw):
+            raise subprocess.TimeoutExpired(cmd, timeout=60)
+
+        monkeypatch.setattr(runtime_module.subprocess, "run", run)
+        assert detect_daemon_rootless({}) is None
+
+    def test_oserror_returns_none(self, monkeypatch):
+        """A missing docker binary (OSError) returns None."""
+        import opencode_framework.sandbox.runtime as runtime_module
+
+        def run(cmd, **kw):
+            raise OSError("docker not found")
+
+        monkeypatch.setattr(runtime_module.subprocess, "run", run)
+        assert detect_daemon_rootless({}) is None
+
+    def test_docker_context_honored(self, monkeypatch):
+        """DOCKER_CONTEXT in the env adds --context to the probe command."""
+        self._patch(monkeypatch, stdout='["rootless"]')
+        assert detect_daemon_rootless({"DOCKER_CONTEXT": "my-ctx"}) is True
+        assert "--context" in self.last_cmd
+        assert self.last_cmd[self.last_cmd.index("--context") + 1] == "my-ctx"
+
+    def test_no_docker_context_omits_flag(self, monkeypatch):
+        """Without DOCKER_CONTEXT no --context flag is passed."""
+        self._patch(monkeypatch, stdout='["rootless"]')
+        assert detect_daemon_rootless({"DOCKER_CONTEXT": "  "}) is True
+        assert "--context" not in self.last_cmd

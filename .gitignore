@@ -2,3 +2,5 @@
 .idea/
 .venv/
 .opencode/
+__pycache__/
+/Dockerfile

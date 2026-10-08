@@ -13,7 +13,6 @@ from opencode_framework.config import (
 from opencode_framework.git_ops import get_repo_root, is_inside_git_tree
 from opencode_framework.preflight import (
     PreflightResult,
-    check_docker_rootless_context,
     check_required_tools,
     config_directory_exists,
     run_preflight_checks,
@@ -33,15 +32,6 @@ class TestCheckRequiredTools:
         result = check_required_tools()
         for tool in result:
             assert isinstance(tool, str)
-
-
-class TestCheckDockerRootlessContext:
-    """Tests for Docker rootless context checking."""
-
-    def test_returns_bool(self):
-        """Should return a boolean."""
-        result = check_docker_rootless_context()
-        assert isinstance(result, bool)
 
 
 class TestGitOperations:

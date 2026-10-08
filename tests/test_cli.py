@@ -360,7 +360,7 @@ class TestReconfigure:
 
         calls = {}
 
-        def fake_update(config_dir, repo_name, agent_tool):
+        def fake_update(config_dir, repo_name, agent_tool, podman_caps=False):
             calls["args"] = (config_dir, repo_name, agent_tool)
             return False
 
@@ -480,7 +480,7 @@ class TestReconfigure:
 
         calls = {}
 
-        def fake_update(config_dir, repo_name, agent_tool):
+        def fake_update(config_dir, repo_name, agent_tool, podman_caps=False):
             calls["args"] = (config_dir, repo_name, agent_tool)
             return False
 
@@ -2744,3 +2744,332 @@ class TestLaunchRepoRootComputation:
         assert "OCF_LOCAL_REPO_ROOT mismatch" in result.output
         assert "launch -e OCF_LOCAL_REPO_ROOT" in result.output
         assert "OCF_LOCAL_REPO_ROOT" not in env
+
+
+class TestInitCapsModeDetection:
+    """Tests for the caps-mode detection wiring in ``ocframework init``."""
+
+    def _patch_init_deps(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+        detected,
+        features: list,
+    ):
+        import importlib
+
+        app_module = importlib.import_module("opencode_framework.cli.app")
+        from opencode_framework.git_ops import WorktreeResult
+        from opencode_framework.preflight import PreflightResult
+        from opencode_framework.wizard import WizardResult
+
+        generated: dict = {}
+        worktree_calls: list = []
+
+        def fake_generate(self, repo_root, wizard_result, podman_caps=False):
+            generated["podman_caps"] = podman_caps
+            config_dir = repo_root / ".opencode"
+            config_dir.mkdir(exist_ok=True)
+            # Generation writes .env fresh from the template
+            # (REMOTE_USER=root) — the surgical write must follow it.
+            (config_dir / ".env").write_text("REMOTE_USER=root\n")
+            return None
+
+        monkeypatch.setattr(
+            app_module,
+            "run_preflight_checks",
+            lambda cwd, force=False, agent_tool=None: PreflightResult(success=True),
+        )
+        monkeypatch.setattr(
+            app_module,
+            "run_wizard",
+            lambda repo_path, tool: WizardResult(
+                branch_name="codeagent-test",
+                optional_features=list(features),
+            ),
+        )
+        monkeypatch.setattr(
+            app_module,
+            "setup_config_worktree",
+            lambda **kw: (
+                worktree_calls.append(kw)
+                or WorktreeResult(success=True, path=kw.get("config_dir"))
+            ),
+        )
+        monkeypatch.setattr(
+            app_module.GenerationOrchestrator, "generate", fake_generate
+        )
+        monkeypatch.setattr(app_module, "detect_daemon_rootless", lambda env: detected)
+        monkeypatch.chdir(tmp_path)
+        return app_module, generated, worktree_calls
+
+    def _invoke(self, app_module, args: list):
+        from typer.testing import CliRunner
+
+        return CliRunner().invoke(app_module.app, args)
+
+    def test_rootless_daemon_derives_root_and_caps(self, tmp_path, monkeypatch):
+        """Rootless detection prints the caps status line, generates with
+        podman_caps=True and keeps REMOTE_USER=root."""
+        app_module, generated, _ = self._patch_init_deps(
+            monkeypatch, tmp_path, True, ["docker"]
+        )
+
+        result = self._invoke(app_module, ["init", "--tool", "opencode"])
+
+        assert result.exit_code == 0
+        assert (
+            "Docker daemon: rootless → caps mode (SYS_ADMIN, NET_ADMIN), "
+            "REMOTE_USER=root" in result.output
+        )
+        assert generated["podman_caps"] is True
+        env_text = (tmp_path / ".opencode" / ".env").read_text()
+        assert "REMOTE_USER=root" in env_text
+
+    def test_rootful_daemon_derives_vscode_standard(self, tmp_path, monkeypatch):
+        """Rootful detection prints the standard status line, generates
+        with podman_caps=False and rewrites REMOTE_USER to vscode after
+        generation."""
+        app_module, generated, _ = self._patch_init_deps(
+            monkeypatch, tmp_path, False, ["docker"]
+        )
+
+        result = self._invoke(app_module, ["init", "--tool", "opencode"])
+
+        assert result.exit_code == 0
+        assert (
+            "Docker daemon: rootful → standard mode (no caps), "
+            "REMOTE_USER=vscode" in result.output
+        )
+        assert generated["podman_caps"] is False
+        env_text = (tmp_path / ".opencode" / ".env").read_text()
+        assert "REMOTE_USER=vscode" in env_text
+        assert "REMOTE_USER=root" not in env_text
+        assert "Updated .opencode/.env (REMOTE_USER=vscode)" in result.output
+
+    def test_detection_failure_with_docker_feature_hard_error(
+        self, tmp_path, monkeypatch
+    ):
+        """With the docker feature an undetectable daemon aborts init
+        before any worktree/generation state is created."""
+        app_module, generated, worktree_calls = self._patch_init_deps(
+            monkeypatch, tmp_path, None, ["docker"]
+        )
+
+        result = self._invoke(app_module, ["init", "--tool", "opencode"])
+
+        assert result.exit_code == 1
+        assert "could not detect whether the Docker daemon runs" in result.output
+        assert "docker context ls" in result.output
+        assert worktree_calls == []
+        assert generated == {}
+
+    def test_detection_failure_without_docker_feature_warns(
+        self, tmp_path, monkeypatch
+    ):
+        """Without the docker feature a detection failure only warns and
+        keeps the REMOTE_USER=root template default (no .env write)."""
+        app_module, generated, _ = self._patch_init_deps(
+            monkeypatch, tmp_path, None, []
+        )
+
+        result = self._invoke(app_module, ["init", "--tool", "opencode"])
+
+        assert result.exit_code == 0
+        assert "Warning: could not detect the Docker daemon mode" in result.output
+        assert generated["podman_caps"] is False
+        env_text = (tmp_path / ".opencode" / ".env").read_text()
+        assert "REMOTE_USER=root" in env_text
+        assert "Updated .opencode/.env" not in result.output
+
+
+class TestLaunchCapsModeValidation:
+    """Tests for launch-time caps-mode validation of docker harnesses."""
+
+    def _compose(self, repo_name: str, caps: bool) -> str:
+        """Minimal docker-feature compose with the managed mount marker.
+
+        ``caps=True`` renders the caps security block and the
+        /var/lib/containers graph root; ``False`` renders the standard
+        cap-free block and the pinned vscode graph root.
+        """
+        if caps:
+            security = (
+                "    security_opt:\n"
+                "      - apparmor=unconfined\n"
+                "      - seccomp=unconfined\n"
+                "    cap_add:\n"
+                "      - SYS_ADMIN\n"
+                "      - NET_ADMIN\n"
+            )
+            target = "/var/lib/containers"
+        else:
+            security = (
+                "    security_opt:\n"
+                "      - apparmor=unconfined\n"
+                "      - seccomp=unconfined\n"
+            )
+            target = "/home/vscode/.local/share/containers"
+        return (
+            "services:\n"
+            "  opencode:\n"
+            "    container_name: ocf_repo\n"
+            '    entrypoint: ["opencode"]\n'
+            "    working_dir: /workspace\n" + security + "    volumes:\n"
+            f"      - docker-{repo_name}-opencode:{target}\n"
+        )
+
+    def _setup_repo(self, tmp_path: Path, compose_text: str) -> Path:
+        config = tmp_path / ".opencode"
+        config.mkdir(exist_ok=True)
+        (config / "docker-compose.yaml").write_text(compose_text)
+        (config / ".env").write_text("REMOTE_USER=root\nOCF_AGENT_TOOL=opencode\n")
+        return config
+
+    def _patch_launch_deps(self, monkeypatch, tmp_path: Path, final_env, detected):
+        import importlib
+
+        app_module = importlib.import_module("opencode_framework.cli.app")
+
+        def mock_run(*args, **kw):
+            cmd = list(args[0]) if args else args[1].get("args", [])
+            result = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            if cmd[:2] == ["docker", "inspect"] and "--format" in cmd:
+                result.stdout = ""
+            return result
+
+        monkeypatch.setattr(
+            app_module,
+            "validate_runtime_context",
+            lambda cwd, config_dirname, repo_root=None: (True, ""),
+        )
+        monkeypatch.setattr(app_module, "get_repo_root", lambda cwd: tmp_path.resolve())
+        monkeypatch.setattr(
+            app_module,
+            "load_env_with_overrides",
+            lambda **kw: dict(final_env),
+        )
+        monkeypatch.setattr(app_module, "build_docker_env", lambda env, ctx: {})
+        monkeypatch.setattr(app_module, "load_image_id", lambda d: "sha256:cached")
+        monkeypatch.setattr(
+            app_module, "_inspect_image_id", lambda ref, env: "sha256:ok"
+        )
+        monkeypatch.setattr(app_module, "_build_image", lambda *a, **kw: "sha256:fake")
+        monkeypatch.setattr(app_module, "save_image_id", lambda *a, **kw: None)
+        monkeypatch.setattr(app_module.subprocess, "run", mock_run)
+        monkeypatch.setattr(app_module, "detect_daemon_rootless", lambda env: detected)
+        monkeypatch.chdir(tmp_path)
+        return app_module
+
+    def _invoke(self, app_module, args: list):
+        from typer.testing import CliRunner
+
+        return CliRunner().invoke(app_module.app, args)
+
+    def _final_env(self, remote_user: str) -> dict:
+        return {"OCF_AGENT_TOOL": "opencode", "REMOTE_USER": remote_user}
+
+    def test_rootful_daemon_caps_harness_errors(self, tmp_path, monkeypatch):
+        """Caps harness on a rootful daemon: both REMOTE_USER and the
+        security block mismatch → exit 1 with two remediations."""
+        repo_name = tmp_path.name
+        self._setup_repo(tmp_path, self._compose(repo_name, caps=True))
+        app_module = self._patch_launch_deps(
+            monkeypatch, tmp_path, self._final_env("root"), False
+        )
+
+        result = self._invoke(app_module, ["launch"])
+
+        assert result.exit_code == 1
+        assert "does not match the Docker daemon mode" in result.output
+        assert "harness has 'root'" in result.output
+        assert "expects 'vscode'" in result.output
+        assert "has SYS_ADMIN caps" in result.output
+        assert "expects no caps" in result.output
+        assert "docker context use" in result.output
+        assert "ocframework reconfigure" in result.output
+
+    def test_rootless_daemon_standard_harness_errors(self, tmp_path, monkeypatch):
+        """Standard harness (REMOTE_USER=vscode) on a rootless daemon:
+        both sides mismatch → exit 1."""
+        repo_name = tmp_path.name
+        self._setup_repo(tmp_path, self._compose(repo_name, caps=False))
+        app_module = self._patch_launch_deps(
+            monkeypatch, tmp_path, self._final_env("vscode"), True
+        )
+
+        result = self._invoke(app_module, ["launch"])
+
+        assert result.exit_code == 1
+        assert "does not match the Docker daemon mode" in result.output
+        assert "expects 'root'" in result.output
+        assert "expects caps" in result.output
+
+    def test_stale_harness_on_rootless_daemon_errors(self, tmp_path, monkeypatch):
+        """A pre-caps harness (REMOTE_USER=root, no caps lines) on a
+        rootless daemon fails on the security-block check alone."""
+        repo_name = tmp_path.name
+        self._setup_repo(tmp_path, self._compose(repo_name, caps=False))
+        app_module = self._patch_launch_deps(
+            monkeypatch, tmp_path, self._final_env("root"), True
+        )
+
+        result = self._invoke(app_module, ["launch"])
+
+        assert result.exit_code == 1
+        assert "does not match the Docker daemon mode" in result.output
+        # REMOTE_USER matches (root == root); only the security block
+        # mismatch is reported.
+        problems = result.output.split("does not match the Docker daemon mode:", 1)[
+            1
+        ].split("Remediation", 1)[0]
+        assert "REMOTE_USER:" not in problems
+        assert "has no caps" in problems
+        assert "expects caps" in problems
+
+    def test_fail_open_on_detection_failure(self, tmp_path, monkeypatch):
+        """An undetectable daemon at launch only warns and continues."""
+        repo_name = tmp_path.name
+        self._setup_repo(tmp_path, self._compose(repo_name, caps=True))
+        app_module = self._patch_launch_deps(
+            monkeypatch, tmp_path, self._final_env("root"), None
+        )
+
+        result = self._invoke(app_module, ["launch"])
+
+        assert result.exit_code == 0
+        assert "skipping caps-mode validation" in result.output
+
+    def test_non_docker_harness_skips_validation(self, tmp_path, monkeypatch):
+        """A harness without the docker mount marker never probes the
+        daemon — even a REMOTE_USER/daemon contradiction is ignored."""
+        config = tmp_path / ".opencode"
+        config.mkdir(exist_ok=True)
+        (config / "docker-compose.yaml").write_text(
+            "services:\n"
+            "  opencode:\n"
+            "    container_name: ocf_repo\n"
+            '    entrypoint: ["opencode"]\n'
+        )
+        (config / ".env").write_text("REMOTE_USER=root\nOCF_AGENT_TOOL=opencode\n")
+        app_module = self._patch_launch_deps(
+            monkeypatch, tmp_path, self._final_env("root"), False
+        )
+
+        result = self._invoke(app_module, ["launch"])
+
+        assert result.exit_code == 0
+        assert "does not match the Docker daemon mode" not in result.output
+
+    def test_matching_caps_harness_passes(self, tmp_path, monkeypatch):
+        """A caps harness on a rootless daemon launches normally."""
+        repo_name = tmp_path.name
+        self._setup_repo(tmp_path, self._compose(repo_name, caps=True))
+        app_module = self._patch_launch_deps(
+            monkeypatch, tmp_path, self._final_env("root"), True
+        )
+
+        result = self._invoke(app_module, ["launch"])
+
+        assert result.exit_code == 0
+        assert "does not match the Docker daemon mode" not in result.output

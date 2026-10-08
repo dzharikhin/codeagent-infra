@@ -21,6 +21,7 @@ class GenerationContext:
     port_mappings: List[str] = field(default_factory=list)
     java_build_tools: List[str] = field(default_factory=list)
     agent_tool: str = DEFAULT_TOOL
+    podman_caps: bool = False
 
 
 class FileGenerator(ABC):

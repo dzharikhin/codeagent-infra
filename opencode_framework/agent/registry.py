@@ -362,8 +362,8 @@ def managed_volume_name(prefix: str, repo_name: str, tool: str) -> str:
     """Compose managed volume name, tool-suffixed.
 
     Each tool gets its own volumes so two agents can run concurrently
-    on the same repo without sharing mutable state (docker-in-docker
-    in particular must never share a /var/lib/docker volume).
+    on the same repo without sharing mutable state (e.g. the podman
+    graph root must never be shared between concurrent containers).
     """
     return f"{prefix}-{repo_name}-{tool}"
 

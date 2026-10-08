@@ -262,7 +262,7 @@ poetry run pytest            # Run tests
 
 - `ocframework init [--tool opencode|qwen|dsh]` - Initialize framework in a Git repository
 - `ocframework launch [--tool opencode|qwen|dsh] [--acp <postfix>]` - Launch container with the configured agent (`--acp <postfix>`: ACP stdio JSON-RPC mode for editors; supported for opencode and qwen. The postfix is required and appended to the container name; any existing container with that name is removed first — reuse a postfix to replace the previous session. A watchdog thread (`sandbox/watchdog.py`) polls the run container once it is observed running and terminates a hung docker client when the container is confirmed stopped/removed externally, so launch exits 137 instead of hanging). When the cached image reference is missing (e.g. pruned by a Docker cleanup), launch rebuilds the image and updates the cache automatically; `launch --force` additionally deletes the cached image ID and removes any existing container
-- `ocframework reconfigure [--tool opencode|qwen|dsh]` - Interactively reconfigure an existing harness (feature/port prompts, skipped non-TTY), reconcile the `.env` feature entries (host mirror paths, `GRADLE_OPTS`), rebuild the image, update the cache, and best-effort remove the tool's existing container; never starts containers
+- `ocframework reconfigure [--tool opencode|qwen|dsh]` - Reconfigure an existing harness: feature/port prompts (interactive TTY only — non-TTY runs skip the prompts and keep the detected selection, but still reconcile), refresh the Dockerfile-generating `initializeCommand` from current framework code (migrating legacy feature keys such as `docker-in-docker:2`), reconcile the `.env` feature entries (host mirror paths, `GRADLE_OPTS`), rebuild the image, update the cache, and best-effort remove the tool's existing container; never starts containers
 - `ocframework --version` - Print version and configuration status
 
 All commands require a valid framework repository (installed via `pipx install -e <path>`).
@@ -329,6 +329,14 @@ Rule: variables shared across parts/tools may be unprefixed; part- or tool-speci
 | agent defaults via env | `OCF_MAIN_MODEL`, `OCF_BUILD_MODEL`, `OCF_SMALL_MODEL`, `OCF_PLAN_MAX_BEFORE_RESPONSE_STEPS`, `OCF_BUILD_MAX_BEFORE_RESPONSE_STEPS` |
 | tool-native (agent's own contract, never OCF-prefixed) | `OPENCODE_*`, `QWEN_*`, `DSH_*`, `DEEPSEEK_API_KEY`, `DEEPSEEK_SEARCH_BASE_URL` |
 | feature defaults (build-tool's own contract, framework-managed) | `GRADLE_OPTS` (pinned to `-Dorg.gradle.daemon=false` in `.env` whenever the gradle feature is selected) |
+
+`REMOTE_USER` is derived, not configured: `init`/`reconfigure` set it from
+the outer daemon mode (rootless → `root`, rootful → `vscode` — the
+docker-feature caps-mode contract; see the Docker Feature section). No
+separate `OCF_PODMAN_CAPS`-style variable exists because the mode is fully
+encoded in `REMOTE_USER` plus the compose security block, which `launch`
+validates against the live daemon; adding a second knob would only create a
+way for the two to disagree.
 
 `OCF_NPMRC_PATH` / `OCF_M2_SETTINGS_PATH` hold the absolute host paths of
 `~/.npmrc` and `~/.m2/settings.xml` when those files exist (npmrc for every
@@ -399,12 +407,12 @@ but a hard launch error after moving it — re-init to regenerate.
   Managed volume keys carry a `name:` attribute appending
   `${OCF_SESSION_SUFFIX:-}` (`managed_volume_keys`): ACP launches set
   `OCF_SESSION_SUFFIX=_<postfix>` (e.g. `docker-myrepo-opencode_zed`), so
-  every session owns its volumes — concurrent dockerd instances must never
-  share a `/var/lib/docker` volume (boltdb lock contention); plain/server
-  launches leave the suffix empty and keep the bare shared names. Stale
-  per-postfix volumes accumulate and are removed manually
-  (`docker volume rm`). Compose files generated before this change keep
-  shared volumes until re-init (`ocframework init --force --tool <tool>`)
+  every session owns its volumes — concurrent sessions must never share
+  mutable volumes such as the podman graph root; plain/server launches leave
+  the suffix empty and keep the bare shared names. Stale per-postfix volumes
+  accumulate and are removed manually (`docker volume rm`). Compose files
+  generated before this change keep shared volumes until re-init
+  (`ocframework init --force --tool <tool>`)
 - Built images: `ocf-<repo>-<tool>:latest` (e.g. `ocf-myrepo-dsh:latest`),
   applied via `devcontainer build --image-name` after the `devcontainer up`
   step; persisted in the tool's `<config_dir>/runtime_data/.image_id` and
@@ -442,16 +450,166 @@ dsh` after a fresh framework clone). `DSH_HOME` is pinned to
 profiles/sessions persist. Web UI saves to settings/credentials fail against
 the read-only mounts by design — edit on the host (settings hot-reload).
 
-### Docker-in-Docker Support
+The docker feature's elevated surface is mode-scoped (see the Docker Feature
+section): standard mode grants no capabilities at all; caps mode grants
+exactly `SYS_ADMIN` + `NET_ADMIN`. For comparison, `privileged: true` grants
+all ~41 capabilities plus the full host device tree and module loading —
+caps mode is strictly narrower, and both caps remain confined by the outer
+rootlesskit user namespace: they apply to container root, which on a rootless
+daemon maps to the unprivileged host developer, never to host root.
 
-When the `docker` optional feature is selected during `ocframework init`:
+### Docker Feature (podman engine, two modes)
 
-- The generated `docker-compose.yaml` includes `privileged: true` on the service and an entrypoint of `["/usr/local/share/docker-init.sh", "<agent-binary>"]`
-- The container image includes `/etc/docker/daemon.json` with `{"firewall-backend": "nftables"}` (baked in unconditionally — harmless without Docker installed)
-- The `docker-in-docker:2` devcontainer feature installs Docker CE and `/usr/local/share/docker-init.sh`
-- Docker daemon **starts automatically** on container launch. The container entrypoint runs `/usr/local/share/docker-init.sh` before the agent binary, which starts dockerd with readiness checks.
-- Docker autodetects the storage driver: prefers `overlay2` where supported, falls back to `vfs` in sandboxed environments without overlayfs support.
-- A named volume `docker-<repo>-<tool>` is mounted at `/var/lib/docker` to persist Docker data across container restarts. If you upgrade the daemon to a version incompatible with this volume, you may need to run `docker volume rm docker-<repo>-<tool>` to recreate it.
+The `docker` optional feature (wizard key `docker`) provides a Docker-compatible
+CLI inside the sandbox; the engine is podman, in one of two modes selected by
+the outer Docker daemon at `init`/`reconfigure` time
+(`detect_daemon_rootless` in `sandbox/runtime.py` probes
+`docker info --format '{{json .SecurityOptions}}'`, honoring
+`--docker-context`):
+
+| Outer daemon | Mode | Agent (`REMOTE_USER`) | Inner engine | `cap_add` | Graph-root volume target |
+|---|---|---|---|---|---|
+| rootless | caps mode | `root` | rootful podman | `SYS_ADMIN`, `NET_ADMIN` | `/var/lib/containers` |
+| rootful | standard mode | `vscode` | rootless podman | — | `/home/vscode/.local/share/containers` |
+
+The invariant driving the split: the container agent uid must map to the host
+developer uid. On rootless outer daemons only container root maps to the host
+developer, so the agent must run as root — and the inner engine follows it
+into rootful mode (rootless podman is structurally broken at userns depth 1
+under rootlesskit nesting: the multi-line uid_map needs setuid `newuidmap`,
+which is EPERM there). On rootful outer daemons container `vscode` (uid 1000)
+maps to the host developer and rootless podman needs no capabilities.
+
+Caps mode is strictly narrower than `privileged: true` (2 caps vs 41, no host
+device tree, no module loading); both caps stay scoped by the rootlesskit
+userns — never host root. Probe-derived support: CapEff
+`0xa80425fb → 0xa82435fb`; `CAP_SYS_ADMIN` lets crun mount /proc at userns
+depth 1 (depth-2 fresh unshare is kernel-denied), `CAP_NET_ADMIN` sets up
+bridge networking — the remaining blocker was the read-only /proc/sys
+inherited from the outer rootless daemon's proc mount, fixed by a tolerant
+`mount -o remount,rw /proc/sys` in the wrapper's root branch.
+
+Detection and enforcement contract:
+
+- `init`/`reconfigure` detect the daemon mode after feature selection and
+  print e.g. `Docker daemon: rootless → caps mode (SYS_ADMIN, NET_ADMIN),
+  REMOTE_USER=root`; `REMOTE_USER` is derived (rootless → `root`, rootful →
+  `vscode`) and surgically written to `.env` after generation (init) /
+  unconditionally enforced (reconfigure).
+- A detection failure with the docker feature selected is a hard error at
+  `init`/`reconfigure` (a harness cannot be generated against an unknown
+  daemon; remediation: check `docker context ls`, pass `--docker-context`).
+  Without the docker feature it only warns and keeps the `REMOTE_USER=root`
+  template default. At `launch` it is fail-open (YELLOW warning, validation
+  skipped) so transient daemon blips never block work.
+- `launch` validates docker-feature harnesses (marker: the managed
+  `docker-<repo>-<tool>` volume mount line) against the live daemon mode —
+  both the harness's `REMOTE_USER` and its compose security block must
+  match. A mismatch is a hard error naming both sides, with two remediations:
+  point launch at a matching daemon (`docker context use <context>` or
+  `ocframework launch --docker-context <context>`) or regenerate the harness
+  for this daemon with `ocframework reconfigure`.
+
+Packages merged into the base `apt-packages` feature: `podman`,
+`podman-docker` (Docker CLI shim), `podman-compose`, `fuse-overlayfs`,
+`fuse3`, `uidmap`, `slirp4netns`, `passt` — the distro-paired set from Ubuntu
+24.04 (podman 4.9 + podman-compose 1.0.6), all from apt with no pip steps.
+
+Standard mode (rootful outer daemon):
+
+- The generated `docker-compose.yaml` adds `security_opt:
+  [apparmor=unconfined, seccomp=unconfined]` (rootless podman's crun requires
+  syscalls absent from Docker's default seccomp profile) and `devices:
+  [/dev/fuse:/dev/fuse]` for fuse-overlayfs. No `privileged: true`, no
+  `cap_add`.
+- The Dockerfile bakes a minimal `/etc/containers/containers.conf`
+  (`[containers] cgroups = "disabled"` plus `[engine] cgroup_manager =
+  "cgroupfs"`, `events_logger = "file"`): the sandbox mounts /sys/fs/cgroup
+  read-only, so cgroup creation must be disabled outright — the cgroupfs
+  fallback alone still tries to create `/libpod_parent` and crun dies with
+  `cgroup.subtree_control: Read-only file system` (validated manually:
+  `docker run hello-world` fails without the key, works with
+  `--cgroups=disabled`). `cgroups` is a `[containers]`-table key — placed
+  under `[engine]`, podman never applies it. The storage driver stays
+  auto-detected (overlay / fuse-overlayfs).
+- The Dockerfile bakes the `/etc/containers/nodocker` sentinel (silences the
+  "Emulate Docker CLI" shim notice) and a `/usr/local/bin/docker` wrapper
+  shadowing podman-docker's `/usr/bin/docker`: podman has no "run as another
+  user" override (its rootful/rootless path is decided by euid), so a root
+  agent is dropped to the pre-existing `vscode` service account via
+  `runuser`, with the four XDG base-directory vars unset in between (the
+  agent env pins them to `/home/${REMOTE_USER}/...`, which would redirect the
+  rootless graph root away from the pinned volume; unset, podman falls back
+  to HOME-based defaults under `/home/vscode`). Non-root agents exec podman
+  directly. Subuid/subgid ranges are not written: stock Ubuntu 24.04
+  `login.defs` (`SUB_UID_MIN=100000`, `SUB_UID_COUNT=65536`) makes `useradd`
+  auto-allocate `100000:65536` at user creation, which rootless podman picks
+  up; base images deviating from that would need the entries added back.
+- The graph-root volume target is pinned at `/home/vscode/.local/share/containers`
+  (independent of `REMOTE_USER`, because the wrapper always runs podman with
+  `HOME=/home/vscode`); the directory is baked vscode-owned into the image so
+  a fresh named volume's copy-up inherits that ownership (an empty root-owned
+  volume would leave rootless podman unable to write its graph root).
+
+Caps mode (rootless outer daemon):
+
+- The compose security block is the standard block plus
+  `cap_add: [SYS_ADMIN, NET_ADMIN]`; the graph-root volume target is
+  `/var/lib/containers` (rootful podman's default — root writes it freely, no
+  ownership bake).
+- The Dockerfile bakes `/etc/containers/containers.conf` with the rootful
+  fallbacks (cgroupfs manager, file events logger — none auto-detectable
+  without systemd/journald) and `[containers] cgroups = "disabled"` (the
+  sandbox's read-only /sys/fs/cgroup, as in standard mode; the key must sit
+  in the `[containers]` table — under `[engine]` podman silently ignores it
+  and every `docker run` fails with `crun: ... cgroup.subtree_control:
+  Read-only file system`, observed in the manual hello-world validation).
+  The storage driver stays auto-detected and lands on overlay — `[storage]`
+  is not a containers.conf table (driver config lives in storage.conf), so
+  an earlier vfs pin sat silently ignored while rootful podman mounted
+  overlay anyway (docker info inside the sandbox showed `graphDriverName:
+  overlay` with the pin present); the pin is dropped. Also baked: the
+  nodocker sentinel and a wrapper whose root branch execs podman directly
+  after the tolerant /proc/sys remount (no `runuser`, no vscode delegation,
+  no XDG unsetting); non-root agents get plain rootless podman as a defensive
+  fallback.
+
+Both modes:
+
+- `BUILDAH_ISOLATION=chroot` is set as a container ENV so `docker build` (→
+  buildah) uses chroot isolation inside the already-isolated sandbox (the
+  default `oci` isolation spawns a nested OCI runtime that fails under the
+  sandbox's seccomp profile).
+- `docker compose` routes through apt-installed `podman-compose` 1.0.6
+  (auto-detected on PATH; it shells out to the podman CLI — compose v2 would
+  require `podman system service`, unavailable without systemd). Note 1.0.6
+  limitations: no `--wait`, no `COMPOSE_PROFILES`, no healthcheck-condition
+  `depends_on` gating.
+- The compose reconciler strips both modes' managed lines always, so a mode
+  flip reconciles cleanly in either direction (`ocframework reconfigure`
+  after switching daemon contexts).
+- Mode-flip caveat: after the outer daemon migrates, the persisted graph DB
+  was written by the other mode's driver — podman fails with
+  `database graph driver mismatch`. Remove the stale volume once
+  (`docker volume rm docker-<repo>-<tool>`) and relaunch.
+- Legacy `docker-in-docker:2` harnesses are detected and migrated to the
+  `docker` feature by `detect()` and the reconciler (the managed
+  `docker-<repo>-<tool>` volume is re-targeted from `/var/lib/docker` to the
+  podman graph root); `reconfigure` also strips the legacy feature key,
+  merges the podman apt packages, and re-renders the Dockerfile
+  initializer, so the rebuilt image carries the podman engine. Re-init
+  (`ocframework init --force --tool <tool>`) remains the way to a fully
+  modernized harness.
+- `reconfigure` never freezes build-time state: the Dockerfile-generating
+  `initializeCommand` in `devcontainer.json` is re-rendered from current
+  framework code on every run, so image-level fixes propagate without a
+  re-init; `devcontainer.json` is rewritten whenever its serialized content
+  differs (feature changes, legacy migration, initializer drift).
+
+Limitation: standard mode (rootful outer daemon) assumes the host developer's
+uid is 1000 (it maps to container `vscode`); on hosts with a different uid
+the standard-mode bind-mount ownership match breaks — prefer a rootless outer
+daemon there, where container root maps to any host uid.
 
 ### JVM Build Tools Support
 
