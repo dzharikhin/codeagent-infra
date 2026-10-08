@@ -277,10 +277,11 @@ def update_features(
     non-interactive runs still reconcile), and surgically updates
     devcontainer.json and
     docker-compose.yaml when anything changes. The Dockerfile-generating
-    ``initializeCommand`` is always re-rendered from current framework
-    code so image-level fixes (podman engine setup, containers.conf
-    changes) propagate through ``reconfigure`` instead of freezing at
-    harness-creation time; legacy feature keys (docker-in-docker:2) are
+        ``initializeCommand`` is always re-rendered from current framework
+        code so image-level fixes (podman engine setup, containers.conf
+        changes, the managed podman package list) propagate through
+        ``reconfigure`` instead of freezing at
+        harness-creation time; legacy feature keys (docker-in-docker:2) are
     migrated to the podman representation. The .env is always
     reconciled (host dotfile mirror paths, managed GRADLE_OPTS line) to
     match the final feature selection and current host file state.
@@ -351,6 +352,16 @@ def update_features(
             remove=remove,
             java_build_tools=new_java_build_tools,
         )
+
+    # Refresh the managed podman package list whenever the docker feature
+    # stays active, even with an unchanged selection: package-level image
+    # fixes (e.g. nftables for netavark) must propagate via reconfigure
+    # instead of freezing at harness-creation time. The merge is
+    # idempotent and preserves unrelated/custom packages.
+    if "docker" in new_features:
+        raw_features = devcontainer.setdefault("features", {})
+        if isinstance(raw_features, dict):
+            DevcontainerGenerator._add_one_feature(raw_features, "docker")
 
     # Migrate the legacy docker-in-docker feature key (pre-podman
     # harnesses): detect() reports it as "docker", but the stale key

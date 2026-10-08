@@ -22,9 +22,14 @@ class DevcontainerGenerator(FileGenerator):
     # compose provider for podman 4.9; fuse-overlayfs is the graph driver
     # for rootless containers; uidmap provides newuidmap/newgidmap for user
     # namespace id mapping; slirp4netns/passt handles rootless networking.
+    # nftables ships the nft binary netavark executes for its default
+    # nftables firewall backend — not a hard podman dependency, and
+    # without it every default-network run dies with `netavark: nftables
+    # error: unable to execute "nft"` (observed on the resolute base
+    # image; the hello-world acceptance check).
     PODMAN_PACKAGES = (
         "podman,podman-docker,podman-compose,fuse-overlayfs,"
-        "fuse3,uidmap,slirp4netns,passt"
+        "fuse3,uidmap,slirp4netns,passt,nftables"
     )
 
     # The ssh feature's devcontainer footprint: openssh-client merged
@@ -36,7 +41,9 @@ class DevcontainerGenerator(FileGenerator):
     # Dockerfile slot rendered when the podman feature is enabled.
     # Everything podman needs besides these lines is either a package
     # (PODMAN_PACKAGES above) or auto-detected at runtime (verified with
-    # podman 4.9 / Ubuntu 24.04 inside a docker-default container):
+    # podman 4.9 / Ubuntu 24.04 inside a docker-default container; the
+    # base image default is now resolute, whose apt resolves podman 5.x —
+    # same containers.conf contract, smoke-test after distro jumps):
     # cgroupfs manager and file events logger fall back automatically
     # without systemd/journald, and `podman compose` finds a compose
     # provider on PATH. One minimal /etc/containers/containers.conf IS

@@ -103,6 +103,7 @@ class TestAddOptionalFeatures:
         assert "ripgrep" in pkgs
         assert "podman" in pkgs
         assert "podman-docker" in pkgs
+        assert "nftables" in pkgs
 
     def test_python_feature(self):
         """Python feature should add Python feature."""
