@@ -161,7 +161,7 @@ tool-specific ones must be prefixed.
 | agent layers | `OCF_GLOBAL_CONFIG_PATH` (dir for opencode, file for qwen/dsh), `OCF_GLOBAL_AUTH_PATH` (opencode, dsh) |
 | agent defaults via env | `OCF_MAIN_MODEL`, `OCF_BUILD_MODEL`, `OCF_SMALL_MODEL`, `OCF_PLAN_MAX_BEFORE_RESPONSE_STEPS`, `OCF_BUILD_MAX_BEFORE_RESPONSE_STEPS` |
 | tool-native (agent's own contract, never OCF-prefixed) | `OPENCODE_*`, `QWEN_*`, `DSH_*`, `DEEPSEEK_API_KEY`, `DEEPSEEK_SEARCH_BASE_URL` |
-| feature defaults (build-tool's own contract, framework-managed) | `GRADLE_OPTS` (pinned to `-Dorg.gradle.daemon=false` in `.env` when the gradle feature is selected) |
+| feature defaults (feature's own client contract, framework-managed) | `GRADLE_OPTS` (pinned to `-Dorg.gradle.daemon=false` in `.env` when the gradle feature is selected), `DOCKER_HOST` (pinned to `unix:///var/run/docker.sock` in `.env` when the docker feature is selected) |
 
 - `REMOTE_USER` is derived, not configured: rootless outer daemon → `root`,
   rootful → `vscode` (docker-feature caps-mode contract). The mode is fully
@@ -307,6 +307,36 @@ Contracts:
   packages, re-targets the managed volume and re-renders the initializer.
   `reconfigure` always re-renders the `initializeCommand` from current
   framework code, so image-level fixes propagate without a re-init.
+- Docker API socket (default-path compatibility): the managed compose
+  entrypoint (shared `managed_entrypoint` in `generators/templates.py`,
+  used by both the fresh render and the reconciler, so it propagates via
+  `reconfigure` alone) starts `docker system service --time 0` bound at
+  `/tmp/ocf-docker.sock` (log: `/tmp/ocf-docker.log`) before exec-ing
+  the agent, for the container's lifetime. The image bakes
+  `/var/run/docker.sock -> /tmp/ocf-docker.sock` (both mode blocks), so
+  default-path Docker clients (docker-py, testcontainers) work with zero
+  configuration. The docker feature additionally pins
+  `DOCKER_HOST=unix:///var/run/docker.sock` as a managed `.env` line
+  (GRADLE_OPTS-style: reconcile adds/removes it with the feature,
+  custom values survive deselection): an explicit `DOCKER_HOST` makes
+  docker-py/testcontainers take the socket deterministically and
+  short-circuits testcontainers' host-network probing, which
+  dereferences a `HostConfig` field podman's compat `/containers/json`
+  response never includes (embedded-struct marshal bug, silently
+  dropped upstream; `NetworkSettings` is fine). Podman's own CLI ignores
+  `DOCKER_HOST`, so wrapper/`compose` behavior is unchanged. Either
+  socket path works if a user overrides `DOCKER_HOST`. The
+  socket lives in `/tmp` because the standard-mode agent (`vscode`)
+  cannot bind under root-owned `/run`. The entrypoint `rm -f`s a stale
+  socket (hard stops can't unlink it) and fails soft: the agent starts
+  even if the service can't. `exec "${@:-<binary>}"` forwards the
+  compose command (launch passes `<binary> [acp|serve args]`) and
+  every runtime `$` is `$$`-escaped against compose interpolation.
+  Testcontainers' connection mode then auto-resolves to `docker_host`
+  (unix-scheme endpoint inside a container yields the non-localhost
+  gateway as the docker host); `TESTCONTAINERS_CONNECTION_MODE` can
+  still be set per-invocation for other semantics. The service is not
+  supervised: a mid-life crash stays down until the container restarts.
 - Standard mode assumes host uid 1000 (container `vscode`); on other uids
   prefer a rootless outer daemon, where container root maps to any host
   uid.

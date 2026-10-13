@@ -12,11 +12,13 @@ from opencode_framework.generators.config_files import ConfigFilesGenerator
 from opencode_framework.generators.documentation import DocumentationGenerator
 from opencode_framework.generators.orchestrator import GenerationOrchestrator
 from opencode_framework.generators.templates import (
+    DOCKER_HOST_LINE,
     GITCONFIG_MOUNT_LINE,
     M2_SETTINGS_MOUNT_LINE,
     NPMRC_MOUNT_LINE,
     SSH_MOUNT_LINE,
     TemplateHandler,
+    managed_entrypoint,
 )
 from opencode_framework.sandbox.compose import ComposeGenerator
 from opencode_framework.sandbox.devcontainer import DevcontainerGenerator
@@ -187,6 +189,10 @@ class TestDevcontainerGenerator:
         assert "> /usr/local/bin/docker" in block
         assert "command -v docker | grep -q '^/usr/local/bin/docker$'" in block
         assert "ENV BUILDAH_ISOLATION=chroot" in block
+        # Default-path Docker compatibility: baked /var/run/docker.sock
+        # symlink to the runtime-bound service socket.
+        assert "RUN ln -sf /tmp/ocf-docker.sock /var/run/docker.sock" in block
+        assert "test -L /var/run/docker.sock" in block
         # Minimal containers.conf bake: cgroup creation must be disabled
         # (the sandbox's /sys/fs/cgroup is read-only), engine fallbacks
         # pinned, storage driver stays auto-detected (no vfs pin).
@@ -288,6 +294,10 @@ class TestDevcontainerGenerator:
         assert "chmod +x /usr/local/bin/docker" in block
         assert "command -v docker | grep -q '^/usr/local/bin/docker$'" in block
         assert "ENV BUILDAH_ISOLATION=chroot" in block
+        # Default-path Docker compatibility: same baked
+        # /var/run/docker.sock symlink as the standard block.
+        assert "RUN ln -sf /tmp/ocf-docker.sock /var/run/docker.sock" in block
+        assert "test -L /var/run/docker.sock" in block
 
     def test_podman_caps_initializer_heredoc_roundtrip(self, tmp_path: Path):
         """With podman_caps the initializeCommand heredoc must carry the
@@ -855,7 +865,7 @@ class TestComposeGenerator:
         assert "/dev/fuse" in compose_content
         assert "docker-myproject-opencode" in compose_content
         assert ".local/share/containers" in compose_content
-        assert '["opencode"]' in compose_content
+        assert managed_entrypoint("opencode", True) in compose_content
 
     def test_docker_feature_caps_mode_adds_caps_block(self, tmp_path: Path):
         """Caps-mode compose renders the SYS_ADMIN/NET_ADMIN caps block
@@ -1289,6 +1299,12 @@ class TestHostDotfileMirrorRendering:
         content = TemplateHandler.render_env_template(java_build_tools=["gradle"])
         assert 'GRADLE_OPTS="-Dorg.gradle.daemon=false"' in content
 
+    def test_env_docker_host_only_with_docker_feature(self):
+        content = TemplateHandler.render_env_template(docker_feature=True)
+        assert DOCKER_HOST_LINE in content
+        content = TemplateHandler.render_env_template(docker_feature=False)
+        assert "DOCKER_HOST" not in content
+
     def test_env_template_fully_resolved(self):
         content = TemplateHandler.render_env_template()
         assert "{{" not in content
@@ -1363,6 +1379,18 @@ class TestHostDotfileMirrorRendering:
         assert 'GRADLE_OPTS="-Dorg.gradle.daemon=false"' in content
         assert "GRADLE_OPTS" not in self._generate_env(
             tmp_path / "mv", java_build_tools=["maven"]
+        )
+
+    def test_init_records_docker_host_only_with_docker(
+        self, tmp_path: Path, monkeypatch
+    ):
+        monkeypatch.delenv("SUDO_USER", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+        content = self._generate_env(tmp_path, optional_features=["docker"])
+        assert DOCKER_HOST_LINE in content
+        assert "DOCKER_HOST" not in self._generate_env(
+            tmp_path / "no-docker", optional_features=["python"]
         )
 
     def test_init_records_gitconfig(self, tmp_path: Path, monkeypatch):

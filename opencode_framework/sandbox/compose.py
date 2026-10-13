@@ -22,6 +22,7 @@ from opencode_framework.generators.templates import (
     PODMAN_SECURITY_LINES,
     SSH_MOUNT_LINE,
     TemplateHandler,
+    managed_entrypoint,
 )
 
 
@@ -215,7 +216,11 @@ class ComposeGenerator(FileGenerator):
         }
 
         has_docker = "docker" in optional_features
-        desired_entrypoint = f'["{spec.binary}"]'
+        # Managed line: the reconciler rewrites any existing entrypoint
+        # value (legacy ["<binary>"], legacy DinD docker-init lists and
+        # the current docker-feature wrapper alike) to the desired one,
+        # so entrypoint changes propagate via reconfigure alone.
+        desired_entrypoint = managed_entrypoint(spec.binary, has_docker)
 
         # Determine which Java build tools are enabled
         tools = java_build_tools or []

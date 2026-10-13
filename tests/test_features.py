@@ -7,6 +7,8 @@ from typing import List
 import pytest
 
 from opencode_framework.generators.templates import (
+    DOCKER_ENV_COMMENT,
+    DOCKER_HOST_LINE,
     GITCONFIG_MOUNT_LINE,
     GRADLE_ENV_COMMENT,
     GRADLE_OPTS_LINE,
@@ -14,6 +16,7 @@ from opencode_framework.generators.templates import (
     NPMRC_MOUNT_LINE,
     SSH_MOUNT_LINE,
     TemplateHandler,
+    managed_entrypoint,
 )
 from opencode_framework.sandbox import features
 from opencode_framework.sandbox.compose import ComposeGenerator
@@ -418,12 +421,50 @@ class TestRebuildFeatures:
     def test_toggle_docker_on(self):
         text = _render_compose(self.REPO, [])
         rebuilt = self._rebuild(text, ["docker"])
-        assert '["opencode"]' in rebuilt
+        assert managed_entrypoint("opencode", True) in rebuilt
+        assert '["opencode"]' not in rebuilt
         assert "seccomp=unconfined" in rebuilt
         assert (
             f"docker-{self.REPO}-opencode:/home/vscode/.local/share/containers"
             in rebuilt
         )
+
+    def test_docker_entrypoint_managed(self):
+        """Entrypoint is a managed line: docker on installs the API
+        service wrapper, docker off restores the plain binary, and
+        legacy values are rewritten in both directions."""
+        plain = json.dumps(["opencode"])
+        wrapper = managed_entrypoint("opencode", True)
+        assert plain in _render_compose(self.REPO, [])
+        assert wrapper not in _render_compose(self.REPO, [])
+        # Fresh render and rebuild agree byte-for-byte (reconcile-clean).
+        text = _render_compose(self.REPO, ["docker"])
+        assert wrapper in text
+        assert self._rebuild(text, ["docker"]) == text
+        # A legacy plain entrypoint is rewritten on rebuild with docker on.
+        rebuilt = self._rebuild(_render_compose(self.REPO, []), ["docker"])
+        assert wrapper in rebuilt
+        # Toggling docker off restores the plain entrypoint.
+        assert plain in self._rebuild(rebuilt, [])
+
+    def test_docker_entrypoint_compose_escaping(self):
+        """The wrapper doubles every runtime $ (compose interpolation
+        escape) and stays a JSON flow sequence — valid YAML."""
+        wrapper = managed_entrypoint("opencode", True)
+        lst = json.loads(wrapper)
+        assert lst[0] == "/bin/sh"
+        assert lst[1] == "-c"
+        assert lst[3] == "--"
+        assert lst[4] == "opencode"
+        # File form: $$ survives inside the JSON string.
+        assert lst[2].endswith('exec "$${@:-opencode}"')
+        # Runtime form (compose unescapes $$ -> $): forwarded args with a
+        # bare-binary fallback, stale-socket cleanup, service + log paths.
+        runtime = lst[2].replace("$$", "$")
+        assert 'exec "${@:-opencode}"' in runtime
+        assert "rm -f /tmp/ocf-docker.sock" in runtime
+        assert "docker system service --time 0 unix:///tmp/ocf-docker.sock" in runtime
+        assert "> /tmp/ocf-docker.log 2>&1" in runtime
 
     def test_toggle_docker_off(self):
         text = _render_compose(self.REPO, ["docker"])
@@ -1442,7 +1483,7 @@ class TestUpdateFeatures:
         compose_after = (opencode_dir / "docker-compose.yaml").read_text()
         assert "seccomp=unconfined" in compose_after
         assert ".local/share/containers" in compose_after
-        assert '["opencode"]' in compose_after
+        assert managed_entrypoint("opencode", True) in compose_after
 
     def test_env_reconciled_during_update(self, tmp_path: Path, monkeypatch):
         """update_features refreshes the feature-dependent .env entries."""
@@ -1468,6 +1509,32 @@ class TestUpdateFeatures:
         assert "OCF_NPMRC_PATH=/home/alice/.npmrc" in content
         assert "OCF_M2_SETTINGS_PATH=\n" in content
         assert GRADLE_OPTS_LINE in content
+        assert "OCF_AGENT_TOOL=opencode" in content
+
+    def test_env_docker_host_reconciled_during_update(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """Selecting the docker feature end to end pins DOCKER_HOST in .env."""
+        monkeypatch.setattr(features, "is_interactive", lambda: True)
+        monkeypatch.setattr(
+            features,
+            "prompt_feature_changes",
+            lambda cur, jbt: (["docker"], list(jbt or [])),
+        )
+        monkeypatch.setattr(features, "prompt_port_mappings", lambda cur=None: [])
+        monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
+        monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
+        monkeypatch.setattr(features, "host_gitconfig_path", lambda: "")
+        monkeypatch.setattr(features, "host_ssh_dir_path", lambda _: "")
+        opencode_dir = self._seed_opencode(tmp_path, [])
+        env_path = opencode_dir / ".env"
+        env_path.write_text("OCF_AGENT_TOOL=opencode\n")
+
+        result = features.update_features(opencode_dir, tmp_path.name, "opencode")
+
+        assert result is True
+        content = env_path.read_text()
+        assert DOCKER_HOST_LINE in content
         assert "OCF_AGENT_TOOL=opencode" in content
 
     def test_ssh_toggle_updates_devcontainer_compose_and_env(
@@ -1931,3 +1998,88 @@ class TestReconcileEnvForFeatures:
         gitconfig_idx = lines.index("OCF_GITCONFIG_PATH=/home/alice/.gitconfig")
         ssh_idx = lines.index("OCF_SSH_DIR_PATH=/home/alice/.ssh")
         assert npmrc_idx < m2_idx < gradle_idx < gitconfig_idx < ssh_idx
+
+    def test_adds_docker_host_when_selected(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
+        monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
+        monkeypatch.setattr(features, "host_gitconfig_path", lambda: "")
+        monkeypatch.setattr(features, "host_ssh_dir_path", lambda _: "")
+        env_path = self._seed(tmp_path)
+
+        assert (
+            features.reconcile_env_for_features(env_path, [], docker_enabled=True)
+            is True
+        )
+        content = env_path.read_text()
+        assert f"{DOCKER_ENV_COMMENT}\n{DOCKER_HOST_LINE}" in content
+        lines = content.split("\n")
+        assert lines.index("OCF_SSH_DIR_PATH=") < lines.index(DOCKER_HOST_LINE)
+
+    def test_docker_host_idempotent_when_already_present(
+        self, tmp_path: Path, monkeypatch
+    ):
+        monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
+        monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
+        monkeypatch.setattr(features, "host_gitconfig_path", lambda: "")
+        monkeypatch.setattr(features, "host_ssh_dir_path", lambda _: "")
+        seed = self.BASE_ENV.replace(
+            "OCF_AGENT_TOOL=opencode",
+            f"{DOCKER_ENV_COMMENT}\n{DOCKER_HOST_LINE}\nOCF_AGENT_TOOL=opencode",
+        )
+        env_path = self._seed(tmp_path, seed)
+
+        assert (
+            features.reconcile_env_for_features(env_path, [], docker_enabled=True)
+            is False
+        )
+
+    def test_docker_host_removed_when_deselected(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
+        monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
+        monkeypatch.setattr(features, "host_gitconfig_path", lambda: "")
+        monkeypatch.setattr(features, "host_ssh_dir_path", lambda _: "")
+        seed = self.BASE_ENV.replace(
+            "OCF_AGENT_TOOL=opencode",
+            f"{DOCKER_ENV_COMMENT}\n{DOCKER_HOST_LINE}\nOCF_AGENT_TOOL=opencode",
+        )
+        env_path = self._seed(tmp_path, seed)
+
+        assert features.reconcile_env_for_features(env_path, []) is True
+        content = env_path.read_text()
+        assert "DOCKER_HOST" not in content
+        assert DOCKER_ENV_COMMENT not in content
+
+    def test_pinned_over_custom_value_when_docker_selected(
+        self, tmp_path: Path, monkeypatch
+    ):
+        monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
+        monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
+        monkeypatch.setattr(features, "host_gitconfig_path", lambda: "")
+        monkeypatch.setattr(features, "host_ssh_dir_path", lambda _: "")
+        seed = self.BASE_ENV.replace(
+            "OCF_AGENT_TOOL=opencode",
+            "DOCKER_HOST=tcp://elsewhere:2375\nOCF_AGENT_TOOL=opencode",
+        )
+        env_path = self._seed(tmp_path, seed)
+
+        assert (
+            features.reconcile_env_for_features(env_path, [], docker_enabled=True)
+            is True
+        )
+        content = env_path.read_text()
+        assert DOCKER_HOST_LINE in content
+        assert "tcp://elsewhere" not in content
+
+    def test_custom_docker_host_survives_deselection(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
+        monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
+        monkeypatch.setattr(features, "host_gitconfig_path", lambda: "")
+        monkeypatch.setattr(features, "host_ssh_dir_path", lambda _: "")
+        seed = self.BASE_ENV.replace(
+            "OCF_AGENT_TOOL=opencode",
+            "DOCKER_HOST=tcp://elsewhere:2375\nOCF_AGENT_TOOL=opencode",
+        )
+        env_path = self._seed(tmp_path, seed)
+
+        assert features.reconcile_env_for_features(env_path, []) is False
+        assert "DOCKER_HOST=tcp://elsewhere:2375" in env_path.read_text()

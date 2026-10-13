@@ -45,9 +45,78 @@ PODMAN_GRAPH_ROOT_TARGET = "/home/vscode/.local/share/containers"
 # ownership bake needed since root writes it.
 PODMAN_CAPS_GRAPH_ROOT_TARGET = "/var/lib/containers"
 
+# Container path of the docker feature's Docker-compatible API socket.
+# The managed compose entrypoint binds `docker system service` (podman
+# under the hood, routed through the baked /usr/local/bin/docker
+# wrapper) here for the container's lifetime, so Docker-API clients
+# (docker-py, testcontainers) can drive the sandbox engine. The socket
+# lives in /tmp rather than /run because the standard-mode agent runs
+# as vscode and cannot bind under root-owned /run; the image instead
+# bakes a /var/run/docker.sock -> /tmp symlink (PODMAN_*_DOCKERFILE_
+# BLOCK), so default-path Docker clients work with zero configuration.
+DOCKER_API_SOCKET_PATH = "/tmp/ocf-docker.sock"
+
+# Service log for the managed Docker API socket, next to the socket.
+DOCKER_API_SERVICE_LOG_PATH = "/tmp/ocf-docker.log"
+
+
+def managed_entrypoint(binary: str, has_docker: bool) -> str:
+    """Build the managed compose entrypoint for an agent binary.
+
+    Without the docker feature the agent binary is the plain
+    entrypoint. With it, a ``/bin/sh -c`` wrapper starts the
+    Docker-compatible API service before exec-ing the agent:
+
+    - ``rm -f`` clears a stale socket left by a hard container stop
+      (SIGKILL teardown cannot unlink it; the next bind would fail
+      with EADDRINUSE)
+    - the service is backgrounded and fails soft: the agent must
+      still start when the socket cannot (service errors land in
+      DOCKER_API_SERVICE_LOG_PATH)
+    - ``exec "${@:-BINARY}"`` forwards the compose command (launch
+      passes ``<binary> [acp|serve args] [-- user args]``) and falls
+      back to the bare binary when no command is present, matching
+      the plain entrypoint's behavior
+
+    The value is JSON-encoded (JSON flow sequences are valid YAML).
+    Every runtime ``$`` is doubled to ``$$`` so compose variable
+    interpolation leaves it alone; the container receives a single
+    literal ``$``.
+
+    Shared by the fresh render (render_compose_template) and the
+    reconciler (ComposeGenerator.rebuild_features) so a fresh render
+    is reconcile-clean.
+
+    Args:
+        binary: Agent entrypoint binary (e.g. "opencode")
+        has_docker: Whether the docker feature is enabled
+
+    Returns:
+        Value for the compose ``entrypoint:`` line
+    """
+    if not has_docker:
+        return json.dumps([binary])
+    command = (
+        f"rm -f {DOCKER_API_SOCKET_PATH} && "
+        f"docker system service --time 0 unix://{DOCKER_API_SOCKET_PATH} "
+        f"> {DOCKER_API_SERVICE_LOG_PATH} 2>&1 & "
+        f'exec "$${{@:-{binary}}}"'
+    )
+    return json.dumps(["/bin/sh", "-c", command, "--", binary])
+
+
 # .env fragment rendered when the Gradle feature is enabled.
 GRADLE_ENV_COMMENT = "# Gradle builds must not keep a daemon alive across restarts"
 GRADLE_OPTS_LINE = 'GRADLE_OPTS="-Dorg.gradle.daemon=false"'
+
+# .env fragment rendered when the docker feature is enabled. Points
+# Docker-API clients (docker-py, testcontainers) at the managed podman
+# compat socket via the canonical /var/run/docker.sock symlink, and
+# short-circuits testcontainers' host-network probing, which
+# dereferences a HostConfig field podman's /containers/json response
+# never includes (upstream marshal bug).
+DOCKER_ENV_COMMENT = "# Docker API endpoint for docker-py / testcontainers"
+DOCKER_HOST_LINE = "DOCKER_HOST=unix:///var/run/docker.sock"
 
 # Managed security block for the compose service (4-space indent). The
 # podman variant lifts Docker's default seccomp profile (crun inside a
@@ -462,6 +531,7 @@ class TemplateHandler:
         java_build_tools: Optional[List[str]] = None,
         gitconfig_path: Optional[str] = None,
         ssh_dir_path: Optional[str] = None,
+        docker_feature: bool = False,
     ) -> str:
         """Render environment template with paths and the tool fragment.
 
@@ -481,6 +551,8 @@ class TemplateHandler:
                 /dev/null)
             ssh_dir_path: Host ``~/.ssh`` directory path when the ssh
                 feature is on and the directory exists, else None/""
+            docker_feature: Whether the docker feature is enabled; drives
+                the DOCKER_HOST fragment
 
         Returns:
             Rendered environment template
@@ -493,6 +565,9 @@ class TemplateHandler:
             if "gradle" in (java_build_tools or [])
             else ""
         )
+        docker_env = (
+            f"\n{DOCKER_ENV_COMMENT}\n{DOCKER_HOST_LINE}" if docker_feature else ""
+        )
 
         replacements = {
             "{{AGENT_ENV_TEMPLATE}}": spec.env_template_fragment,
@@ -504,6 +579,7 @@ class TemplateHandler:
             "{{OCF_GITCONFIG_PATH}}": gitconfig_path or "",
             "{{OCF_SSH_DIR_PATH}}": ssh_dir_path or "",
             "{{GRADLE_ENV}}": gradle_env,
+            "{{DOCKER_ENV}}": docker_env,
         }
 
         return cls.render_template(template, replacements)
@@ -549,7 +625,9 @@ class TemplateHandler:
         # only when the host ~/.ssh exists — no /dev/null fallback for a
         # directory target).
         additional_volume_mounts = f"\n{NPMRC_MOUNT_LINE}\n{GITCONFIG_MOUNT_LINE}"
-        entrypoint = f'["{spec.binary}"]'
+        entrypoint = managed_entrypoint(
+            spec.binary, "docker" in (optional_features or [])
+        )
 
         if optional_features and "python" in optional_features:
             additional_volume_mounts += (

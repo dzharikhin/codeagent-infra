@@ -14,6 +14,8 @@ from opencode_framework.config import (
     host_ssh_dir_path,
 )
 from opencode_framework.generators.templates import (
+    DOCKER_ENV_COMMENT,
+    DOCKER_HOST_LINE,
     GRADLE_ENV_COMMENT,
     GRADLE_OPTS_LINE,
 )
@@ -150,18 +152,20 @@ def reconcile_env_for_features(
     env_path: Path,
     java_build_tools: List[str],
     ssh_enabled: bool = False,
+    docker_enabled: bool = False,
 ) -> bool:
     """Reconcile feature-dependent entries in the config worktree's .env.
 
     Surgically updates (never regenerates) the ``OCF_NPMRC_PATH``,
     ``OCF_M2_SETTINGS_PATH``, ``OCF_GITCONFIG_PATH`` and
     ``OCF_SSH_DIR_PATH`` host-mirror values and the managed
-    ``GRADLE_OPTS`` line to match the final feature selection and the
-    current host file state; all other lines are preserved verbatim.
-    When Gradle is enabled an existing ``GRADLE_OPTS`` line is pinned to
-    the managed daemonless value; when disabled only lines matching the
-    managed value (and its comment) are removed, so custom values
-    survive.
+    ``GRADLE_OPTS`` and ``DOCKER_HOST`` lines to match the final feature
+    selection and the current host file state; all other lines are
+    preserved verbatim. When Gradle is enabled an existing
+    ``GRADLE_OPTS`` line is pinned to the managed daemonless value; when
+    disabled only lines matching the managed value (and its comment) are
+    removed, so custom values survive. The same policy applies to
+    ``DOCKER_HOST`` and the docker feature.
 
     Args:
         env_path: Path to the config worktree's .env file.
@@ -169,6 +173,8 @@ def reconcile_env_for_features(
             (e.g. ["maven"], ["gradle"], ["maven", "gradle"]).
         ssh_enabled: Whether the ssh feature is enabled; gates the
             ``OCF_SSH_DIR_PATH`` value.
+        docker_enabled: Whether the docker feature is enabled; gates the
+            managed ``DOCKER_HOST`` line.
 
     Returns:
         True when the file content changed.
@@ -187,6 +193,7 @@ def reconcile_env_for_features(
     out: List[str] = []
     seen = {key: False for key in desired_values}
     seen_gradle = False
+    seen_docker_host = False
 
     for line in lines:
         key_match = next(
@@ -213,6 +220,18 @@ def reconcile_env_for_features(
                 out.append(line)
             continue
         if not have_gradle and line == GRADLE_ENV_COMMENT:
+            continue
+        if line.startswith("DOCKER_HOST=") or line.startswith("export DOCKER_HOST="):
+            if docker_enabled:
+                if not seen_docker_host:
+                    seen_docker_host = True
+                    out.append(DOCKER_HOST_LINE)
+            elif line == DOCKER_HOST_LINE:
+                continue  # managed line from a previous render: drop
+            else:
+                out.append(line)
+            continue
+        if not docker_enabled and line == DOCKER_ENV_COMMENT:
             continue
         out.append(line)
 
@@ -253,6 +272,11 @@ def reconcile_env_for_features(
             "OCF_GITCONFIG_PATH=",
             [f"OCF_SSH_DIR_PATH={desired_values['OCF_SSH_DIR_PATH']}"],
         )
+    if docker_enabled and not seen_docker_host:
+        _insert_after(
+            "OCF_SSH_DIR_PATH=",
+            [DOCKER_ENV_COMMENT, DOCKER_HOST_LINE],
+        )
 
     trailing = "\n" if text.endswith("\n") else ""
     new_text = "\n".join(out) + trailing
@@ -283,8 +307,9 @@ def update_features(
         ``reconfigure`` instead of freezing at
         harness-creation time; legacy feature keys (docker-in-docker:2) are
     migrated to the podman representation. The .env is always
-    reconciled (host dotfile mirror paths, managed GRADLE_OPTS line) to
-    match the final feature selection and current host file state.
+    reconciled (host dotfile mirror paths, managed GRADLE_OPTS and
+    DOCKER_HOST lines) to match the final feature selection and current
+    host file state.
 
     Args:
         config_dir: Path to the agent tool's config worktree
@@ -395,8 +420,9 @@ def update_features(
     changed = features_changed or legacy_migrated or dc_changed
 
     # Reconcile the feature-dependent .env entries (host dotfile mirror
-    # paths, managed GRADLE_OPTS line) even when the selection is
-    # unchanged: host files may have appeared or disappeared since init.
+    # paths, managed GRADLE_OPTS and DOCKER_HOST lines) even when the
+    # selection is unchanged: host files may have appeared or
+    # disappeared since init.
     if "ssh" in new_features and not host_ssh_dir_path(True):
         typer.secho(
             "Warning: ssh feature selected but ~/.ssh does not exist on "
@@ -406,7 +432,10 @@ def update_features(
         )
     env_path = config_dir / ".env"
     if env_path.is_file() and reconcile_env_for_features(
-        env_path, new_java_build_tools, ssh_enabled="ssh" in new_features
+        env_path,
+        new_java_build_tools,
+        ssh_enabled="ssh" in new_features,
+        docker_enabled="docker" in new_features,
     ):
         typer.secho(f"Updated {config_dir.name}/.env", fg=typer.colors.GREEN)
         changed = True

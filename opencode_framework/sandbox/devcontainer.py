@@ -5,7 +5,10 @@ from typing import List, Optional
 
 from opencode_framework.agent.registry import DEFAULT_TOOL, ToolSpec, get_tool_spec
 from opencode_framework.generators.base import FileGenerator, GenerationContext
-from opencode_framework.generators.templates import TemplateHandler
+from opencode_framework.generators.templates import (
+    DOCKER_API_SOCKET_PATH,
+    TemplateHandler,
+)
 
 
 class DevcontainerGenerator(FileGenerator):
@@ -113,6 +116,13 @@ class DevcontainerGenerator(FileGenerator):
         " > /usr/local/bin/docker && \\\n"
         "    chmod +x /usr/local/bin/docker && \\\n"
         "    command -v docker | grep -q '^/usr/local/bin/docker$'\n"
+        # Default-path Docker compatibility: /var/run/docker.sock is a
+        # build-time symlink to the runtime-bound service socket (the
+        # agent, vscode in this mode, cannot bind under root-owned
+        # /run — see DOCKER_API_SOCKET_PATH), so default-path Docker
+        # clients (docker-py, testcontainers) work unconfigured.
+        f"RUN ln -sf {DOCKER_API_SOCKET_PATH} /var/run/docker.sock && \\\n"
+        "    test -L /var/run/docker.sock\n"
         "ENV BUILDAH_ISOLATION=chroot"
     )
 
@@ -193,6 +203,12 @@ class DevcontainerGenerator(FileGenerator):
         " > /usr/local/bin/docker && \\\n"
         "    chmod +x /usr/local/bin/docker && \\\n"
         "    command -v docker | grep -q '^/usr/local/bin/docker$'\n"
+        # Default-path Docker compatibility, caps mode too: same
+        # build-time /var/run/docker.sock symlink (root binds /tmp fine
+        # here, but the symlink keeps default-path clients working
+        # uniformly across both daemon modes).
+        f"RUN ln -sf {DOCKER_API_SOCKET_PATH} /var/run/docker.sock && \\\n"
+        "    test -L /var/run/docker.sock\n"
         "ENV BUILDAH_ISOLATION=chroot"
     )
 
