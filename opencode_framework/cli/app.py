@@ -1669,7 +1669,11 @@ def launch(
     - Comments: # comment
     - Quoted values: KEY="value with spaces"
 
-    DOCKER_CONTEXT is set to 'rootless' by default. Use --docker-context to override.
+    DOCKER_CONTEXT is set to 'rootless' by default. Use --docker-context to
+    override. DOCKER_HOST is removed from the docker/devcontainer subprocess
+    environment, so --docker-context (or a shell DOCKER_CONTEXT) is the
+    authoritative daemon selector; select non-default daemons via a docker
+    context, not a shell DOCKER_HOST.
 
     Examples:
         ocframework launch

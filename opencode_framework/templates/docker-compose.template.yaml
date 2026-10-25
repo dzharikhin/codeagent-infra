@@ -19,7 +19,7 @@ services:
       - XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-/home/${REMOTE_USER}/.config}
       - XDG_DATA_HOME=${XDG_DATA_HOME:-/home/${REMOTE_USER}/.local/share}
       - XDG_STATE_HOME=${XDG_STATE_HOME:-/${REMOTE_USER}/.local/state}
-      - XDG_CACHE_HOME=${XDG_CACHE_HOME:-/${REMOTE_USER}/.cache}
+      - XDG_CACHE_HOME=${XDG_CACHE_HOME:-/${REMOTE_USER}/.cache}{{DOCKER_ENV_ENTRY}}
     volumes:
       - ${OCF_LOCAL_REPO_ROOT:-${PWD}}:${OCF_LOCAL_REPO_ROOT:-${PWD}}
       - ${OCF_LOCAL_REPO_ROOT:-${PWD}}/{{OCF_CONFIG_DIR}}/runtime_data:/home/${REMOTE_USER}

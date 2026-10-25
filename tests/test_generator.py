@@ -12,7 +12,7 @@ from opencode_framework.generators.config_files import ConfigFilesGenerator
 from opencode_framework.generators.documentation import DocumentationGenerator
 from opencode_framework.generators.orchestrator import GenerationOrchestrator
 from opencode_framework.generators.templates import (
-    DOCKER_HOST_LINE,
+    DOCKER_HOST_ENV_LINE,
     GITCONFIG_MOUNT_LINE,
     M2_SETTINGS_MOUNT_LINE,
     NPMRC_MOUNT_LINE,
@@ -866,6 +866,7 @@ class TestComposeGenerator:
         assert "docker-myproject-opencode" in compose_content
         assert ".local/share/containers" in compose_content
         assert managed_entrypoint("opencode", True) in compose_content
+        assert DOCKER_HOST_ENV_LINE in compose_content
 
     def test_docker_feature_caps_mode_adds_caps_block(self, tmp_path: Path):
         """Caps-mode compose renders the SYS_ADMIN/NET_ADMIN caps block
@@ -935,6 +936,7 @@ class TestComposeGenerator:
         compose_content = (opencode_dir / "docker-compose.yaml").read_text()
         assert "privileged" not in compose_content
         assert "seccomp=unconfined" not in compose_content
+        assert DOCKER_HOST_ENV_LINE not in compose_content
         assert '["opencode"]' in compose_content
 
     def test_java_feature_adds_m2_volume(self, tmp_path: Path):
@@ -1299,11 +1301,19 @@ class TestHostDotfileMirrorRendering:
         content = TemplateHandler.render_env_template(java_build_tools=["gradle"])
         assert 'GRADLE_OPTS="-Dorg.gradle.daemon=false"' in content
 
-    def test_env_docker_host_only_with_docker_feature(self):
-        content = TemplateHandler.render_env_template(docker_feature=True)
-        assert DOCKER_HOST_LINE in content
-        content = TemplateHandler.render_env_template(docker_feature=False)
+    def test_env_never_contains_docker_host(self):
+        """The pinned DOCKER_HOST lives in the compose environment block,
+        never in .env (where it would leak into the build phase)."""
+        content = TemplateHandler.render_env_template()
         assert "DOCKER_HOST" not in content
+        content = TemplateHandler.render_env_template(java_build_tools=["gradle"])
+        assert "DOCKER_HOST" not in content
+
+    def test_compose_docker_host_env_line_only_with_docker_feature(self):
+        content = TemplateHandler.render_compose_template("repo", ["docker"])
+        assert DOCKER_HOST_ENV_LINE in content
+        content = TemplateHandler.render_compose_template("repo", ["python"])
+        assert DOCKER_HOST_ENV_LINE not in content
 
     def test_env_template_fully_resolved(self):
         content = TemplateHandler.render_env_template()
@@ -1381,14 +1391,14 @@ class TestHostDotfileMirrorRendering:
             tmp_path / "mv", java_build_tools=["maven"]
         )
 
-    def test_init_records_docker_host_only_with_docker(
-        self, tmp_path: Path, monkeypatch
-    ):
+    def test_init_records_no_docker_host_with_docker(self, tmp_path: Path, monkeypatch):
+        """The docker feature pins DOCKER_HOST via the compose
+        environment block; .env never carries it (build-phase leak)."""
         monkeypatch.delenv("SUDO_USER", raising=False)
         monkeypatch.setenv("HOME", str(tmp_path / "home"))
 
         content = self._generate_env(tmp_path, optional_features=["docker"])
-        assert DOCKER_HOST_LINE in content
+        assert "DOCKER_HOST" not in content
         assert "DOCKER_HOST" not in self._generate_env(
             tmp_path / "no-docker", optional_features=["python"]
         )

@@ -13,6 +13,7 @@ from opencode_framework.config import host_ssh_dir_path
 from opencode_framework.generators.base import FileGenerator, GenerationContext
 from opencode_framework.generators.templates import (
     BASE_SECURITY_LINES,
+    DOCKER_HOST_ENV_LINE,
     GITCONFIG_MOUNT_LINE,
     M2_SETTINGS_MOUNT_LINE,
     NPMRC_MOUNT_LINE,
@@ -93,11 +94,12 @@ class ComposeGenerator(FileGenerator):
 
         Strips the managed feature footprints (security block, python/java
         volume mounts and their top-level volume keys, the entrypoint, the
-        managed ports block, the host dotfile mirror mounts, plus the
-        legacy DinD privileged line and ``/var/lib/docker`` volume) and
-        re-injects only those for the requested feature set.  All other
-        lines (environment, custom mounts, user-added security list
-        entries, user-added volumes) are preserved.
+        managed ports block, the host dotfile mirror mounts, the managed
+        DOCKER_HOST environment entry, plus the legacy DinD privileged line
+        and ``/var/lib/docker`` volume) and re-injects only those for the
+        requested feature set.  All other lines (environment, custom
+        mounts, user-added security list entries, user-added volumes) are
+        preserved.
 
         When ``port_mappings`` is ``None`` the ports block is left untouched.
         When it is a list (including empty) the ports block is reconciled to
@@ -212,6 +214,7 @@ class ComposeGenerator(FileGenerator):
             f"  {managed_volume_name('docker', repo_name, spec.name)}:",
             *managed_volume_entries,
             *security_lines,
+            DOCKER_HOST_ENV_LINE,
             "    privileged: true",
         }
 
@@ -279,6 +282,14 @@ class ComposeGenerator(FileGenerator):
         lines = ComposeGenerator._insert_after_block(
             lines, "    working_dir", security_block
         )
+
+        # Managed sandbox-interior Docker API endpoint (environment
+        # block): anchored after the XDG entries so the reconciled file
+        # matches the fresh render byte for byte.
+        if has_docker:
+            lines = ComposeGenerator._insert_after_line(
+                lines, "      - XDG_CACHE_HOME", DOCKER_HOST_ENV_LINE
+            )
 
         # Injection order must match render_compose_template exactly so a
         # fresh render survives the reconciler unchanged.

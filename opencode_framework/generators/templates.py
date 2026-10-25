@@ -109,14 +109,29 @@ def managed_entrypoint(binary: str, has_docker: bool) -> str:
 GRADLE_ENV_COMMENT = "# Gradle builds must not keep a daemon alive across restarts"
 GRADLE_OPTS_LINE = 'GRADLE_OPTS="-Dorg.gradle.daemon=false"'
 
-# .env fragment rendered when the docker feature is enabled. Points
-# Docker-API clients (docker-py, testcontainers) at the managed podman
-# compat socket via the canonical /var/run/docker.sock symlink, and
-# short-circuits testcontainers' host-network probing, which
-# dereferences a HostConfig field podman's /containers/json response
-# never includes (upstream marshal bug).
+# Legacy .env fragment of the docker feature, kept only as a migration
+# marker: the pinned DOCKER_HOST used to live in .env, which leaked into
+# the build phase through build_docker_env (docker CLI precedence makes
+# DOCKER_HOST override DOCKER_CONTEXT, so devcontainer builds always hit
+# the host socket at the pinned path). The pinned default now lives in
+# the compose environment block (DOCKER_HOST_ENV_LINE below); the .env
+# reconciler strips these exact legacy lines on sight.
 DOCKER_ENV_COMMENT = "# Docker API endpoint for docker-py / testcontainers"
 DOCKER_HOST_LINE = "DOCKER_HOST=unix:///var/run/docker.sock"
+
+# Managed compose environment entry (6-space indent) rendered when the
+# docker feature is enabled. Points Docker-API clients (docker-py,
+# testcontainers) at the managed podman compat socket via the canonical
+# /var/run/docker.sock symlink, and short-circuits testcontainers'
+# host-network probing, which dereferences a HostConfig field podman's
+# /containers/json response never includes (upstream marshal bug). The
+# interpolated form keeps GRADLE_OPTS-style overrides: a custom
+# DOCKER_HOST set in the config .env (auto-loaded by compose next to the
+# compose file) or via launch -e/--env beats the pinned default, while
+# the entry itself never touches the host-side subprocess env. Managed
+# like the mount lines: fresh render and compose reconciler emit the
+# exact same string.
+DOCKER_HOST_ENV_LINE = "      - DOCKER_HOST=${DOCKER_HOST:-unix:///var/run/docker.sock}"
 
 # Managed security block for the compose service (4-space indent). The
 # podman variant lifts Docker's default seccomp profile (crun inside a
@@ -531,7 +546,6 @@ class TemplateHandler:
         java_build_tools: Optional[List[str]] = None,
         gitconfig_path: Optional[str] = None,
         ssh_dir_path: Optional[str] = None,
-        docker_feature: bool = False,
     ) -> str:
         """Render environment template with paths and the tool fragment.
 
@@ -551,8 +565,6 @@ class TemplateHandler:
                 /dev/null)
             ssh_dir_path: Host ``~/.ssh`` directory path when the ssh
                 feature is on and the directory exists, else None/""
-            docker_feature: Whether the docker feature is enabled; drives
-                the DOCKER_HOST fragment
 
         Returns:
             Rendered environment template
@@ -565,9 +577,6 @@ class TemplateHandler:
             if "gradle" in (java_build_tools or [])
             else ""
         )
-        docker_env = (
-            f"\n{DOCKER_ENV_COMMENT}\n{DOCKER_HOST_LINE}" if docker_feature else ""
-        )
 
         replacements = {
             "{{AGENT_ENV_TEMPLATE}}": spec.env_template_fragment,
@@ -579,7 +588,6 @@ class TemplateHandler:
             "{{OCF_GITCONFIG_PATH}}": gitconfig_path or "",
             "{{OCF_SSH_DIR_PATH}}": ssh_dir_path or "",
             "{{GRADLE_ENV}}": gradle_env,
-            "{{DOCKER_ENV}}": docker_env,
         }
 
         return cls.render_template(template, replacements)
@@ -691,6 +699,14 @@ class TemplateHandler:
             port_lines = "".join(f"      - {p}\n" for p in port_mappings)
             ports_section = f"    ports:\n{port_lines}"
 
+        # Managed environment entry pinning the sandbox-interior Docker
+        # API endpoint; docker-feature-gated (see DOCKER_HOST_ENV_LINE).
+        docker_env_entry = (
+            f"\n{DOCKER_HOST_ENV_LINE}"
+            if optional_features and "docker" in optional_features
+            else ""
+        )
+
         replacements = {
             # Tool fragments first: replacement values may embed other
             # placeholders, which the later passes must still resolve.
@@ -703,6 +719,7 @@ class TemplateHandler:
             "{{TOP_LEVEL_VOLUMES_SECTION}}": top_level_volumes_section,
             "{{PODMAN_SECURITY}}": podman_security,
             "{{PORTS_SECTION}}": ports_section,
+            "{{DOCKER_ENV_ENTRY}}": docker_env_entry,
             "{{ENTRYPOINT}}": entrypoint,
         }
 

@@ -161,7 +161,7 @@ tool-specific ones must be prefixed.
 | agent layers | `OCF_GLOBAL_CONFIG_PATH` (dir for opencode, file for qwen/dsh), `OCF_GLOBAL_AUTH_PATH` (opencode, dsh) |
 | agent defaults via env | `OCF_MAIN_MODEL`, `OCF_BUILD_MODEL`, `OCF_SMALL_MODEL`, `OCF_PLAN_MAX_BEFORE_RESPONSE_STEPS`, `OCF_BUILD_MAX_BEFORE_RESPONSE_STEPS` |
 | tool-native (agent's own contract, never OCF-prefixed) | `OPENCODE_*`, `QWEN_*`, `DSH_*`, `DEEPSEEK_API_KEY`, `DEEPSEEK_SEARCH_BASE_URL` |
-| feature defaults (feature's own client contract, framework-managed) | `GRADLE_OPTS` (pinned to `-Dorg.gradle.daemon=false` in `.env` when the gradle feature is selected), `DOCKER_HOST` (pinned to `unix:///var/run/docker.sock` in `.env` when the docker feature is selected) |
+| feature defaults (feature's own client contract, framework-managed) | `GRADLE_OPTS` (pinned to `-Dorg.gradle.daemon=false` in `.env` when the gradle feature is selected), `DOCKER_HOST` (pinned to `unix:///var/run/docker.sock` as a managed compose `environment:` entry when the docker feature is selected — never in `.env`, where it would leak into the build phase) |
 
 - `REMOTE_USER` is derived, not configured: rootless outer daemon → `root`,
   rootful → `vscode` (docker-feature caps-mode contract). The mode is fully
@@ -316,16 +316,24 @@ Contracts:
   `/var/run/docker.sock -> /tmp/ocf-docker.sock` (both mode blocks), so
   default-path Docker clients (docker-py, testcontainers) work with zero
   configuration. The docker feature additionally pins
-  `DOCKER_HOST=unix:///var/run/docker.sock` as a managed `.env` line
-  (GRADLE_OPTS-style: reconcile adds/removes it with the feature,
-  custom values survive deselection): an explicit `DOCKER_HOST` makes
-  docker-py/testcontainers take the socket deterministically and
-  short-circuits testcontainers' host-network probing, which
-  dereferences a `HostConfig` field podman's compat `/containers/json`
-  response never includes (embedded-struct marshal bug, silently
-  dropped upstream; `NetworkSettings` is fine). Podman's own CLI ignores
-  `DOCKER_HOST`, so wrapper/`compose` behavior is unchanged. Either
-  socket path works if a user overrides `DOCKER_HOST`. The
+  `DOCKER_HOST=unix:///var/run/docker.sock` as a managed compose
+  `environment:` entry (`DOCKER_HOST_ENV_LINE`, interpolated
+  `${DOCKER_HOST:-pinned}`; the reconciler strips/re-injects it with the
+  feature, custom `.env`/`-e` values beat the pinned default): an
+  explicit `DOCKER_HOST` makes docker-py/testcontainers take the socket
+  deterministically and short-circuits testcontainers' host-network
+  probing, which dereferences a `HostConfig` field podman's compat
+  `/containers/json` response never includes (embedded-struct marshal
+  bug, silently dropped upstream; `NetworkSettings` is fine). Podman's
+  own CLI ignores `DOCKER_HOST`, so wrapper/`compose` behavior is
+  unchanged. Either socket path works if a user overrides
+  `DOCKER_HOST`. The value is sandbox-interior only: `build_docker_env`
+  (`sandbox/runtime.py`) removes `DOCKER_HOST` from every host-side
+  docker/devcontainer subprocess env so the pinned line can never leak
+  into the build phase (docker CLI precedence: `DOCKER_HOST` overrides
+  `DOCKER_CONTEXT`), making `--docker-context` the authoritative daemon
+  selector; legacy `.env`-managed lines are migrated away by
+  `reconfigure`. The
   socket lives in `/tmp` because the standard-mode agent (`vscode`)
   cannot bind under root-owned `/run`. The entrypoint `rm -f`s a stale
   socket (hard stops can't unlink it) and fails soft: the agent starts

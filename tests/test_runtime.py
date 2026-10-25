@@ -566,6 +566,25 @@ class TestBuildDockerEnv:
         if old_value:
             assert result["PATH"] == old_value
 
+    def test_docker_host_from_base_env_removed(self, monkeypatch):
+        """The sandbox-interior DOCKER_HOST from .env must never steer
+        host-side docker/devcontainer clients (it overrides
+        DOCKER_CONTEXT per docker CLI precedence)."""
+        monkeypatch.delenv("DOCKER_HOST", raising=False)
+        result = build_docker_env(
+            {"DOCKER_HOST": "unix:///var/run/docker.sock"}, "rootless"
+        )
+        assert "DOCKER_HOST" not in result
+        assert result["DOCKER_CONTEXT"] == "rootless"
+
+    def test_shell_docker_host_removed(self, monkeypatch):
+        """A shell-exported DOCKER_HOST is dropped too, making
+        --docker-context the authoritative daemon selector."""
+        monkeypatch.setenv("DOCKER_HOST", "tcp://elsewhere:2375")
+        result = build_docker_env({}, "rootless")
+        assert "DOCKER_HOST" not in result
+        assert result["DOCKER_CONTEXT"] == "rootless"
+
 
 class TestIntegrationScenarios:
     """Integration tests for real-world scenarios."""

@@ -8,6 +8,7 @@ import pytest
 
 from opencode_framework.generators.templates import (
     DOCKER_ENV_COMMENT,
+    DOCKER_HOST_ENV_LINE,
     DOCKER_HOST_LINE,
     GITCONFIG_MOUNT_LINE,
     GRADLE_ENV_COMMENT,
@@ -333,6 +334,9 @@ class TestRebuildFeatures:
         assert "docker-init.sh" not in text
         assert ("seccomp=unconfined" in text) is has_docker
         assert ("/dev/fuse" in text) is has_docker
+        # Managed sandbox-interior Docker API endpoint entry accompanies
+        # the docker feature
+        assert (DOCKER_HOST_ENV_LINE in text) is has_docker
         # Podman graph-root volume is pinned at /home/vscode/.local/share/containers
         assert (
             f"docker-{self.REPO}-opencode:/home/vscode/.local/share/containers" in text
@@ -1511,10 +1515,9 @@ class TestUpdateFeatures:
         assert GRADLE_OPTS_LINE in content
         assert "OCF_AGENT_TOOL=opencode" in content
 
-    def test_env_docker_host_reconciled_during_update(
-        self, tmp_path: Path, monkeypatch
-    ):
-        """Selecting the docker feature end to end pins DOCKER_HOST in .env."""
+    def test_env_docker_host_migrated_during_update(self, tmp_path: Path, monkeypatch):
+        """Selecting the docker feature end to end keeps DOCKER_HOST out
+        of .env (legacy lines migrated away; compose owns the entry)."""
         monkeypatch.setattr(features, "is_interactive", lambda: True)
         monkeypatch.setattr(
             features,
@@ -1528,14 +1531,19 @@ class TestUpdateFeatures:
         monkeypatch.setattr(features, "host_ssh_dir_path", lambda _: "")
         opencode_dir = self._seed_opencode(tmp_path, [])
         env_path = opencode_dir / ".env"
-        env_path.write_text("OCF_AGENT_TOOL=opencode\n")
+        env_path.write_text(
+            f"{DOCKER_ENV_COMMENT}\n{DOCKER_HOST_LINE}\nOCF_AGENT_TOOL=opencode\n"
+        )
 
         result = features.update_features(opencode_dir, tmp_path.name, "opencode")
 
         assert result is True
         content = env_path.read_text()
-        assert DOCKER_HOST_LINE in content
+        assert "DOCKER_HOST" not in content
+        assert DOCKER_ENV_COMMENT not in content
         assert "OCF_AGENT_TOOL=opencode" in content
+        compose = (opencode_dir / "docker-compose.yaml").read_text()
+        assert DOCKER_HOST_ENV_LINE in compose
 
     def test_ssh_toggle_updates_devcontainer_compose_and_env(
         self, tmp_path: Path, monkeypatch
@@ -1999,25 +2007,23 @@ class TestReconcileEnvForFeatures:
         ssh_idx = lines.index("OCF_SSH_DIR_PATH=/home/alice/.ssh")
         assert npmrc_idx < m2_idx < gradle_idx < gitconfig_idx < ssh_idx
 
-    def test_adds_docker_host_when_selected(self, tmp_path: Path, monkeypatch):
+    def test_no_docker_host_added_when_selected(self, tmp_path: Path, monkeypatch):
+        """The pinned DOCKER_HOST lives in the compose environment block;
+        enabling docker must not write it into .env."""
         monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
         monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
         monkeypatch.setattr(features, "host_gitconfig_path", lambda: "")
         monkeypatch.setattr(features, "host_ssh_dir_path", lambda _: "")
         env_path = self._seed(tmp_path)
 
-        assert (
-            features.reconcile_env_for_features(env_path, [], docker_enabled=True)
-            is True
-        )
-        content = env_path.read_text()
-        assert f"{DOCKER_ENV_COMMENT}\n{DOCKER_HOST_LINE}" in content
-        lines = content.split("\n")
-        assert lines.index("OCF_SSH_DIR_PATH=") < lines.index(DOCKER_HOST_LINE)
+        assert features.reconcile_env_for_features(env_path, []) is False
+        assert "DOCKER_HOST" not in env_path.read_text()
 
-    def test_docker_host_idempotent_when_already_present(
+    def test_legacy_managed_docker_host_stripped_when_docker_selected(
         self, tmp_path: Path, monkeypatch
     ):
+        """Legacy managed .env lines are migrated away unconditionally
+        (docker feature on or off): compose owns the pinned default."""
         monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
         monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
         monkeypatch.setattr(features, "host_gitconfig_path", lambda: "")
@@ -2028,12 +2034,14 @@ class TestReconcileEnvForFeatures:
         )
         env_path = self._seed(tmp_path, seed)
 
-        assert (
-            features.reconcile_env_for_features(env_path, [], docker_enabled=True)
-            is False
-        )
+        assert features.reconcile_env_for_features(env_path, []) is True
+        content = env_path.read_text()
+        assert DOCKER_HOST_LINE not in content
+        assert DOCKER_ENV_COMMENT not in content
 
-    def test_docker_host_removed_when_deselected(self, tmp_path: Path, monkeypatch):
+    def test_legacy_managed_docker_host_stripped_when_deselected(
+        self, tmp_path: Path, monkeypatch
+    ):
         monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
         monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
         monkeypatch.setattr(features, "host_gitconfig_path", lambda: "")
@@ -2049,28 +2057,9 @@ class TestReconcileEnvForFeatures:
         assert "DOCKER_HOST" not in content
         assert DOCKER_ENV_COMMENT not in content
 
-    def test_pinned_over_custom_value_when_docker_selected(
-        self, tmp_path: Path, monkeypatch
-    ):
-        monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
-        monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
-        monkeypatch.setattr(features, "host_gitconfig_path", lambda: "")
-        monkeypatch.setattr(features, "host_ssh_dir_path", lambda _: "")
-        seed = self.BASE_ENV.replace(
-            "OCF_AGENT_TOOL=opencode",
-            "DOCKER_HOST=tcp://elsewhere:2375\nOCF_AGENT_TOOL=opencode",
-        )
-        env_path = self._seed(tmp_path, seed)
-
-        assert (
-            features.reconcile_env_for_features(env_path, [], docker_enabled=True)
-            is True
-        )
-        content = env_path.read_text()
-        assert DOCKER_HOST_LINE in content
-        assert "tcp://elsewhere" not in content
-
-    def test_custom_docker_host_survives_deselection(self, tmp_path: Path, monkeypatch):
+    def test_custom_docker_host_survives(self, tmp_path: Path, monkeypatch):
+        """Custom DOCKER_HOST values survive reconciliation (any feature
+        state): they override the compose entry's pinned default."""
         monkeypatch.setattr(features, "host_npmrc_path", lambda: "")
         monkeypatch.setattr(features, "host_m2_settings_path", lambda _: "")
         monkeypatch.setattr(features, "host_gitconfig_path", lambda: "")

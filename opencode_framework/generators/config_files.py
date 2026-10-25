@@ -101,7 +101,6 @@ class ConfigFilesGenerator(FileGenerator):
             java_build_tools=ctx.java_build_tools,
             gitconfig_path=host_gitconfig_path(),
             ssh_dir_path=host_ssh_dir_path("ssh" in (ctx.optional_features or [])),
-            docker_feature="docker" in (ctx.optional_features or []),
         )
 
         env_path = ctx.config_dir / ".env"

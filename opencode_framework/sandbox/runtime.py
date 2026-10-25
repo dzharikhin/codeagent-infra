@@ -402,9 +402,20 @@ def build_docker_env(
     base_env: Dict[str, str],
     docker_context: str,
 ) -> Dict[str, str]:
-    """Build environment for Docker/compose subprocess.
+    """Build environment for Docker/compose subprocesses.
 
     Merges base_env with current process environment and sets DOCKER_CONTEXT.
+
+    ``DOCKER_HOST`` is removed from the result so ``docker_context`` is
+    the authoritative daemon endpoint selector: docker CLI precedence
+    makes DOCKER_HOST override DOCKER_CONTEXT, and the sandbox-interior
+    pinned value (the managed compose ``DOCKER_HOST`` entry pointing at
+    the podman compat socket) must never steer host-side
+    devcontainer-build/inspect/compose clients onto the host socket.
+    The variable still reaches the container via compose interpolation
+    and the launch ``--env`` pass-through, which this env never feeds.
+    Users targeting a non-default daemon must select it via a docker
+    context (``--docker-context`` / ``docker context use``).
 
     Args:
         base_env: Environment variables from the config directory's .env
@@ -416,6 +427,7 @@ def build_docker_env(
     result = dict(os.environ)
     result.update(base_env)
     result["DOCKER_CONTEXT"] = docker_context
+    result.pop("DOCKER_HOST", None)
     return result
 
 
