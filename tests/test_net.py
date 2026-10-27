@@ -6,7 +6,7 @@ from typing import List, Optional
 import pytest
 
 from opencode_framework.exceptions import PortAllocationError
-from opencode_framework.sandbox.net import find_free_port
+from opencode_framework.sandbox.net import find_free_port, find_taken_ports
 
 _EPHEMERAL_PROBE_ATTEMPTS = 50
 
@@ -15,6 +15,14 @@ def _bind(port: int) -> socket.socket:
     """Bind a listening TCP socket on 127.0.0.1:port."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(("127.0.0.1", port))
+    sock.listen(1)
+    return sock
+
+
+def _bind_wildcard(port: int) -> socket.socket:
+    """Bind a listening TCP socket on 0.0.0.0:port."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("0.0.0.0", port))
     sock.listen(1)
     return sock
 
@@ -115,3 +123,34 @@ class TestFindFreePort:
         base = _consecutive_free_ports(2)
         with pytest.raises(PortAllocationError):
             find_free_port(base, base + 1, reserved=[base, base + 1])
+
+
+class TestFindTakenPorts:
+    """Tests for find_taken_ports."""
+
+    def test_reports_bound_port(self):
+        """Should report a port held by a wildcard listener."""
+        base = _consecutive_free_ports(1)
+        sock = _bind_wildcard(base)
+        try:
+            assert find_taken_ports([base]) == [base]
+        finally:
+            sock.close()
+
+    def test_free_port_not_reported(self):
+        """Should not report a port nobody holds."""
+        base = _consecutive_free_ports(1)
+        assert find_taken_ports([base]) == []
+
+    def test_returns_only_taken_sorted(self):
+        """Should return only the bound ports, sorted ascending."""
+        base = _consecutive_free_ports(3)
+        sock = _bind_wildcard(base + 2)
+        try:
+            assert find_taken_ports([base + 2, base, base + 1]) == [base + 2]
+        finally:
+            sock.close()
+
+    def test_empty_input(self):
+        """Empty input yields an empty list."""
+        assert find_taken_ports([]) == []

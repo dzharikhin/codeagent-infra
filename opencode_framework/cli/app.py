@@ -57,6 +57,7 @@ from opencode_framework.sandbox.net import (
     SERVER_HOST_PORT_MAX,
     SERVER_HOST_PORT_MIN,
     find_free_port,
+    find_taken_ports,
 )
 from opencode_framework.sandbox.runtime import (
     EnvError,
@@ -819,6 +820,41 @@ def _extract_host_ports(port_mappings: List[str]) -> List[int]:
         except ValueError:
             continue
     return hosts
+
+
+def _preflight_acp_ports(detected_ports: List[str]) -> None:
+    """Fail fast when an ACP session cannot publish wizard host ports.
+
+    ACP mode publishes the wizard ``ports:`` block via ``--service-ports``
+    with fixed host ports; a concurrent session (different postfix) or a
+    host process holding one of them would otherwise surface as a cryptic
+    docker bind error inside the editor's agent log, so probe before the
+    protocol stream starts. Must run after the same-postfix container
+    removal: a replaced session frees its bindings first.
+
+    Args:
+        detected_ports: Port mappings from the compose file, as returned
+            by ``ComposeGenerator.detect_ports``.
+
+    Raises:
+        typer.Exit: When at least one host port is already bound.
+    """
+    taken = find_taken_ports(_extract_host_ports(detected_ports))
+    if taken:
+        ports_str = ", ".join(str(port) for port in taken)
+        typer.secho(
+            f"Error: configured host port(s) already in use: {ports_str}.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        typer.secho(
+            "Remediation: stop the other ocf session or host process "
+            "holding the port(s), or run 'ocframework reconfigure' to "
+            "map different host ports.",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+        raise typer.Exit(1)
 
 
 def _resolve_server_port(
@@ -1654,7 +1690,10 @@ def launch(
     existing container with that name is removed first, so reusing a
     postfix replaces the previous session. All launch chatter moves to
     stderr; stdout carries only the protocol stream. --server conflicts
-    with --acp, and dsh (Web UI based) has no ACP mode.
+    with --acp, and dsh (Web UI based) has no ACP mode. Configured port
+    mappings are published as in a plain launch (--service-ports); their
+    host ports are fixed, so concurrent sessions of the same tool conflict,
+    and launch fails fast with a clear error when a port is already taken.
 
     Environment variables are loaded with precedence (lowest to highest):
     1. Global env file (~/.config/opencode/.env for opencode, ~/.qwen/.env
@@ -1992,6 +2031,9 @@ def launch(
                     err=True,
                 )
 
+    if acp and detected_ports:
+        _preflight_acp_ports(detected_ports)
+
     typer.echo(f"Launching {spec.name}...")
 
     args = ctx.args
@@ -2012,7 +2054,11 @@ def launch(
         for mapping in detected_ports:
             run_cmd.extend(["--publish", mapping])
         run_cmd.extend(["--publish", f"{server_host_port}:{spec.serve.port}"])
-    elif detected_ports and not acp:
+    elif detected_ports:
+        # ACP sessions publish the wizard ports too: the README contract
+        # says ports stay exactly as in a normal launch. Concurrent
+        # sessions conflict on the fixed host ports; the ACP pre-flight
+        # probe turns that into a clear error before the session starts.
         run_cmd.append("--service-ports")
 
     if acp:

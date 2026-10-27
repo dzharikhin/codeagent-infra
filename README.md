@@ -301,7 +301,12 @@ ocframework launch --tool opencode --acp zed
 
 The postfix is required and becomes part of the container name
 (`ocf_<repo>_<tool>_<postfix>`), so concurrent ACP sessions on one repository
-never collide. Managed volumes (including the Docker-in-Docker data volume)
+never collide on names or managed volumes. Configured port mappings are
+published exactly as in a plain launch — but their host ports are fixed, so a
+second concurrent session of the same tool would collide on them; launch fails
+fast with a clear error when a configured host port is already in use (stop the
+other session, or `ocframework reconfigure` a different host port). Managed
+volumes (including the Docker-in-Docker data volume)
 get the same postfix, so every session owns its state — a reused postfix
 replaces the session and keeps its warm caches, a new postfix starts fully
 isolated. An existing container with the same name is removed first.

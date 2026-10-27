@@ -3,6 +3,7 @@
 import io
 import os
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -1497,19 +1498,45 @@ class TestLaunchAcp:
         assert run_envs
         assert "OCF_SESSION_SUFFIX" not in run_envs[0]
 
-    def test_acp_skips_service_ports_with_wizard_ports(
+    def test_acp_publishes_wizard_ports_via_service_ports(
         self, tmp_path: Path, monkeypatch
     ):
-        """--acp neither republishes wizard ports nor uses --service-ports."""
-        self._setup_repo(tmp_path, ports_block="    ports:\n      - 8080:8080\n")
+        """--acp publishes wizard ports via --service-ports like plain mode."""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("0.0.0.0", 0))
+            port = probe.getsockname()[1]
+        self._setup_repo(tmp_path, ports_block=f"    ports:\n      - {port}:{port}\n")
         app_module, captured, _, _, _ = self._patch_launch_deps(monkeypatch, tmp_path)
 
         result = self._invoke(app_module, ["launch", "--acp", "zed"])
 
         assert result.exit_code == 0
         cmd = captured[0]
-        assert "--service-ports" not in cmd
+        assert "--service-ports" in cmd
         assert "--publish" not in cmd
+
+    def test_acp_fails_fast_when_host_port_taken(self, tmp_path: Path, monkeypatch):
+        """--acp exits with remediation when a wizard host port is taken."""
+        blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        blocker.bind(("0.0.0.0", 0))
+        blocker.listen(1)
+        port = blocker.getsockname()[1]
+        try:
+            self._setup_repo(
+                tmp_path, ports_block=f"    ports:\n      - {port}:{port}\n"
+            )
+            app_module, captured, _, _, _ = self._patch_launch_deps(
+                monkeypatch, tmp_path
+            )
+
+            result = self._invoke(app_module, ["launch", "--acp", "zed"])
+        finally:
+            blocker.close()
+
+        assert result.exit_code == 1
+        assert captured == []
+        assert f"already in use: {port}" in result.output
+        assert "reconfigure" in result.output
 
     def test_acp_exit_code_forwarded(self, tmp_path: Path, monkeypatch):
         """launch exits with the ACP session's exit code."""

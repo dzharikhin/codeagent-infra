@@ -102,7 +102,9 @@ All commands require a valid framework repository (installed via
 - `ocframework launch [--tool <t>] [--acp <postfix>] [--allow-dirty]
   [--docker-context <c>]` — launch the container with the configured agent.
   `--acp` is stdio JSON-RPC mode for editors (postfix appended to the
-  container name; existing container of that name removed first). Rebuilds
+  container name; existing container of that name removed first); wizard
+  `ports:` are published via `--service-ports` after a pre-flight host-port
+  probe (taken port → hard error with remediation). Rebuilds
   the image when the cached reference is missing; `--force` also deletes
   the cache and container. A dirty config worktree (`runtime_data/`
   excluded, fail-open on git errors) is a hard error unless `--allow-dirty`.
